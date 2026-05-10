@@ -19,7 +19,7 @@ import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
 import { xml } from '@codemirror/lang-xml';
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from '@codemirror/language';
-import { lintKeymap } from '@codemirror/lint';
+import { type Diagnostic, linter, lintGutter, lintKeymap, setDiagnostics } from '@codemirror/lint';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { EditorState, type Extension } from '@codemirror/state';
 import {
@@ -39,7 +39,8 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 
 import { tutorHighlight, tutorTheme } from './editor';
-import { connectLsp, type LspClient } from './lspClient';
+import { connectLsp, type LspClient, type LspDiagnostic } from './lspClient';
+import { lspToCmDiagnostic } from './lspEditor';
 import { fetchFile, writeFile } from './projectApi';
 import type { LanguageId } from './types';
 
@@ -185,6 +186,11 @@ function langExtensionForPath(path: string): Extension | null {
   }
 }
 
+// A no-op linter is enough to install the lint extension's state field so
+// setDiagnostics(state, diags) has somewhere to write. The LSP client pushes
+// diagnostics directly; this source is never queried.
+const noopLinter = linter(() => [], { delay: 999_999 });
+
 function baseExtensions(): Extension[] {
   return [
     lineNumbers(),
@@ -204,6 +210,8 @@ function baseExtensions(): Extension[] {
     rectangularSelection(),
     highlightActiveLine(),
     highlightSelectionMatches(),
+    lintGutter(),
+    noopLinter,
     EditorView.lineWrapping,
     tutorTheme,
     keymap.of([
@@ -246,16 +254,51 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
   // didOpen/didClose calls that arrive before the client is ready are queued
   // and replayed once connectLsp resolves.
   const pendingLspOps: Array<(c: LspClient) => void> = [];
+  // Latest LSP diagnostics keyed by URI. Used both to refresh the active
+  // tab's gutter when LSP publishes, and to repaint diagnostics when the
+  // user switches tabs.
+  const diagsByUri = new Map<string, LspDiagnostic[]>();
 
   const enqueueLsp = (op: (c: LspClient) => void): void => {
     if (lspClient !== null) op(lspClient);
-    else pendingLspOps.push(op);
+    else if (!lspResolved) pendingLspOps.push(op);
+    // After connectLsp resolved with null, drop the op silently — fall-soft.
   };
 
+  /** Push the latest cached diagnostics for `path` into the live view. */
+  const applyDiagnosticsForActive = (): void => {
+    if (active === null || lspClient === null) return;
+    const uri = pathToFileUri(lspClient.rootUri, active);
+    const cmDiags: Diagnostic[] = (diagsByUri.get(uri) ?? []).map((d) => lspToCmDiagnostic(view.state, d));
+    suppressUpdate = true;
+    view.dispatch(setDiagnostics(view.state, cmDiags));
+    suppressUpdate = false;
+  };
+
+  // Tracks whether we've received a connectLsp resolution; once true, no more
+  // ops should be queued (lspClient is the source of truth from then on).
+  let lspResolved = false;
   void (async (): Promise<void> => {
     const client = await connectLsp(opts.lang);
-    if (client === null) return;
+    lspResolved = true;
+    if (client === null) {
+      // LSP unavailable — drop any queued ops, fall-soft for the rest of the
+      // editor's lifetime (no diagnostics gutter, no [LSP] block, but the
+      // editor still works for everything else).
+      pendingLspOps.length = 0;
+      return;
+    }
     lspClient = client;
+
+    // Cache diagnostics globally; refresh the gutter only when the URI matches
+    // the currently active tab. Other URIs paint when the user switches.
+    client.onAnyDiagnostics((uri, diagnostics) => {
+      diagsByUri.set(uri, diagnostics);
+      if (active === null) return;
+      const activeUri = pathToFileUri(client.rootUri, active);
+      if (activeUri === uri) applyDiagnosticsForActive();
+    });
+
     while (pendingLspOps.length > 0) {
       const op = pendingLspOps.shift();
       if (op !== undefined) {
@@ -461,6 +504,10 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     view.setState(tab.state);
     suppressUpdate = false;
     applyMdView(tab);
+    // Repaint LSP diagnostics for the tab we just switched to. setState above
+    // installs a fresh state with no diagnostics; if the LSP has already
+    // published for this URI, push them back into the gutter.
+    applyDiagnosticsForActive();
     setStatus(path);
     renderTabs();
   }

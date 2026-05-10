@@ -575,6 +575,11 @@ async function disposeSession(sessionId) {
     session.proc.stdin.write(frameMessage(shutdownMsg));
     const exitMsg = JSON.stringify({ jsonrpc: '2.0', method: 'exit' });
     session.proc.stdin.write(frameMessage(exitMsg));
+    // Closing stdin tells libuv we're done writing, which avoids the
+    // `!(handle->flags & UV_HANDLE_CLOSING)` assertion on Windows during
+    // process teardown. Safe even if the child has already exited — the
+    // write end of the pipe ignores the close.
+    session.proc.stdin.end();
   } catch {
     // ignore — we'll SIGKILL below
   }
