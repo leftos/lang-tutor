@@ -1,13 +1,10 @@
 # LSP Integration
 
-**Status as of 2026-05-10:** core integration shipped for all five languages.
-Bridge, frontend client, editor wiring, `[LSP]` block, and per-language system
-prompts are live. Outstanding work is a list of nice-to-haves at the bottom of
-this doc — none are blocking.
-
-This doc serves two purposes now:
-1. A snapshot of what was built and how, so a fresh agent can pick up.
-2. A residual-work checklist for the next pass.
+**Status as of 2026-05-10:** core integration + the residual nice-to-haves
+shipped for all five languages. Bridge, frontend client, editor wiring,
+`[LSP]` block, signature help, inlay hints, code actions, multi-LSP fan-out
+for web, HMR overlay capture, OmniSharp first-load nudge, and Roslyn LSP
+discovery are all live. The doc remains a snapshot of what was built and how.
 
 ## Goal
 
@@ -130,6 +127,16 @@ Plus follow-ups during smoke / Playwright verification:
 - `1a0f05e` — debounced disk-sync for rust (closes the flycheck buffer/disk gap)
 - `a4bf65d` — gitignore `.playwright-mcp/`
 
+Residual pass (this batch):
+- `b317812` — Item 1: signature help tooltip
+- `3bf84d0` — Item 7: Vite HMR overlay capture in `[BUILD]`
+- `b0c0231` — Item 2: viewport-driven inlay hints
+- `06ab777` — Item 8: `[LSP]` block enrichment with symbols + hover-at-cursor
+- `4073b4b` — Items 4+5: multi-LSP fan-out for web (HTML/CSS/Biome)
+- `dbfb5eb` — Item 9: OmniSharp first-load nudge (`workspace/didChangeWatchedFiles`)
+- `a8e4ffe` — Item 6: Roslyn LSP discovery + fallback groups
+- `0a9b5c4` — Item 3: Mod-. code actions popup
+
 ## Smoke results
 
 | lang | server | result |
@@ -143,19 +150,40 @@ Plus follow-ups during smoke / Playwright verification:
 UI (Playwright): all four dividers resize and persist, file tree confirmed on
 the right for both project workspaces, clangd connects via the dev server.
 
-## Residual work — actionable handoff list
+## Residual work — shipped
 
-These items would each ship on their own; none are blocking.
+All nine residual items landed in this pass.
 
-- [ ] **`signatureHelp` wired into the editor.** `LspClient.signatureHelp()` already exists and works at the protocol level; `lspEditor.ts` just doesn't expose it via a CodeMirror tooltip extension. Trigger should be typing `(` (CompletionContext.matchBefore + a small request), display via the existing `tooltips` facet. Estimate: 1–2 hours, all in `lspEditor.ts`.
-- [ ] **Inlay hints.** Highest tutor-value of the missing features — param names + deduced types make code much more legible to a learner. Needs a CodeMirror `WidgetType` decoration layer that requests `textDocument/inlayHint` over a viewport range and renders the result as inline widgets. Will cap at the current viewport to keep request volume sane. Estimate: a day.
-- [ ] **Code actions / quickfix.** Each diagnostic from clangd / rust-analyzer / tsserver carries `data` with `codeAction`-resolvable fixes ("did you mean ⋯", "add missing `&`", "import X"). UI surface: lightbulb in the gutter on hover OR Mod-`.` keybind to open a popup. Estimate: 1–2 days for a basic flow.
-- [ ] **HTML LS + CSS LS for the web project.** `vscode-html-language-server` and `vscode-css-language-server` (both shipped via the `vscode-langservers-extracted` npm package). Wire in `tools/lsp.mjs` as additional configs OR more-elegantly: a single `web` config that dispatches to the right LS by file extension. Affects `projectEditor.ts` (currently single-LSP-per-lang). Estimate: half a day.
-- [ ] **Biome `lsp-proxy` alongside tsserver for web.** Faster lint-time feedback than vite-plugin-checker (which runs in a worker). Same multi-LSP-per-lang plumbing as HTML/CSS. Probably does not need a separate setup step — Biome is already in the web scaffold's devDependencies.
-- [ ] **Roslyn LSP discovery as a C# alternative to OmniSharp.** Microsoft.CodeAnalysis.LanguageServer ships with the C# Dev Kit VS Code extension at `~/.vscode/extensions/ms-dotnettools.csdevkit-*/⋯/Microsoft.CodeAnalysis.LanguageServer.exe`. A discovery probe that prefers Roslyn-LSP-when-found and falls back to OmniSharp would give better C# 12 / .NET 8 fidelity. Risk: the path is undocumented and changes per VS Code extension release.
-- [ ] **Iframe Vite HMR overlay capture in `evaluateProjectCode` for web.** Currently the iframe-bootstrap snapshot grabs `documentElement.outerHTML` + console. The HMR overlay (the red box Vite injects on build error) is in a sibling div outside the user's tree; `[CONSOLE]` / `[SERVER]` already cover the underlying error text but verbatim overlay capture would let the tutor see what the user sees. Estimate: 1–2 hours, all in the bootstrap script in `tools/projects.mjs`.
-- [ ] **`[LSP]` block enrichment.** Today: diagnostics only. Original plan also wanted symbol map + hover-at-cursor for richer tutor context. Each piece is a small protocol request (`textDocument/documentSymbol`, `textDocument/hover` at last-known cursor) — main design call is what to include and at what cap. Estimate: half a day.
-- [ ] **C# OmniSharp first-load timing.** The smoke caught that ad-hoc-file diagnostics don't fire within 120 s on first cold start. Investigation: send `workspace/didChangeWatchedFiles` after the file is created on disk, OR force a `csharp/v2/codestructure` request to nudge OmniSharp's workspace. Probably half a day of poking.
+- [x] **`signatureHelp` wired into the editor** — `lspSignatureHelpExtension` in `src/lspEditor.ts`; trigger characters from server capabilities, active-parameter highlighting via `labelOffsetSupport`, multi-overload counter. Single-buffer only.
+- [x] **Inlay hints** — `lspInlayHintExtension` in `src/lspEditor.ts`. Viewport-driven, 300ms debounced, in-flight cancellation via generation counter. Renders as inline `WidgetType` decorations. Single-buffer only.
+- [x] **Code actions / quickfix** — `lspCodeActionExtension` in `src/lspEditor.ts`. Mod-. opens a popup of available actions for the current cursor (filtered by overlapping diagnostics); fans out across every server in the bundle that advertises `codeActionProvider`. Resolves lazy `data`-bearing actions, applies the resulting `WorkspaceEdit` via a `WorkspaceEditApplier` closure. Single-buffer wiring done; project-workspace applier deferred. Server-side `command` execution is intentionally NOT wired (arbitrary side effects).
+- [x] **HTML LS + CSS LS for the web project** — `web-html` (vscode-html-language-server) + `web-css` (vscode-css-language-server) added to `LSP_CONFIG`. `setup.ps1` installs `vscode-langservers-extracted`. Per-file dispatch via `acceptsLanguageIds` in the bundle.
+- [x] **Biome `lsp-proxy` alongside tsserver for web** — `web-biome` config added. Diagnostics merge across servers in `getDiagnosticsByUri` so tsserver type errors and Biome lint warnings both surface.
+- [x] **Roslyn LSP discovery for csharp** — `resolveCsharpRoslynBin` walks `~/.vscode/extensions/ms-dotnettools.csdevkit-*/.roslyn/` (and `csharp-*` as fallback). LANG_SERVERS for csharp is now a fallback group `[['csharp-roslyn', 'csharp']]` — Roslyn preferred, OmniSharp falls in when not found.
+- [x] **Iframe Vite HMR overlay capture** — `BOOTSTRAP_SCRIPT` in `tools/projects.mjs` watches `document.body` for `vite-error-overlay` via MutationObserver, captures shadowRoot text, and includes it in the snapshot reply. `evaluateProjectCode` hoists it into a `[BUILD]` block above `[DOM]`.
+- [x] **`[LSP]` block enrichment** — `buildLspBlock` and `buildProjectLspBlock` are now async and emit three nullable sub-blocks: `diagnostics`, `symbols` (top-level only, capped at 20, suppressed for files <20 lines), and `hover at <cursor>` (clipped to 6 lines / 200 chars).
+- [x] **OmniSharp first-load timing** — Speculative `workspace/didChangeWatchedFiles` notification broadcast after initial tab hydration in `projectEditor.ts`. Servers with sluggish indexers (OmniSharp on cold start) re-evaluate seeded files. Effect needs interactive verification on a real csharp cold-start.
+
+## Architecture (post-residual)
+
+```
+Browser (CodeMirror)
+  └── src/lspClient.ts (LspClient bundle wrapping ServerSession[])
+       └── one WebSocket /lsp?session=<id> per server, all sharing rootUri
+              ↑
+              ↓  (raw JSON over WS, Content-Length-framed on stdio)
+Node (server.mjs / vite middleware)
+  └── tools/lsp.mjs
+       ├── spawn manager (one child per (serverKey, sessionId))
+       ├── workspace materializer (fresh ephemeral OR project mode)
+       ├── LSP_CONFIG[serverKey] (binary, args, init-options, root-marker, acceptsLanguageIds)
+       ├── LANG_SERVERS[lang] (Array<string | string[]> — fallback groups for csharp)
+       └── resolveBinPath() resolver (Roslyn LSP path discovery)
+              ↓
+       clangd | rust-analyzer | basedpyright-langserver | omnisharp / Microsoft.CodeAnalysis.LanguageServer | typescript-language-server | vscode-html-language-server | vscode-css-language-server | biome lsp-proxy
+```
+
+The bundle merges per-URI diagnostics across servers, picks the first server matching a file's languageId AND advertising the requested capability for hover/completion/sigHelp/inlayHint/codeAction/documentSymbol/formatting, and dispatches didOpen/didChange to every matching server.
 
 ## Resolved risks (keep for context)
 
