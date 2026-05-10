@@ -67,33 +67,76 @@ function Test-Tool {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Find-LlvmBin {
+    $candidates = @(
+        "$env:ProgramFiles\LLVM\bin",
+        "${env:ProgramFiles(x86)}\LLVM\bin",
+        "$env:LOCALAPPDATA\Programs\LLVM\bin"
+    )
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path (Join-Path $c 'clang.exe'))) {
+            return $c
+        }
+    }
+    return $null
+}
+
+function Add-DirectoryToUserPath {
+    param([string]$Directory)
+    if (-not (Test-Path $Directory)) { return }
+    $current = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    if (-not [string]::IsNullOrEmpty($current) -and ";$current;" -like "*;$Directory;*") {
+        # Already on persistent user PATH; just make sure session sees it too.
+        if (";$env:Path;" -notlike "*;$Directory;*") {
+            $env:Path = "$Directory;$env:Path"
+        }
+        return
+    }
+    $new = if ([string]::IsNullOrEmpty($current)) { $Directory } else { "$Directory;$current" }
+    [System.Environment]::SetEnvironmentVariable('Path', $new, 'User')
+    $env:Path = "$Directory;$env:Path"
+}
+
+function Test-WingetExitOk {
+    param([int]$ExitCode)
+    # Winget exit codes that mean "the package is already at the desired state" — not a real failure.
+    #   0x8A15002B  APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE   (already installed, no upgrade available)
+    #   0x8A150109  APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED
+    return $ExitCode -eq 0 -or $ExitCode -in @(-1978335189, -1978334967)
+}
+
 function Install-WingetPackage {
     param(
         [string]$Id,
         [string]$DisplayName
     )
     Write-Host "    installing $DisplayName via winget..."
-    $args = @(
+    # --disable-interactivity stops winget from drawing the spinner, which gets
+    # mangled into a column of stray characters when its output is piped through
+    # PowerShell.
+    $wingetArgs = @(
         'install',
         '--id', $Id,
         '--silent',
+        '--disable-interactivity',
         '--accept-source-agreements',
         '--accept-package-agreements',
         '--scope', 'user'
     )
-    & winget @args | Out-Host
-    if ($LASTEXITCODE -ne 0) {
+    & winget @wingetArgs
+    if (-not (Test-WingetExitOk $LASTEXITCODE)) {
         # Some packages don't support --scope user — retry without it.
         Write-Warn-Local "user-scope install failed, retrying without --scope..."
-        $args = @(
+        $wingetArgs = @(
             'install',
             '--id', $Id,
             '--silent',
+            '--disable-interactivity',
             '--accept-source-agreements',
             '--accept-package-agreements'
         )
-        & winget @args | Out-Host
-        if ($LASTEXITCODE -ne 0) {
+        & winget @wingetArgs
+        if (-not (Test-WingetExitOk $LASTEXITCODE)) {
             throw "winget install failed for $Id (exit $LASTEXITCODE)"
         }
     }
@@ -181,9 +224,26 @@ if (-not $SkipInstall) {
     if ((Test-Tool 'clang') -and (Test-Tool 'clang-format')) {
         Write-Skip "clang $((& clang --version | Select-Object -First 1)) already installed"
     } else {
-        Install-WingetPackage -Id 'LLVM.LLVM' -DisplayName 'LLVM'
+        # Probe well-known install paths first — the LLVM.LLVM winget package
+        # often installs to C:\Program Files\LLVM but doesn't update PATH, so we
+        # may already have it on disk and just need to wire it up.
+        $llvmBin = Find-LlvmBin
+        if ($null -ne $llvmBin) {
+            Write-Host "    found LLVM at $llvmBin — adding to user PATH..."
+            Add-DirectoryToUserPath -Directory $llvmBin
+        } else {
+            Install-WingetPackage -Id 'LLVM.LLVM' -DisplayName 'LLVM'
+            # winget may have just installed it without updating PATH — probe again.
+            $llvmBin = Find-LlvmBin
+            if ($null -ne $llvmBin -and -not (Test-Tool 'clang')) {
+                Write-Host "    LLVM installed at $llvmBin — adding to user PATH..."
+                Add-DirectoryToUserPath -Directory $llvmBin
+            }
+        }
     }
-    if (-not (Test-Tool 'clang')) {
+    if (Test-Tool 'clang') {
+        Write-Ok "clang $((& clang --version | Select-Object -First 1))"
+    } else {
         Write-Warn-Local "clang still not on PATH — live C++ checking will be disabled."
     }
 
