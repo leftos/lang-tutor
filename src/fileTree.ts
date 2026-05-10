@@ -12,6 +12,14 @@ import type { FsNode } from './types';
 export interface FileTreeOptions {
   /** Called when the user clicks a file row. */
   onOpenFile: (path: string) => void;
+  /** Called when the user clicks the "+ file" header button. */
+  onCreateFile: () => void;
+  /** Called when the user clicks the "+ folder" header button. */
+  onCreateFolder: () => void;
+  /** Called when the user clicks a row's rename action. */
+  onRename: (path: string, isDir: boolean) => void;
+  /** Called when the user clicks a row's delete action. */
+  onDelete: (path: string, isDir: boolean) => void;
   /** Currently focused file path — gets a highlight class. */
   activePath: string | null;
 }
@@ -47,6 +55,36 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
     return renderFile(node, depth);
   }
 
+  function makeActions(path: string, isDir: boolean): HTMLElement {
+    const actions = div('tree-row-actions');
+
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.className = 'tree-action';
+    rename.title = 'Rename';
+    rename.setAttribute('aria-label', `Rename ${path}`);
+    rename.textContent = '✎';
+    rename.addEventListener('click', (e) => {
+      e.stopPropagation();
+      options.onRename(path, isDir);
+    });
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'tree-action';
+    del.title = 'Delete';
+    del.setAttribute('aria-label', `Delete ${path}`);
+    del.textContent = '×';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      options.onDelete(path, isDir);
+    });
+
+    actions.appendChild(rename);
+    actions.appendChild(del);
+    return actions;
+  }
+
   function renderDir(node: FsNode & { type: 'dir' }, depth: number): HTMLElement {
     const isOpen = expanded.has(node.path);
     const wrapper = div('tree-node', 'tree-dir');
@@ -57,6 +95,7 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
     const label = span(node.name || 'workspace', 'tree-label', 'tree-label-dir');
     row.appendChild(chevron);
     row.appendChild(label);
+    row.appendChild(makeActions(node.path, true));
 
     row.addEventListener('click', () => {
       if (expanded.has(node.path)) {
@@ -89,14 +128,43 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
     const label = span(node.name, 'tree-label', 'tree-label-file');
     row.appendChild(indent);
     row.appendChild(label);
+    row.appendChild(makeActions(node.path, false));
     row.addEventListener('click', () => options.onOpenFile(node.path));
 
     wrapper.appendChild(row);
     return wrapper;
   }
 
+  function renderHeader(): HTMLElement {
+    const header = div('tree-header');
+    const title = span('projects/web/', 'tree-header-title');
+    header.appendChild(title);
+
+    const newFileBtn = document.createElement('button');
+    newFileBtn.type = 'button';
+    newFileBtn.className = 'tree-header-action';
+    newFileBtn.title = 'New file';
+    newFileBtn.setAttribute('aria-label', 'New file');
+    newFileBtn.textContent = '+ file';
+    newFileBtn.addEventListener('click', options.onCreateFile);
+    header.appendChild(newFileBtn);
+
+    const newFolderBtn = document.createElement('button');
+    newFolderBtn.type = 'button';
+    newFolderBtn.className = 'tree-header-action';
+    newFolderBtn.title = 'New folder';
+    newFolderBtn.setAttribute('aria-label', 'New folder');
+    newFolderBtn.textContent = '+ dir';
+    newFolderBtn.addEventListener('click', options.onCreateFolder);
+    header.appendChild(newFolderBtn);
+
+    return header;
+  }
+
   function doRender(): void {
     host.textContent = '';
+    host.appendChild(renderHeader());
+
     if (currentTree === null) {
       const empty = div('tree-empty');
       empty.appendChild(span('Loading workspace…', 'muted'));

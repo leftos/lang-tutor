@@ -30,6 +30,7 @@ import {
   renameFile,
   startProject,
   stopProject,
+  subscribeFsEvents,
   subscribeLogs,
   writeFile,
 } from './projects.mjs';
@@ -202,6 +203,56 @@ function handleProjLogsStream(query, req, res) {
   req.on('error', unsub);
 }
 
+function handleFsWatchStream(query, req, res) {
+  if (!query.lang) {
+    sendJson(res, 400, { error: 'missing lang' });
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  // Send a hello so the EventSource connects cleanly even if the watcher is
+  // quiet for a while (some proxies close idle SSE).
+  res.write(`data: ${JSON.stringify({ type: 'ready' })}\n\n`);
+
+  let unsub = () => {};
+  try {
+    unsub = subscribeFsEvents(query.lang, (event) => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        unsub();
+      }
+    });
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e instanceof Error ? e.message : String(e) })}\n\n`);
+    res.end();
+    return;
+  }
+
+  // Heartbeat every 30s — keeps the connection warm through proxies and
+  // gives the client a quick way to notice broken connections.
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 30_000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsub();
+  });
+  req.on('error', () => {
+    clearInterval(heartbeat);
+    unsub();
+  });
+}
+
 async function handleProj(method, urlPath, req, res) {
   const query = parseQuery(req.url);
 
@@ -219,13 +270,24 @@ async function handleProj(method, urlPath, req, res) {
   sendJson(res, 404, { error: 'unknown proj route' });
 }
 
+function handleFsWatch(method, req, res) {
+  if (method !== 'GET') {
+    sendJson(res, 405, { error: 'method not allowed' });
+    return;
+  }
+  const query = parseQuery(req.url);
+  handleFsWatchStream(query, req, res);
+}
+
 export async function handleProjectRequest(req, res) {
   const url = req.url ?? '/';
   const urlPath = getUrlPath(url);
   if (!isProjectRoute(urlPath)) return false;
 
   try {
-    if (urlPath.startsWith('/fs/')) {
+    if (urlPath === '/fs/watch') {
+      handleFsWatch(req.method, req, res);
+    } else if (urlPath.startsWith('/fs/')) {
       await handleFs(req.method, urlPath, req, res);
     } else if (urlPath.startsWith('/proj/')) {
       await handleProj(req.method, urlPath, req, res);

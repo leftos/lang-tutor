@@ -1245,6 +1245,40 @@
 }
 
 /* ── File tree ─────────────────────────────────────────────────── */
+.tree-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 8px 10px;
+  border-bottom: 1px solid var(--rule-2);
+  margin-bottom: 4px;
+}
+.tree-header-title {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-header-action {
+  background: transparent;
+  border: 1px solid var(--rule-2);
+  border-radius: 1px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  color: var(--ink-mute);
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+.tree-header-action:hover {
+  color: var(--ink);
+  border-color: var(--sig);
+}
 .tree-empty {
   padding: 10px 14px;
   font-size: 11.5px;
@@ -1260,6 +1294,7 @@
   padding: 3px 8px;
   cursor: pointer;
   border-left: 2px solid transparent;
+  position: relative;
 }
 .tree-row:hover {
   background: color-mix(in srgb, var(--ink) 5%, transparent);
@@ -1293,5 +1328,27 @@
   color: var(--ink-mute);
 }
 .tree-row.is-active .tree-label-file {
+  color: var(--ink);
+}
+.tree-row-actions {
+  display: none;
+  gap: 2px;
+}
+.tree-row:hover .tree-row-actions,
+.tree-row.is-active .tree-row-actions {
+  display: inline-flex;
+}
+.tree-action {
+  background: transparent;
+  border: 0;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--ink-mute);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.tree-action:hover {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
   color: var(--ink);
 }

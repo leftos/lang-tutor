@@ -15,7 +15,17 @@ import {
 } from './constants';
 import { createEditor, type TutorEditor } from './editor';
 import { createFileTree, type FileTreeHandle } from './fileTree';
-import { ensureScaffold, fetchTree, flattenFiles } from './projectApi';
+import {
+  deleteFile as apiDeleteFile,
+  mkdir as apiMkdir,
+  renameFile as apiRenameFile,
+  writeFile as apiWriteFile,
+  ensureScaffold,
+  type FsWatchEvent,
+  fetchTree,
+  flattenFiles,
+  subscribeFsEvents,
+} from './projectApi';
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
@@ -511,6 +521,87 @@ function setWorkshopMode(mode: 'single' | 'project'): void {
 let projectEditorInstance: ProjectEditor | null = null;
 let projectFileTree: FileTreeHandle | null = null;
 
+async function refreshTree(id: LanguageId): Promise<void> {
+  try {
+    const response = await fetchTree(id);
+    const cached = projectStates.get(id);
+    if (cached !== undefined) {
+      cached.tree = response.tree;
+      cached.scaffolded = response.scaffolded;
+    }
+    projectFileTree?.render(response.tree);
+  } catch (e) {
+    console.error('[project] tree refresh failed', e);
+  }
+}
+
+async function createFile(id: LanguageId): Promise<void> {
+  const path = window.prompt('New file path (relative to project root):', '');
+  if (path === null || path.trim() === '') return;
+  try {
+    await apiWriteFile(id, path.trim(), '');
+    await refreshTree(id);
+    await projectEditorInstance?.openFile(path.trim());
+  } catch (e) {
+    alert(`Could not create file: ${(e as Error).message}`);
+  }
+}
+
+async function createFolder(id: LanguageId): Promise<void> {
+  const path = window.prompt('New folder path (relative to project root):', '');
+  if (path === null || path.trim() === '') return;
+  try {
+    await apiMkdir(id, path.trim());
+    await refreshTree(id);
+  } catch (e) {
+    alert(`Could not create folder: ${(e as Error).message}`);
+  }
+}
+
+async function renamePath(id: LanguageId, oldPath: string): Promise<void> {
+  const next = window.prompt('Rename to (relative path):', oldPath);
+  if (next === null) return;
+  const target = next.trim();
+  if (target === '' || target === oldPath) return;
+  try {
+    await apiRenameFile(id, oldPath, target);
+    projectEditorInstance?.renameTab(oldPath, target);
+    await refreshTree(id);
+  } catch (e) {
+    alert(`Rename failed: ${(e as Error).message}`);
+  }
+}
+
+async function deletePath(id: LanguageId, path: string, isDir: boolean): Promise<void> {
+  const label = isDir ? `folder ${path} and everything in it` : `file ${path}`;
+  if (!confirm(`Delete ${label}?`)) return;
+  try {
+    await apiDeleteFile(id, path);
+    projectEditorInstance?.forgetTab(path);
+    await refreshTree(id);
+  } catch (e) {
+    alert(`Delete failed: ${(e as Error).message}`);
+  }
+}
+
+function handleFsEvent(id: LanguageId, event: FsWatchEvent): void {
+  if (event.type === 'ready' || event.type === 'error') return;
+  const eventPath = event.path;
+  if (eventPath === undefined) return;
+
+  // Tree-shape changes always invalidate the tree render.
+  void refreshTree(id);
+
+  // Per-file content refresh: only when an open tab's file was modified.
+  if (event.type === 'change' && projectEditorInstance?.getOpenPaths().includes(eventPath)) {
+    void projectEditorInstance.refreshFile(eventPath);
+  }
+  // If an open tab's file was deleted, drop the tab.
+  if (event.type === 'unlink' && projectEditorInstance?.getOpenPaths().includes(eventPath)) {
+    projectEditorInstance.forgetTab(eventPath);
+  }
+}
+
 function ensureProjectUI(id: LanguageId, lang: Language): void {
   if (lang.kind !== 'project') return;
   if (projectEditorInstance !== null && projectFileTree !== null) return;
@@ -524,6 +615,10 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
       void projectEditorInstance?.openFile(path);
       projectFileTree?.setActive(path);
     },
+    onCreateFile: () => void createFile(id),
+    onCreateFolder: () => void createFolder(id),
+    onRename: (path) => void renamePath(id, path),
+    onDelete: (path, isDir) => void deletePath(id, path, isDir),
   });
   if (state.activeTab !== null) projectFileTree.expandPath(state.activeTab);
 
@@ -549,6 +644,11 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
       projectFileTree?.setActive(activeTab);
     },
   });
+
+  // Subscribe to filesystem events from the backend chokidar watcher.
+  // The EventSource auto-reconnects on disconnect; we never tear this down
+  // for the life of the page (the workspace is the only owner).
+  subscribeFsEvents(id, (event) => handleFsEvent(id, event));
 }
 
 // ── Project state hydration ──────────────────────────────────────────────

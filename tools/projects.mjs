@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import chokidar from 'chokidar';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -39,6 +40,30 @@ const IS_WIN = process.platform === 'win32';
 const PNPM = IS_WIN ? 'pnpm.cmd' : 'pnpm';
 
 const TREE_IGNORE = new Set(['node_modules', '.git', 'dist', '.vite']);
+
+const SELF_WRITE_SUPPRESS_MS = 500;
+
+/** Timestamps of recent self-mutations (abs path → ms). Watch events that
+ *  match a recent self-write are dropped to avoid round-trip echoes. */
+const selfWrites = new Map();
+
+function markSelfWrite(absPath) {
+  selfWrites.set(absPath, Date.now());
+  // Lazy GC — any path older than the suppress window has served its purpose.
+  for (const [p, ts] of selfWrites) {
+    if (Date.now() - ts > SELF_WRITE_SUPPRESS_MS * 4) selfWrites.delete(p);
+  }
+}
+
+function isRecentSelfWrite(absPath) {
+  const ts = selfWrites.get(absPath);
+  if (ts === undefined) return false;
+  if (Date.now() - ts > SELF_WRITE_SUPPRESS_MS) {
+    selfWrites.delete(absPath);
+    return false;
+  }
+  return true;
+}
 
 // ── Project root + path safety ──────────────────────────────────────────────
 
@@ -209,6 +234,7 @@ export function writeFile(lang, relPath, content) {
   const abs = safeResolve(root, relPath);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content, 'utf8');
+  markSelfWrite(abs);
   return { ok: true };
 }
 
@@ -217,8 +243,11 @@ export function renameFile(lang, fromRel, toRel) {
   const fromAbs = safeResolve(root, fromRel);
   const toAbs = safeResolve(root, toRel);
   if (!existsSync(fromAbs)) throw new Error(`source not found: ${fromRel}`);
+  if (existsSync(toAbs)) throw new Error(`destination already exists: ${toRel}`);
   mkdirSync(dirname(toAbs), { recursive: true });
   renameSync(fromAbs, toAbs);
+  markSelfWrite(fromAbs);
+  markSelfWrite(toAbs);
   return { ok: true };
 }
 
@@ -228,6 +257,7 @@ export function deleteFile(lang, relPath) {
   if (abs === root) throw new Error('cannot delete project root');
   if (!existsSync(abs)) return { ok: true };
   rmSync(abs, { recursive: true, force: true });
+  markSelfWrite(abs);
   return { ok: true };
 }
 
@@ -235,6 +265,7 @@ export function mkdir(lang, relPath) {
   const root = getProjectRoot(lang);
   const abs = safeResolve(root, relPath);
   mkdirSync(abs, { recursive: true });
+  markSelfWrite(abs);
   return { ok: true };
 }
 
@@ -451,4 +482,70 @@ export function subscribeLogs(lang, onEntry) {
   const state = getOrInitState(lang);
   state.subs.add(onEntry);
   return () => state.subs.delete(onEntry);
+}
+
+// ── Filesystem watcher (chokidar) ──────────────────────────────────────────
+
+/** @type {Map<string, { watcher: import('chokidar').FSWatcher, subs: Set<(e: {type: string, path: string}) => void> }>} */
+const watchers = new Map();
+
+function relPathFromAbs(abs, root) {
+  return relative(root, abs).split(sep).join('/');
+}
+
+function fanoutFsEvent(state, type, abs, root) {
+  if (isRecentSelfWrite(abs)) return;
+  const path = relPathFromAbs(abs, root);
+  // Drop events for ignored top-level dirs (defense in depth — chokidar's
+  // `ignored` option covers it, but watch events for nested paths inside an
+  // ignored tree shouldn't propagate either).
+  const top = path.split('/')[0];
+  if (top !== undefined && TREE_IGNORE.has(top)) return;
+  for (const sub of state.subs) {
+    try {
+      sub({ type, path });
+    } catch {
+      // subscriber errors must not break the producer
+    }
+  }
+}
+
+function ensureWatcher(lang) {
+  const cached = watchers.get(lang);
+  if (cached !== undefined) return cached;
+
+  const root = getProjectRoot(lang);
+  // chokidar's `ignored` accepts patterns or absolute paths; we use a
+  // function that matches any path containing one of the TREE_IGNORE
+  // segments. This catches both top-level and nested matches.
+  const watcher = chokidar.watch(root, {
+    ignoreInitial: true,
+    persistent: true,
+    ignored: (p) => {
+      const segments = p.split(/[/\\]/);
+      return segments.some((s) => TREE_IGNORE.has(s));
+    },
+  });
+
+  const state = { watcher, subs: new Set() };
+  watchers.set(lang, state);
+
+  watcher.on('add', (p) => fanoutFsEvent(state, 'add', p, root));
+  watcher.on('change', (p) => fanoutFsEvent(state, 'change', p, root));
+  watcher.on('unlink', (p) => fanoutFsEvent(state, 'unlink', p, root));
+  watcher.on('addDir', (p) => fanoutFsEvent(state, 'addDir', p, root));
+  watcher.on('unlinkDir', (p) => fanoutFsEvent(state, 'unlinkDir', p, root));
+  watcher.on('error', (e) => {
+    console.error(`[fs-watch:${lang}]`, e);
+  });
+
+  return state;
+}
+
+export function subscribeFsEvents(lang, onEvent) {
+  assertLang(lang);
+  ensureScaffold(lang);
+  const state = ensureWatcher(lang);
+  state.subs.add(onEvent);
+  return () => state.subs.delete(onEvent);
 }

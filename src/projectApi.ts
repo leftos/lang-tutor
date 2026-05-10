@@ -105,3 +105,37 @@ export function flattenFiles(node: import('./types').FsNode | null): string[] {
   visit(node);
   return out;
 }
+
+export type FsWatchEventType = 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir' | 'ready' | 'error';
+
+export interface FsWatchEvent {
+  readonly type: FsWatchEventType;
+  readonly path?: string;
+  readonly message?: string;
+}
+
+/**
+ * Open an SSE connection to /fs/watch?lang=… and call onEvent for each event.
+ * The connection auto-reconnects on disconnect (EventSource behavior).
+ * Returns a function that closes the EventSource.
+ */
+export function subscribeFsEvents(lang: LanguageId, onEvent: (event: FsWatchEvent) => void): () => void {
+  const url = `/fs/watch?lang=${encodeURIComponent(lang)}`;
+  const source = new EventSource(url);
+
+  source.addEventListener('message', (e) => {
+    try {
+      onEvent(JSON.parse(e.data) as FsWatchEvent);
+    } catch {
+      // ignore malformed events
+    }
+  });
+
+  source.addEventListener('error', () => {
+    // EventSource auto-reconnects; surface the connection state but don't
+    // tear down — the SSE client will retry.
+    onEvent({ type: 'error', message: 'fs-watch connection error (auto-retrying)' });
+  });
+
+  return () => source.close();
+}
