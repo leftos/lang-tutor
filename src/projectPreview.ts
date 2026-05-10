@@ -99,6 +99,8 @@ export interface DomSnapshot {
   consoleBuffer: ConsoleEntry[];
   url: string;
   title: string;
+  /** Text of Vite's HMR error overlay (the red box) when one is showing, else null. */
+  hmrOverlay: string | null;
 }
 
 export interface ProjectPreview {
@@ -490,6 +492,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
           consoleBuffer: data.consoleBuffer,
           url: data.url,
           title: data.title,
+          hmrOverlay: data.hmrOverlay ?? null,
         });
       };
       window.addEventListener('message', onMessage);

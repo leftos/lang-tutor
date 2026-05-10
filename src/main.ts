@@ -1265,6 +1265,12 @@ async function evaluateProjectCode(): Promise<void> {
 
   if (isWeb) {
     if (snapshot !== null) {
+      // Vite's HMR error overlay is a sibling of the user tree, so the [DOM]
+      // block doesn't surface it. Hoist its text into a [BUILD] block above
+      // [DOM] when present so the tutor leads with the actual build error.
+      if (snapshot.hmrOverlay !== null) {
+        blocks.push(`[BUILD]\n\`\`\`\n${snapshot.hmrOverlay}\n\`\`\``);
+      }
       blocks.push(`[DOM] (rendered at ${snapshot.url})\n\`\`\`html\n${snapshot.dom}\n\`\`\``);
       if (snapshot.consoleBuffer.length > 0) {
         const consoleBlock = snapshot.consoleBuffer.map((c) => `${c.level}: ${c.line}`).join('\n');

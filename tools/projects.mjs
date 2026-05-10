@@ -228,9 +228,45 @@ const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
     buffer.push({ level: 'error', line: \`[uncaught] \${e.message || String(e.error)}\`, ts: Date.now() });
     if (buffer.length > MAX) buffer.shift();
   });
+
+  // Vite injects <vite-error-overlay> as a sibling of the user tree when a
+  // build / HMR error occurs. Watch for it so the tutor sees the same red box
+  // the student sees, even though the underlying error also reaches us via
+  // [SERVER] logs.
+  let latestOverlay = null;
+  const readOverlayText = (el) => {
+    try {
+      const root = el.shadowRoot;
+      if (root && typeof root.textContent === 'string') {
+        const t = root.textContent.replace(/\\s+/g, ' ').trim();
+        if (t.length > 0) return t.slice(0, 4000);
+      }
+    } catch {}
+    try {
+      const t = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+      return t.length > 0 ? t.slice(0, 4000) : null;
+    } catch { return null; }
+  };
+  const overlayObserver = new MutationObserver(() => {
+    const el = document.querySelector('vite-error-overlay');
+    latestOverlay = el === null ? null : readOverlayText(el);
+  });
+  const startObserver = () => {
+    if (document.body) overlayObserver.observe(document.body, { childList: true, subtree: false });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+  else startObserver();
+
   window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || data.type !== 'lang-tutor:snapshot-request') return;
+    // Re-read on demand so a snapshot taken right as the overlay appears
+    // doesn't lose the race with the MutationObserver.
+    let hmrOverlay = latestOverlay;
+    try {
+      const live = document.querySelector('vite-error-overlay');
+      if (live !== null) hmrOverlay = readOverlayText(live);
+    } catch {}
     const reply = {
       type: 'lang-tutor:snapshot-reply',
       requestId: data.requestId,
@@ -238,6 +274,7 @@ const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
       consoleBuffer: buffer.slice(),
       url: location.href,
       title: document.title,
+      hmrOverlay,
     };
     if (event.source && typeof event.source.postMessage === 'function') {
       event.source.postMessage(reply, event.origin || '*');
