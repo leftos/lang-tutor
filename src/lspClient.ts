@@ -181,6 +181,17 @@ const LSP_LANGUAGE_IDS: Partial<Record<LanguageId, string>> = {
 const PROJECT_LANGS: ReadonlySet<LanguageId> = new Set<LanguageId>(['csharp', 'web']);
 
 /**
+ * Different language servers canonicalize file URIs differently — most notably
+ * the colon after a Windows drive letter: clangd / rust-analyzer keep it
+ * literal (`file:///x:/...`) while basedpyright / tsserver percent-encode it
+ * (`file:///x%3A/...`). Normalize both forms back to literal `:` so the same
+ * URI key works regardless of who emitted it.
+ */
+function normalizeUri(uri: string): string {
+  return uri.replaceAll('%3A', ':').replaceAll('%3a', ':');
+}
+
+/**
  * Open an LSP session for the given language. Returns null if the toolchain
  * isn't available or the spawn / handshake fails — the caller should silently
  * fall back to the existing /check + /format path.
@@ -357,7 +368,7 @@ class LspClientImpl implements LspClient {
 
   getDiagnostics(): LspDiagnostic[] {
     if (this.mainFileUri === null) return [];
-    return this.diagnosticsByUri.get(this.mainFileUri) ?? [];
+    return this.diagnosticsByUri.get(normalizeUri(this.mainFileUri)) ?? [];
   }
 
   onDiagnostics(cb: DiagnosticsListener): () => void {
@@ -539,8 +550,11 @@ class LspClientImpl implements LspClient {
     if (method === 'textDocument/publishDiagnostics') {
       const p = params as { uri: string; diagnostics: LspDiagnostic[] } | undefined;
       if (p === undefined) return;
-      this.diagnosticsByUri.set(p.uri, p.diagnostics);
-      if (p.uri === this.mainFileUri) {
+      // Store under the normalized form so getDiagnostics(mainFileUri) finds
+      // it regardless of which encoding the server chose.
+      const normUri = normalizeUri(p.uri);
+      this.diagnosticsByUri.set(normUri, p.diagnostics);
+      if (this.mainFileUri !== null && normUri === normalizeUri(this.mainFileUri)) {
         for (const cb of this.diagnosticsListeners) {
           try {
             cb(p.diagnostics);
@@ -551,7 +565,7 @@ class LspClientImpl implements LspClient {
       }
       for (const cb of this.anyDiagnosticsListeners) {
         try {
-          cb(p.uri, p.diagnostics);
+          cb(normUri, p.diagnostics);
         } catch (e) {
           console.warn('[lsp] anyDiagnostics listener threw:', e);
         }

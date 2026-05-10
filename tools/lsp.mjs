@@ -30,6 +30,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const TMP_LSP_ROOT = join(REPO_ROOT, '.tmp', 'lsp');
 
+// Windows: `shell: true` lets spawn resolve .cmd / .bat shims (npm-global
+// installs like typescript-language-server) which Node otherwise can't run
+// directly. Safe here because every spawn argv is a hardcoded LSP_CONFIG
+// constant — never user input — so there's no shell-injection vector.
+const IS_WIN = process.platform === 'win32';
+
 // ── Per-language config ─────────────────────────────────────────────────────
 
 /**
@@ -43,6 +49,9 @@ const TMP_LSP_ROOT = join(REPO_ROOT, '.tmp', 'lsp');
  * @property {string} [mainFile]            - filename inside the workspace dir (fresh mode)
  * @property {Record<string,string>} [workspaceFiles]  - extra files to seed (fresh mode)
  * @property {string[]} versionArgs         - args to call for availability probe
+ * @property {string} [probeBin]            - optional alternate binary for the probe (defaults to `bin`).
+ *           Useful when the LSP binary itself doesn't support a clean `--version`
+ *           but a sibling CLI does (e.g. basedpyright-langserver vs basedpyright).
  */
 
 /** @type {Record<string, LspConfig>} */
@@ -80,9 +89,12 @@ const LSP_CONFIG = {
 
   python: {
     // basedpyright ships the langserver as `basedpyright-langserver`; --stdio
-    // is required to speak LSP over our pipe-based bridge.
+    // is required to speak LSP over our pipe-based bridge. The langserver
+    // binary itself doesn't accept `--version` (it crashes without a transport
+    // flag), so probe via the sibling `basedpyright` CLI which reports cleanly.
     bin: 'basedpyright-langserver',
     args: ['--stdio'],
+    probeBin: 'basedpyright',
     mainFile: 'main.py',
     workspaceFiles: {
       'pyrightconfig.json': JSON.stringify({ pythonVersion: '3.13', typeCheckingMode: 'standard', reportMissingImports: 'warning' }, null, 2),
@@ -96,11 +108,16 @@ const LSP_CONFIG = {
     // (`Microsoft.CodeAnalysis.LanguageServer`) is preferable when available
     // but its install path is undocumented and version-coupled to the C# Dev
     // Kit extension; OmniSharp is the more reliable single-binary install.
+    //
+    // versionArgs is empty: `omnisharp --version` actually starts the full
+    // server (no quick exit), which would block our availability probe past
+    // the 5 s timeout. The PATH lookup in whichBin is enough to confirm
+    // installation; the version string falls back to the resolved path.
     bin: 'omnisharp',
     args: ['-lsp'],
     workspaceMode: 'project',
     projectDir: 'csharp',
-    versionArgs: ['--version'],
+    versionArgs: [],
   },
 
   web: {
@@ -256,6 +273,50 @@ function frameMessage(json) {
  * @param {string} lang
  * @returns {Promise<{ available: boolean; version?: string; error?: string }>}
  */
+/**
+ * Run `where <bin>` (Windows) / `which <bin>` (POSIX) to check whether the
+ * binary is reachable. Returns the resolved path on success, null otherwise.
+ * Used in two scenarios:
+ *  - Existence probe (always): confirms the LSP binary is installed.
+ *  - Version-string fetch (optional, gated by config): some servers take too
+ *    long or don't support a clean --version (e.g. OmniSharp starts the full
+ *    server on `--version`); for those we report availability only.
+ */
+function whichBin(bin) {
+  return new Promise((resolveWhich) => {
+    const lookup = IS_WIN ? 'where' : 'which';
+    let proc;
+    try {
+      proc = spawn(lookup, [bin], { stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
+    } catch {
+      resolveWhich(null);
+      return;
+    }
+    let stdout = '';
+    proc.stdout.on('data', (c) => {
+      stdout += c.toString('utf8');
+    });
+    proc.on('error', () => resolveWhich(null));
+    const timer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // ignore
+      }
+      resolveWhich(null);
+    }, 3_000);
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolveWhich(null);
+        return;
+      }
+      const first = stdout.split('\n')[0]?.trim() ?? '';
+      resolveWhich(first.length > 0 ? first : null);
+    });
+  });
+}
+
 async function probeAvailability(lang) {
   const cached = availabilityCache.get(lang);
   if (cached !== undefined) return cached;
@@ -265,47 +326,61 @@ async function probeAvailability(lang) {
     availabilityCache.set(lang, result);
     return result;
   }
-  const result = await new Promise((resolveProbe) => {
+  const probeBin = config.probeBin ?? config.bin;
+
+  // Step 1: PATH lookup. Fast (≤ 3s), reliable, doesn't spawn the LSP server.
+  const resolved = await whichBin(probeBin);
+  if (resolved === null) {
+    const result = { available: false, error: `${probeBin} not on PATH` };
+    availabilityCache.set(lang, result);
+    return result;
+  }
+
+  // Step 2: optional version-string fetch. Skipped when versionArgs is empty.
+  // Bounded by PROBE_TIMEOUT_MS so misbehaving --version commands (looking at
+  // you, OmniSharp) don't block availability.
+  const versionArgs = config.versionArgs ?? [];
+  if (versionArgs.length === 0) {
+    const result = { available: true, version: resolved };
+    availabilityCache.set(lang, result);
+    return result;
+  }
+  const version = await new Promise((resolveVer) => {
     let proc;
     try {
-      proc = spawn(config.bin, config.versionArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch (e) {
-      resolveProbe({ available: false, error: e instanceof Error ? e.message : String(e) });
+      proc = spawn(probeBin, versionArgs, { stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
+    } catch {
+      resolveVer(null);
       return;
     }
     let stdout = '';
     let stderr = '';
-    let unavailable = false;
-    proc.stdout.on('data', (chunk) => {
-      stdout += chunk.toString('utf8');
+    proc.stdout.on('data', (c) => {
+      stdout += c.toString('utf8');
     });
-    proc.stderr.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
+    proc.stderr.on('data', (c) => {
+      stderr += c.toString('utf8');
     });
-    proc.on('error', (e) => {
-      if (e && /** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') unavailable = true;
-    });
+    proc.on('error', () => resolveVer(null));
     const timer = setTimeout(() => {
       try {
         proc.kill('SIGKILL');
       } catch {
         // ignore
       }
+      resolveVer(null);
     }, PROBE_TIMEOUT_MS);
     proc.on('close', (code) => {
       clearTimeout(timer);
-      if (unavailable) {
-        resolveProbe({ available: false, error: `${config.bin} not on PATH` });
-        return;
-      }
       if (code !== 0) {
-        resolveProbe({ available: false, error: stderr.trim() || `exit ${code}` });
+        resolveVer(null);
         return;
       }
       const firstLine = (stdout + stderr).split('\n')[0]?.trim() ?? '';
-      resolveProbe({ available: true, version: firstLine });
+      resolveVer(firstLine.length > 0 ? firstLine : null);
     });
   });
+  const result = { available: true, version: version ?? resolved };
   availabilityCache.set(lang, result);
   return result;
 }
@@ -409,6 +484,7 @@ async function startSession(lang) {
     proc = spawn(config.bin, config.args, {
       cwd: workspaceDir,
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: IS_WIN,
     });
   } catch (e) {
     if (ephemeral) destroyWorkspace(workspaceDir);

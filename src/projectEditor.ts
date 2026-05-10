@@ -75,6 +75,11 @@ function pathToFileUri(rootUri: string, relativePath: string): string {
   return `${trimmedRoot}/${trimmedPath}`;
 }
 
+/** Match the encoding produced by the LSP client; safe to apply to either form. */
+function normalizeUri(uri: string): string {
+  return uri.replaceAll('%3A', ':').replaceAll('%3a', ':');
+}
+
 // GitHub-flavoured markdown defaults: tables, strikethrough, autolinks,
 // task lists. Newlines inside paragraphs become <br/>.
 marked.setOptions({ gfm: true, breaks: false });
@@ -268,7 +273,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
   /** Push the latest cached diagnostics for `path` into the live view. */
   const applyDiagnosticsForActive = (): void => {
     if (active === null || lspClient === null) return;
-    const uri = pathToFileUri(lspClient.rootUri, active);
+    const uri = normalizeUri(pathToFileUri(lspClient.rootUri, active));
     const cmDiags: Diagnostic[] = (diagsByUri.get(uri) ?? []).map((d) => lspToCmDiagnostic(view.state, d));
     suppressUpdate = true;
     view.dispatch(setDiagnostics(view.state, cmDiags));
@@ -291,11 +296,12 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     lspClient = client;
 
     // Cache diagnostics globally; refresh the gutter only when the URI matches
-    // the currently active tab. Other URIs paint when the user switches.
+    // the currently active tab. Other URIs paint when the user switches. The
+    // anyDiagnostics callback's uri is already normalized by lspClient.
     client.onAnyDiagnostics((uri, diagnostics) => {
       diagsByUri.set(uri, diagnostics);
       if (active === null) return;
-      const activeUri = pathToFileUri(client.rootUri, active);
+      const activeUri = normalizeUri(pathToFileUri(client.rootUri, active));
       if (activeUri === uri) applyDiagnosticsForActive();
     });
 
