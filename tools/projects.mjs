@@ -109,6 +109,17 @@ function commandExists(cmd) {
   }
 }
 
+/** PATH lookup using the platform's `where` / `which` — for tools that don't have a sane --version. */
+function executableInPath(exeName) {
+  const lookup = IS_WIN ? 'where.exe' : 'which';
+  try {
+    const r = spawnSync(lookup, [exeName], { stdio: 'ignore', timeout: 5_000 });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 const ALLOWED_LANGS = Object.freeze(new Set(Object.keys(PROJECT_CONFIG)));
 
 function getTreeIgnore(lang) {
@@ -835,6 +846,95 @@ export function subscribeLogs(lang, onEntry) {
   const state = getOrInitState(lang);
   state.subs.add(onEntry);
   return () => state.subs.delete(onEntry);
+}
+
+// ── Open the project in an external editor / file manager ──────────────────
+
+const OPEN_TARGETS = Object.freeze(new Set(['vscode', 'vs', 'explorer']));
+
+let openAvailabilityCache = null;
+
+/**
+ * Probe (once per process) which external editors / file managers are
+ * available. Cached because installed editors don't change during a dev
+ * session, and the probes spawn subprocesses which is wasted work on every
+ * dropdown open.
+ *
+ * @returns {{ vscode: boolean, vs: boolean, explorer: boolean }}
+ */
+export function getOpenAvailability() {
+  if (openAvailabilityCache !== null) return openAvailabilityCache;
+  openAvailabilityCache = {
+    vscode: commandExists('code'),
+    // Visual Studio: detect via PATH for `devenv`. Most installs add it; if not,
+    // the option will be greyed out even when VS is technically present. Acceptable.
+    vs: IS_WIN && executableInPath('devenv'),
+    explorer: IS_WIN,
+  };
+  return openAvailabilityCache;
+}
+
+function findCsproj(root) {
+  try {
+    const entries = readdirSync(root, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.csproj')) {
+        return join(root, entry.name);
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/**
+ * Launch an external editor / file manager pointed at the project root (or,
+ * for Visual Studio, the .csproj inside it). Spawned detached + unref'd so
+ * the launched app outlives the dev server.
+ *
+ * @param {string} lang     Project language id.
+ * @param {string} target   One of OPEN_TARGETS.
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function openProject(lang, target) {
+  assertLang(lang);
+  if (!OPEN_TARGETS.has(target)) {
+    return { ok: false, error: `unknown open target: ${target}` };
+  }
+  const root = getProjectRoot(lang);
+  if (!existsSync(root)) {
+    return { ok: false, error: 'project not scaffolded yet' };
+  }
+
+  try {
+    if (target === 'explorer') {
+      if (!IS_WIN) return { ok: false, error: 'File Explorer is Windows-only' };
+      spawn('explorer.exe', [root], { stdio: 'ignore', detached: true }).unref();
+      return { ok: true };
+    }
+
+    if (target === 'vscode') {
+      // `code` resolves to `code.cmd` on Windows — shell: true so the launcher finds it.
+      spawn('code', [root], { stdio: 'ignore', detached: true, shell: IS_WIN }).unref();
+      return { ok: true };
+    }
+
+    if (target === 'vs') {
+      if (!IS_WIN) return { ok: false, error: 'Visual Studio is Windows-only' };
+      const csproj = findCsproj(root);
+      if (csproj === null) return { ok: false, error: 'no .csproj found in project root' };
+      // `start "" "<file>"` opens with the registered file association — Visual
+      // Studio if installed. The empty "" is required because start treats
+      // its first quoted arg as a window title.
+      spawn('cmd', ['/c', 'start', '', csproj], { stdio: 'ignore', detached: true }).unref();
+      return { ok: true };
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  return { ok: false, error: 'no handler for target' };
 }
 
 // ── Filesystem watcher (chokidar) ──────────────────────────────────────────

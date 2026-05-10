@@ -9,6 +9,17 @@
 
 import type { FsNode } from './types';
 
+export interface OpenInOption {
+  /** Stable id sent back to onOpenIn. */
+  readonly id: string;
+  /** Visible label in the dropdown. */
+  readonly label: string;
+  /** Whether the target is currently launchable; greyed out otherwise. */
+  readonly available: boolean;
+  /** Tooltip shown when unavailable. */
+  readonly unavailableHint?: string;
+}
+
 export interface FileTreeOptions {
   /** Called when the user clicks a file row. */
   onOpenFile: (path: string) => void;
@@ -24,12 +35,18 @@ export interface FileTreeOptions {
   activePath: string | null;
   /** Header label shown above the tree, e.g. "projects/web/". */
   headerLabel: string;
+  /** External-editor / file-manager options for the "Open in ▾" header dropdown. Empty array hides the button. */
+  openInOptions: readonly OpenInOption[];
+  /** Called when the user picks an enabled item from the "Open in ▾" dropdown. */
+  onOpenIn: (id: string) => void;
 }
 
 export interface FileTreeHandle {
   render(tree: FsNode | null): void;
   setActive(path: string | null): void;
   expandPath(path: string): void;
+  /** Replace the "Open in ▾" dropdown's options (e.g. once the availability probe resolves). */
+  setOpenInOptions(options: readonly OpenInOption[]): void;
 }
 
 const COLLAPSED_BY_DEFAULT = new Set<string>(['node_modules', '.vite', 'dist']);
@@ -51,6 +68,7 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
   const expanded = new Set<string>(['']);
   let activePath = options.activePath;
   let currentTree: FsNode | null = null;
+  let openInOptions: readonly OpenInOption[] = options.openInOptions;
 
   function renderNode(node: FsNode, depth: number): HTMLElement {
     if (node.type === 'dir') return renderDir(node, depth);
@@ -160,7 +178,84 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
     newFolderBtn.addEventListener('click', options.onCreateFolder);
     header.appendChild(newFolderBtn);
 
+    if (openInOptions.length > 0) {
+      header.appendChild(renderOpenInButton());
+    }
+
     return header;
+  }
+
+  function renderOpenInButton(): HTMLElement {
+    const wrapper = div('tree-header-openin');
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tree-header-action';
+    btn.setAttribute('aria-haspopup', 'menu');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.title = 'Open the project in an external editor or file manager';
+    btn.appendChild(document.createTextNode('open in '));
+    const caret = span('▾', 'tree-header-openin-caret');
+    btn.appendChild(caret);
+
+    const menu = div('tree-header-openin-menu');
+    menu.setAttribute('role', 'menu');
+    menu.style.display = 'none';
+
+    for (const option of openInOptions) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'tree-header-openin-item';
+      item.setAttribute('role', 'menuitem');
+      item.textContent = option.label;
+      if (!option.available) {
+        item.classList.add('is-disabled');
+        item.disabled = true;
+        item.title = option.unavailableHint ?? 'Not available';
+      } else {
+        item.addEventListener('click', () => {
+          closeMenu();
+          options.onOpenIn(option.id);
+        });
+      }
+      menu.appendChild(item);
+    }
+
+    function openMenu(): void {
+      menu.style.display = 'block';
+      btn.setAttribute('aria-expanded', 'true');
+      // Close on next outside-click. Capture phase so a click on a tree row
+      // also closes the menu before triggering its own handler.
+      setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
+      document.addEventListener('keydown', onEscape);
+    }
+
+    function closeMenu(): void {
+      menu.style.display = 'none';
+      btn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onOutside, true);
+      document.removeEventListener('keydown', onEscape);
+    }
+
+    function onOutside(e: MouseEvent): void {
+      if (!wrapper.contains(e.target as Node)) closeMenu();
+    }
+
+    function onEscape(e: KeyboardEvent): void {
+      if (e.key === 'Escape') {
+        closeMenu();
+        btn.focus();
+      }
+    }
+
+    btn.addEventListener('click', () => {
+      if (menu.style.display === 'none') openMenu();
+      else closeMenu();
+    });
+
+    wrapper.appendChild(btn);
+    wrapper.appendChild(menu);
+    return wrapper;
   }
 
   function doRender(): void {
@@ -213,6 +308,10 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
         acc = acc === '' ? (parts[i] ?? '') : `${acc}/${parts[i] ?? ''}`;
         expanded.add(acc);
       }
+      doRender();
+    },
+    setOpenInOptions(opts: readonly OpenInOption[]): void {
+      openInOptions = opts;
       doRender();
     },
   };

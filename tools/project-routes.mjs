@@ -13,8 +13,10 @@
  *   POST /fs/rename    { lang, from, to }                 → { ok }
  *   POST /fs/delete    { lang, path }                     → { ok }
  *   POST /fs/mkdir     { lang, path }                     → { ok }
- *   POST /proj/start   { lang }                           → { ok, vitePort, ready }
- *   POST /proj/stop    { lang }                           → { ok }
+ *   POST /proj/start          { lang }                    → { ok, vitePort, ready }
+ *   POST /proj/stop           { lang }                    → { ok }
+ *   POST /proj/open           { lang, target }            → { ok, error? }   target = vscode|vs|explorer
+ *   GET  /proj/open/targets                               → { vscode, vs, explorer }   bool availability
  *   GET  /proj/status?lang=…                              → { running, ready, … }
  *   GET  /proj/logs?lang=…&n=200                          → { lines } (or SSE if Accept: text/event-stream)
  */
@@ -22,10 +24,12 @@
 import {
   deleteFile,
   ensureScaffold,
+  getOpenAvailability,
   getRecentLogs,
   getStatus,
   getTree,
   mkdir,
+  openProject,
   readFile,
   renameFile,
   startProject,
@@ -253,12 +257,32 @@ function handleFsWatchStream(query, req, res) {
   });
 }
 
+async function handleProjOpen(req, res) {
+  const body = await readJsonBody(req);
+  if (!body.lang) {
+    sendJson(res, 400, { error: 'missing lang' });
+    return;
+  }
+  if (typeof body.target !== 'string') {
+    sendJson(res, 400, { error: 'missing target' });
+    return;
+  }
+  const result = openProject(body.lang, body.target);
+  sendJson(res, result.ok ? 200 : 400, result);
+}
+
+function handleProjOpenTargets(res) {
+  sendJson(res, 200, getOpenAvailability());
+}
+
 async function handleProj(method, urlPath, req, res) {
   const query = parseQuery(req.url);
 
   if (method === 'POST' && urlPath === '/proj/start') return handleProjStart(req, res);
   if (method === 'POST' && urlPath === '/proj/stop') return handleProjStop(req, res);
   if (method === 'POST' && urlPath === '/proj/scaffold') return handleProjScaffold(query, res);
+  if (method === 'POST' && urlPath === '/proj/open') return handleProjOpen(req, res);
+  if (method === 'GET' && urlPath === '/proj/open/targets') return handleProjOpenTargets(res);
   if (method === 'GET' && urlPath === '/proj/status') return handleProjStatus(query, res);
   if (method === 'GET' && urlPath === '/proj/logs/recent') return handleProjLogsRecent(query, res);
   if (method === 'GET' && urlPath === '/proj/logs') {

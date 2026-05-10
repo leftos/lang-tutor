@@ -14,7 +14,7 @@ import {
   progressKey,
 } from './constants';
 import { createEditor, type TutorEditor } from './editor';
-import { createFileTree, type FileTreeHandle } from './fileTree';
+import { createFileTree, type FileTreeHandle, type OpenInOption } from './fileTree';
 import {
   deleteFile as apiDeleteFile,
   mkdir as apiMkdir,
@@ -22,9 +22,13 @@ import {
   writeFile as apiWriteFile,
   ensureScaffold,
   type FsWatchEvent,
+  fetchOpenAvailability,
   fetchRecentLogs,
   fetchTree,
   flattenFiles,
+  type OpenAvailability,
+  type OpenTarget,
+  openProjectExternal,
   subscribeFsEvents,
 } from './projectApi';
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
@@ -576,6 +580,63 @@ export function _getProjectPreview(): ProjectPreview | null {
   return projectPreviewInstance;
 }
 
+// ── External-editor "Open in ▾" availability ─────────────────────────────
+//
+// Probed once per page load via /proj/open/targets. Per-language filter
+// applied at render time — Visual Studio is hidden for web (not a web tool).
+
+let openAvailability: OpenAvailability | null = null;
+let openAvailabilityPromise: Promise<OpenAvailability> | null = null;
+
+const OPEN_TARGETS_BY_LANG: Record<LanguageId, readonly { id: OpenTarget; label: string }[]> = {
+  rust: [],
+  cpp: [],
+  python: [],
+  csharp: [
+    { id: 'vscode', label: 'VS Code' },
+    { id: 'vs', label: 'Visual Studio' },
+    { id: 'explorer', label: 'File Explorer' },
+  ],
+  web: [
+    { id: 'vscode', label: 'VS Code' },
+    { id: 'explorer', label: 'File Explorer' },
+  ],
+};
+
+function ensureOpenAvailability(): Promise<OpenAvailability> {
+  if (openAvailabilityPromise === null) {
+    openAvailabilityPromise = fetchOpenAvailability().then((a) => {
+      openAvailability = a;
+      return a;
+    });
+  }
+  return openAvailabilityPromise;
+}
+
+function buildOpenInOptions(id: LanguageId): OpenInOption[] {
+  const cfg = OPEN_TARGETS_BY_LANG[id];
+  return cfg.map((entry): OpenInOption => {
+    const available = openAvailability !== null ? openAvailability[entry.id] : true;
+    if (available) {
+      return { id: entry.id, label: entry.label, available: true };
+    }
+    return { id: entry.id, label: entry.label, available: false, unavailableHint: `${entry.label} not found on PATH` };
+  });
+}
+
+async function openExternal(id: LanguageId, target: string): Promise<void> {
+  // The dropdown only fires onOpenIn for items with ids declared in OPEN_TARGETS_BY_LANG,
+  // so the cast is safe; defend at runtime anyway.
+  const valid = OPEN_TARGETS_BY_LANG[id].some((o) => o.id === target);
+  if (!valid) return;
+  try {
+    const result = await openProjectExternal(id, target as OpenTarget);
+    if (!result.ok) alert(`Could not open: ${result.error ?? 'unknown error'}`);
+  } catch (e) {
+    alert(`Could not open: ${(e as Error).message}`);
+  }
+}
+
 function destroyProjectUI(): void {
   projectFsUnsub?.();
   projectFsUnsub = null;
@@ -687,6 +748,8 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
   projectFileTree = createFileTree(el('projTree'), {
     activePath: state.activeTab,
     headerLabel: `projects/${lang.scaffoldDir}/`,
+    openInOptions: buildOpenInOptions(id),
+    onOpenIn: (target) => void openExternal(id, target),
     onOpenFile: (path) => {
       void projectEditorInstance?.openFile(path);
       projectFileTree?.setActive(path);
@@ -696,6 +759,18 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
     onRename: (path) => void renamePath(id, path),
     onDelete: (path, isDir) => void deletePath(id, path, isDir),
   });
+  // Probe availability lazily; once it lands, push the refreshed options
+  // into the tree so unavailable items grey out with the correct tooltip.
+  // Cached for the lifetime of the page after the first call.
+  if (openAvailability === null) {
+    void ensureOpenAvailability().then(() => {
+      // The active project lang might have changed by the time the probe
+      // resolves — only update if we're still on the same one.
+      if (currentProjectUILang === id) {
+        projectFileTree?.setOpenInOptions(buildOpenInOptions(id));
+      }
+    });
+  }
   if (state.activeTab !== null) projectFileTree.expandPath(state.activeTab);
 
   projectEditorInstance = createProjectEditor({

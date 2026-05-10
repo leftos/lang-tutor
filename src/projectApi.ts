@@ -150,6 +150,22 @@ export async function fetchRecentLogs(lang: LanguageId, n: number): Promise<{ li
   return getJson(`/proj/logs/recent?lang=${encodeURIComponent(lang)}&n=${n}`);
 }
 
+export type OpenTarget = 'vscode' | 'vs' | 'explorer';
+
+export interface OpenAvailability {
+  readonly vscode: boolean;
+  readonly vs: boolean;
+  readonly explorer: boolean;
+}
+
+export async function fetchOpenAvailability(): Promise<OpenAvailability> {
+  return getJson('/proj/open/targets');
+}
+
+export async function openProjectExternal(lang: LanguageId, target: OpenTarget): Promise<{ ok: boolean; error?: string }> {
+  return postJson('/proj/open', { lang, target });
+}
+
 /**
  * Open an SSE connection to /proj/logs?lang=… and call onEntry for each log line.
  * The server sends recent buffered logs first, then live log lines as they arrive.
