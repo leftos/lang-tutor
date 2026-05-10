@@ -1221,8 +1221,52 @@ async function evaluateProjectCode(): Promise<void> {
     }
   }
 
+  // [LSP] block for project workspaces — surfaces every LSP-published
+  // diagnostic across the open tabs. Only included when the LSP is actually
+  // connected and reporting something.
+  const projectLspBlock = buildProjectLspBlock();
+  if (projectLspBlock !== null) blocks.push(projectLspBlock);
+
   await sendMessage(blocks.join('\n\n'));
   void extractProgress();
+}
+
+/**
+ * Build an `[LSP]` block from the project workspace's LSP diagnostics across
+ * all currently-open files. Returns null if no client is connected or every
+ * file is clean. URIs are stripped to file basenames so the tutor sees
+ * `Program.cs:14:8` rather than the full session-temp path.
+ */
+function buildProjectLspBlock(): string | null {
+  const client = projectEditorInstance?.getLspClient() ?? null;
+  if (client === null) return null;
+  const byUri = client.getDiagnosticsByUri();
+  const lines: string[] = [];
+  let totalDiagnostics = 0;
+  const severityRank = (s: number | undefined): number => (s === 1 ? 0 : s === 2 ? 1 : s === 3 ? 2 : 3);
+  const labelFor = (s: number | undefined): string => (s === 1 ? 'error' : s === 2 ? 'warning' : s === 3 ? 'info' : 'hint');
+  for (const [uri, diagnostics] of byUri.entries()) {
+    if (diagnostics.length === 0) continue;
+    const fileName = uri.split('/').pop() ?? uri;
+    const sorted = [...diagnostics].sort((a, b) => {
+      const r = severityRank(a.severity) - severityRank(b.severity);
+      if (r !== 0) return r;
+      if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
+      return a.range.start.character - b.range.start.character;
+    });
+    for (const d of sorted) {
+      if (totalDiagnostics >= 30) break;
+      const line = d.range.start.line + 1;
+      const col = d.range.start.character + 1;
+      const code = d.code !== undefined ? ` [${d.code}]` : '';
+      const source = d.source !== undefined && d.source.length > 0 ? `${d.source}: ` : '';
+      lines.push(`  ${fileName}:${line}:${col} ${labelFor(d.severity)}${code} — ${source}${d.message}`);
+      totalDiagnostics += 1;
+    }
+    if (totalDiagnostics >= 30) break;
+  }
+  if (lines.length === 0) return null;
+  return `[LSP]\ndiagnostics:\n${lines.join('\n')}`;
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────

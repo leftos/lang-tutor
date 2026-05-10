@@ -36,8 +36,12 @@ const TMP_LSP_ROOT = join(REPO_ROOT, '.tmp', 'lsp');
  * @typedef {object} LspConfig
  * @property {string} bin                   - executable on PATH
  * @property {string[]} args                - hardcoded argv (no user data)
- * @property {string} mainFile              - filename inside the workspace dir
- * @property {Record<string,string>} workspaceFiles  - extra files to seed (e.g., compile_flags.txt)
+ * @property {'fresh' | 'project'} [workspaceMode] - 'fresh' (default) creates `.tmp/lsp/<sid>/`
+ *           and seeds files; 'project' uses the existing `projects/<projectDir>/` directory and
+ *           does not seed any files.
+ * @property {string} [projectDir]          - subdirectory under projects/ (project mode only)
+ * @property {string} [mainFile]            - filename inside the workspace dir (fresh mode)
+ * @property {Record<string,string>} [workspaceFiles]  - extra files to seed (fresh mode)
  * @property {string[]} versionArgs         - args to call for availability probe
  */
 
@@ -85,6 +89,19 @@ const LSP_CONFIG = {
     },
     versionArgs: ['--version'],
   },
+
+  csharp: {
+    // OmniSharp's modern LSP entry point. `omnisharp -lsp` speaks LSP over
+    // stdin/stdout and reads the .csproj/.sln in cwd. Microsoft's Roslyn LSP
+    // (`Microsoft.CodeAnalysis.LanguageServer`) is preferable when available
+    // but its install path is undocumented and version-coupled to the C# Dev
+    // Kit extension; OmniSharp is the more reliable single-binary install.
+    bin: 'omnisharp',
+    args: ['-lsp'],
+    workspaceMode: 'project',
+    projectDir: 'csharp',
+    versionArgs: ['--version'],
+  },
 };
 
 // ── Globals (HMR-safe) ──────────────────────────────────────────────────────
@@ -103,6 +120,7 @@ const WSS_KEY = '__langTutorLspWss';
  * @property {string} lang
  * @property {import('node:child_process').ChildProcessWithoutNullStreams} proc
  * @property {string} workspaceDir
+ * @property {boolean} workspaceEphemeral - true → delete on exit; false → leave projects/ alone
  * @property {import('ws').WebSocket | null} ws
  * @property {Buffer} stdoutBuffer        - partial Content-Length frame buffer
  * @property {number} lastActivity        - epoch ms; bumped on every byte either direction
@@ -289,23 +307,41 @@ async function probeAvailability(lang) {
  * @param {string} sessionId
  * @returns {string}
  */
+/**
+ * Resolve the workspace directory for a session. Project-mode languages reuse
+ * the on-disk `projects/<projectDir>/` directory (the dev-server supervisor
+ * already manages files there); fresh-mode creates a per-session directory
+ * under `.tmp/lsp/<sid>/` and seeds the configured workspace files.
+ *
+ * @param {string} lang
+ * @param {string} sessionId
+ * @returns {{ dir: string; ephemeral: boolean }}
+ */
 function createWorkspace(lang, sessionId) {
   const config = LSP_CONFIG[lang];
   if (config === undefined) throw new Error(`unknown lang: ${lang}`);
+
+  if (config.workspaceMode === 'project') {
+    if (typeof config.projectDir !== 'string' || config.projectDir.length === 0) {
+      throw new Error(`project mode requires projectDir for ${lang}`);
+    }
+    const dir = resolve(REPO_ROOT, 'projects', config.projectDir);
+    return { dir, ephemeral: false };
+  }
+
   const dir = join(TMP_LSP_ROOT, sessionId);
   mkdirSync(dir, { recursive: true });
-  // Seed an empty main file so root discovery has something to anchor to.
-  // mainFile may include a subdirectory (e.g. rust's `src/main.rs`); ensure
-  // its parent exists before writing.
-  const mainPath = join(dir, config.mainFile);
-  mkdirSync(dirname(mainPath), { recursive: true });
-  writeFileSync(mainPath, '');
-  for (const [name, body] of Object.entries(config.workspaceFiles)) {
+  if (typeof config.mainFile === 'string') {
+    const mainPath = join(dir, config.mainFile);
+    mkdirSync(dirname(mainPath), { recursive: true });
+    writeFileSync(mainPath, '');
+  }
+  for (const [name, body] of Object.entries(config.workspaceFiles ?? {})) {
     const filePath = join(dir, name);
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, body);
   }
-  return dir;
+  return { dir, ephemeral: true };
 }
 
 function destroyWorkspace(workspaceDir) {
@@ -353,7 +389,7 @@ async function startSession(lang) {
   if (!probe.available) return { ok: false, error: probe.error ?? 'unavailable' };
 
   const sessionId = randomUUID();
-  const workspaceDir = createWorkspace(lang, sessionId);
+  const { dir: workspaceDir, ephemeral } = createWorkspace(lang, sessionId);
 
   let proc;
   try {
@@ -362,7 +398,7 @@ async function startSession(lang) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (e) {
-    destroyWorkspace(workspaceDir);
+    if (ephemeral) destroyWorkspace(workspaceDir);
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 
@@ -371,6 +407,7 @@ async function startSession(lang) {
     lang,
     proc,
     workspaceDir,
+    workspaceEphemeral: ephemeral,
     ws: null,
     stdoutBuffer: Buffer.alloc(0),
     lastActivity: Date.now(),
@@ -392,7 +429,7 @@ async function startSession(lang) {
     }
     if (session.idleTimer !== null) clearTimeout(session.idleTimer);
     sessions.delete(sessionId);
-    destroyWorkspace(session.workspaceDir);
+    if (session.workspaceEphemeral) destroyWorkspace(session.workspaceDir);
   });
 
   // stderr is informational; surface it in the dev-server console for debugging.
@@ -432,14 +469,16 @@ async function startSession(lang) {
   await new Promise((res) => setTimeout(res, SPAWN_GRACE_MS));
   if (proc.exitCode !== null) {
     sessions.delete(sessionId);
-    destroyWorkspace(workspaceDir);
+    if (ephemeral) destroyWorkspace(workspaceDir);
     return { ok: false, error: `lsp exited immediately with code ${proc.exitCode}` };
   }
 
   return {
     ok: true,
     sessionId,
-    mainFileUri: pathToFileUri(join(workspaceDir, config.mainFile)),
+    // Project-mode workspaces have no fixed mainFile (tabs are open dynamically
+    // by the frontend); only fresh-mode bridges expose a mainFileUri.
+    ...(typeof config.mainFile === 'string' ? { mainFileUri: pathToFileUri(join(workspaceDir, config.mainFile)) } : {}),
     rootUri: pathToFileUri(workspaceDir),
   };
 }

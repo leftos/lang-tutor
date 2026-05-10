@@ -119,7 +119,8 @@ type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 interface SpawnSuccess {
   ok: true;
   sessionId: string;
-  mainFileUri: string;
+  /** Present only for fresh-mode (single-buffer) workspaces. */
+  mainFileUri?: string;
   rootUri: string;
 }
 
@@ -131,11 +132,16 @@ interface SpawnFailure {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export type DiagnosticsListener = (diagnostics: LspDiagnostic[]) => void;
+export type AnyDiagnosticsListener = (uri: string, diagnostics: LspDiagnostic[]) => void;
 
 export interface LspClient {
-  readonly mainFileUri: string;
+  /** Convenience URI for single-buffer workspaces; null for project workspaces. */
+  readonly mainFileUri: string | null;
+  readonly rootUri: string;
   readonly languageId: string;
   readonly capabilities: LspServerCapabilities;
+
+  // ── Single-buffer convenience (uses mainFileUri) ──
   didOpen(text: string): void;
   didChange(text: string): void;
   hover(line: number, character: number): Promise<LspHover | null>;
@@ -144,6 +150,17 @@ export interface LspClient {
   formatting(): Promise<LspTextEdit[] | null>;
   getDiagnostics(): LspDiagnostic[];
   onDiagnostics(cb: DiagnosticsListener): () => void;
+
+  // ── Multi-file (project workspaces) ──
+  didOpenUri(uri: string, languageId: string, text: string): void;
+  didChangeUri(uri: string, text: string): void;
+  didCloseUri(uri: string): void;
+  hoverUri(uri: string, line: number, character: number): Promise<LspHover | null>;
+  completionUri(uri: string, line: number, character: number, triggerCharacter?: string): Promise<LspCompletionList | null>;
+  formattingUri(uri: string): Promise<LspTextEdit[] | null>;
+  getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]>;
+  onAnyDiagnostics(cb: AnyDiagnosticsListener): () => void;
+
   isOpen(): boolean;
   dispose(): Promise<void>;
 }
@@ -159,6 +176,9 @@ const LSP_LANGUAGE_IDS: Partial<Record<LanguageId, string>> = {
   csharp: 'csharp',
   // web is multi-language at the file level; per-tab dispatch in projectEditor.ts
 };
+
+/** Languages that operate on the project workspace (multi-file editor). */
+const PROJECT_LANGS: ReadonlySet<LanguageId> = new Set<LanguageId>(['csharp', 'web']);
 
 /**
  * Open an LSP session for the given language. Returns null if the toolchain
@@ -186,7 +206,14 @@ export async function connectLsp(lang: LanguageId): Promise<LspClient | null> {
   }
   const spawnBody = (await spawnRes.json()) as SpawnSuccess | SpawnFailure;
   if (!spawnBody.ok) return null;
-  const { sessionId, mainFileUri, rootUri } = spawnBody;
+  const { sessionId, rootUri } = spawnBody;
+  const mainFileUri = spawnBody.mainFileUri ?? null;
+  // Single-buffer languages must have a mainFileUri (the convenience APIs
+  // depend on it). Project-mode languages legitimately omit it.
+  if (mainFileUri === null && !PROJECT_LANGS.has(lang)) {
+    void disposeRemoteSession(sessionId);
+    return null;
+  }
 
   // 2. Open the WebSocket and run the initialize/initialized handshake.
   const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -230,22 +257,27 @@ const INITIALIZE_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 
 class LspClientImpl implements LspClient {
-  readonly mainFileUri: string;
+  readonly mainFileUri: string | null;
   readonly languageId: string;
+  readonly rootUri: string;
   capabilities: LspServerCapabilities = {};
 
   private readonly ws: WebSocket;
   private readonly sessionId: string;
-  private readonly rootUri: string;
   private nextId = 1;
-  private docVersion = 0;
   private opened = false;
   private disposed = false;
   private readonly pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void; timer: number }>();
   private readonly diagnosticsByUri = new Map<string, LspDiagnostic[]>();
+  // Per-URI document versions for textDocument/didChange — LSP requires
+  // monotonically increasing version numbers per URI.
+  private readonly versions = new Map<string, number>();
+  // Set of URIs we have called textDocument/didOpen for (and not yet closed).
+  private readonly openUris = new Set<string>();
   private readonly diagnosticsListeners = new Set<DiagnosticsListener>();
+  private readonly anyDiagnosticsListeners = new Set<AnyDiagnosticsListener>();
 
-  constructor(ws: WebSocket, sessionId: string, mainFileUri: string, languageId: string, rootUri: string) {
+  constructor(ws: WebSocket, sessionId: string, mainFileUri: string | null, languageId: string, rootUri: string) {
     this.ws = ws;
     this.sessionId = sessionId;
     this.mainFileUri = mainFileUri;
@@ -278,67 +310,35 @@ class LspClientImpl implements LspClient {
     this.notify('initialized', {});
   }
 
+  // ── Single-buffer convenience (delegates to the multi-file methods) ──
+
   didOpen(text: string): void {
-    if (!this.isOpen()) return;
-    this.docVersion = 1;
+    if (this.mainFileUri === null) return;
+    this.didOpenUri(this.mainFileUri, this.languageId, text);
     this.opened = true;
-    this.notify('textDocument/didOpen', {
-      textDocument: {
-        uri: this.mainFileUri,
-        languageId: this.languageId,
-        version: this.docVersion,
-        text,
-      },
-    });
   }
 
   didChange(text: string): void {
-    if (!this.isOpen()) return;
+    if (this.mainFileUri === null) return;
     if (!this.opened) {
       this.didOpen(text);
       return;
     }
-    this.docVersion += 1;
-    // Full-sync: send the entire doc as one change. Simpler than incremental
-    // and adequate for single-file lessons.
-    this.notify('textDocument/didChange', {
-      textDocument: { uri: this.mainFileUri, version: this.docVersion },
-      contentChanges: [{ text }],
-    });
+    this.didChangeUri(this.mainFileUri, text);
   }
 
-  async hover(line: number, character: number): Promise<LspHover | null> {
-    if (!this.isOpen() || this.capabilities.hoverProvider === undefined || this.capabilities.hoverProvider === false) {
-      return null;
-    }
-    try {
-      return (await this.request('textDocument/hover', {
-        textDocument: { uri: this.mainFileUri },
-        position: { line, character },
-      })) as LspHover | null;
-    } catch {
-      return null;
-    }
+  hover(line: number, character: number): Promise<LspHover | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.hoverUri(this.mainFileUri, line, character);
   }
 
-  async completion(line: number, character: number, triggerCharacter?: string): Promise<LspCompletionList | null> {
-    if (!this.isOpen() || this.capabilities.completionProvider === undefined) return null;
-    try {
-      const result = (await this.request('textDocument/completion', {
-        textDocument: { uri: this.mainFileUri },
-        position: { line, character },
-        context: triggerCharacter !== undefined ? { triggerKind: 2, triggerCharacter } : { triggerKind: 1 },
-      })) as LspCompletionList | LspCompletionItem[] | null;
-      if (result === null) return null;
-      // Some servers return CompletionItem[] directly, some return CompletionList.
-      if (Array.isArray(result)) return { isIncomplete: false, items: result };
-      return result;
-    } catch {
-      return null;
-    }
+  completion(line: number, character: number, triggerCharacter?: string): Promise<LspCompletionList | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.completionUri(this.mainFileUri, line, character, triggerCharacter);
   }
 
   async signatureHelp(line: number, character: number): Promise<LspSignatureHelp | null> {
+    if (this.mainFileUri === null) return null;
     if (!this.isOpen() || this.capabilities.signatureHelpProvider === undefined) return null;
     try {
       return (await this.request('textDocument/signatureHelp', {
@@ -350,13 +350,97 @@ class LspClientImpl implements LspClient {
     }
   }
 
-  async formatting(): Promise<LspTextEdit[] | null> {
+  formatting(): Promise<LspTextEdit[] | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.formattingUri(this.mainFileUri);
+  }
+
+  getDiagnostics(): LspDiagnostic[] {
+    if (this.mainFileUri === null) return [];
+    return this.diagnosticsByUri.get(this.mainFileUri) ?? [];
+  }
+
+  onDiagnostics(cb: DiagnosticsListener): () => void {
+    this.diagnosticsListeners.add(cb);
+    return () => this.diagnosticsListeners.delete(cb);
+  }
+
+  // ── Multi-file (project workspaces) ──
+
+  didOpenUri(uri: string, languageId: string, text: string): void {
+    if (!this.isOpen()) return;
+    if (this.openUris.has(uri)) {
+      // Already open — update content via didChange to stay protocol-correct.
+      this.didChangeUri(uri, text);
+      return;
+    }
+    this.openUris.add(uri);
+    this.versions.set(uri, 1);
+    this.notify('textDocument/didOpen', {
+      textDocument: { uri, languageId, version: 1, text },
+    });
+  }
+
+  didChangeUri(uri: string, text: string): void {
+    if (!this.isOpen()) return;
+    if (!this.openUris.has(uri)) {
+      // The server hasn't seen this URI yet — open it instead of dropping.
+      this.didOpenUri(uri, this.languageId, text);
+      return;
+    }
+    const next = (this.versions.get(uri) ?? 0) + 1;
+    this.versions.set(uri, next);
+    this.notify('textDocument/didChange', {
+      textDocument: { uri, version: next },
+      contentChanges: [{ text }],
+    });
+  }
+
+  didCloseUri(uri: string): void {
+    if (!this.isOpen()) return;
+    if (!this.openUris.has(uri)) return;
+    this.openUris.delete(uri);
+    this.versions.delete(uri);
+    this.notify('textDocument/didClose', { textDocument: { uri } });
+  }
+
+  async hoverUri(uri: string, line: number, character: number): Promise<LspHover | null> {
+    if (!this.isOpen() || this.capabilities.hoverProvider === undefined || this.capabilities.hoverProvider === false) {
+      return null;
+    }
+    try {
+      return (await this.request('textDocument/hover', {
+        textDocument: { uri },
+        position: { line, character },
+      })) as LspHover | null;
+    } catch {
+      return null;
+    }
+  }
+
+  async completionUri(uri: string, line: number, character: number, triggerCharacter?: string): Promise<LspCompletionList | null> {
+    if (!this.isOpen() || this.capabilities.completionProvider === undefined) return null;
+    try {
+      const result = (await this.request('textDocument/completion', {
+        textDocument: { uri },
+        position: { line, character },
+        context: triggerCharacter !== undefined ? { triggerKind: 2, triggerCharacter } : { triggerKind: 1 },
+      })) as LspCompletionList | LspCompletionItem[] | null;
+      if (result === null) return null;
+      if (Array.isArray(result)) return { isIncomplete: false, items: result };
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  async formattingUri(uri: string): Promise<LspTextEdit[] | null> {
     if (!this.isOpen() || this.capabilities.documentFormattingProvider === undefined || this.capabilities.documentFormattingProvider === false) {
       return null;
     }
     try {
       return (await this.request('textDocument/formatting', {
-        textDocument: { uri: this.mainFileUri },
+        textDocument: { uri },
         options: { tabSize: 2, insertSpaces: true, trimTrailingWhitespace: true, insertFinalNewline: true },
       })) as LspTextEdit[] | null;
     } catch {
@@ -364,13 +448,13 @@ class LspClientImpl implements LspClient {
     }
   }
 
-  getDiagnostics(): LspDiagnostic[] {
-    return this.diagnosticsByUri.get(this.mainFileUri) ?? [];
+  getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]> {
+    return this.diagnosticsByUri;
   }
 
-  onDiagnostics(cb: DiagnosticsListener): () => void {
-    this.diagnosticsListeners.add(cb);
-    return () => this.diagnosticsListeners.delete(cb);
+  onAnyDiagnostics(cb: AnyDiagnosticsListener): () => void {
+    this.anyDiagnosticsListeners.add(cb);
+    return () => this.anyDiagnosticsListeners.delete(cb);
   }
 
   async dispose(): Promise<void> {
@@ -382,6 +466,7 @@ class LspClientImpl implements LspClient {
     }
     this.pending.clear();
     this.diagnosticsListeners.clear();
+    this.anyDiagnosticsListeners.clear();
     try {
       this.ws.close();
     } catch {
@@ -464,6 +549,13 @@ class LspClientImpl implements LspClient {
           }
         }
       }
+      for (const cb of this.anyDiagnosticsListeners) {
+        try {
+          cb(p.uri, p.diagnostics);
+        } catch (e) {
+          console.warn('[lsp] anyDiagnostics listener threw:', e);
+        }
+      }
       return;
     }
     // window/logMessage, window/showMessage, $/progress, etc. — ignore.
@@ -478,6 +570,7 @@ class LspClientImpl implements LspClient {
     }
     this.pending.clear();
     this.diagnosticsListeners.clear();
+    this.anyDiagnosticsListeners.clear();
   }
 }
 

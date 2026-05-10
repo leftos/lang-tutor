@@ -275,6 +275,19 @@ if (-not $SkipInstall) {
         if (Test-Tool 'black') { Write-Ok "black installed" } else { Write-Warn-Local "black not on PATH after install — Python formatting will be disabled." }
     }
 
+    Write-Step "OmniSharp (C# LSP) — optional"
+    if (Test-Tool 'omnisharp') {
+        Write-Skip "omnisharp already installed"
+    } else {
+        # OmniSharp doesn't have a stable winget id and the official install is
+        # a binary download from GitHub releases. We don't auto-install — log a
+        # hint instead so the user can grab it deliberately. Without it the C#
+        # tutor falls back to dotnet build feedback in [OUTPUT].
+        Write-Warn-Local "omnisharp not on PATH — LSP-based C# tutoring will be disabled."
+        Write-Warn-Local "  Install: scoop install omnisharp  OR  choco install omnisharp"
+        Write-Warn-Local "  Or download a release from https://github.com/OmniSharp/omnisharp-roslyn/releases"
+    }
+
     Write-Step "basedpyright (Python LSP)"
     if ($null -eq $py) {
         Write-Warn-Local "Python not found, skipping basedpyright."

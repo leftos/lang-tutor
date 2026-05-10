@@ -39,8 +39,40 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 
 import { tutorHighlight, tutorTheme } from './editor';
+import { connectLsp, type LspClient } from './lspClient';
 import { fetchFile, writeFile } from './projectApi';
 import type { LanguageId } from './types';
+
+// LSP languageId tag per-extension (the value the language server expects in
+// textDocument/didOpen). Project workspaces are multi-language; only files
+// whose extension maps here get pushed to the LSP.
+const LSP_LANGUAGE_ID_BY_EXT: Record<string, string> = {
+  cs: 'csharp',
+  ts: 'typescript',
+  tsx: 'typescriptreact',
+  js: 'javascript',
+  jsx: 'javascriptreact',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  html: 'html',
+  htm: 'html',
+  css: 'css',
+  json: 'json',
+};
+
+function lspLanguageIdForPath(path: string): string | null {
+  const dot = path.lastIndexOf('.');
+  if (dot === -1) return null;
+  const ext = path.slice(dot + 1).toLowerCase();
+  return LSP_LANGUAGE_ID_BY_EXT[ext] ?? null;
+}
+
+/** Build a `file:///` URI for a project-relative path under the LSP rootUri. */
+function pathToFileUri(rootUri: string, relativePath: string): string {
+  const trimmedRoot = rootUri.replace(/\/$/, '');
+  const trimmedPath = relativePath.replace(/^[/\\]+/, '').replaceAll('\\', '/');
+  return `${trimmedRoot}/${trimmedPath}`;
+}
 
 // GitHub-flavoured markdown defaults: tables, strikethrough, autolinks,
 // task lists. Newlines inside paragraphs become <br/>.
@@ -85,6 +117,8 @@ export interface ProjectEditor {
   closeFile(path: string): void;
   saveAll(): Promise<void>;
   refreshTabs(): void;
+  /** Active LSP client for the project workspace, or null if not connected / unavailable. */
+  getLspClient(): LspClient | null;
   /** Re-read the file from disk. If the tab is dirty, the in-memory content is preserved. */
   refreshFile(path: string): Promise<void>;
   /** Re-key an open tab after a rename and rebuild its state with the new file's language extension. */
@@ -204,6 +238,63 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
   let active: string | null = null;
   let suppressUpdate = false;
 
+  // ── LSP lifecycle (project workspace, multi-file) ──────────────────────────
+  // The client stays null until connectLsp resolves. All call sites use a
+  // short-circuit (`lspClient?.didChangeUri(…)`) so the editor is fully usable
+  // before / without the LSP, and silently if the server isn't installed.
+  let lspClient: LspClient | null = null;
+  // didOpen/didClose calls that arrive before the client is ready are queued
+  // and replayed once connectLsp resolves.
+  const pendingLspOps: Array<(c: LspClient) => void> = [];
+
+  const enqueueLsp = (op: (c: LspClient) => void): void => {
+    if (lspClient !== null) op(lspClient);
+    else pendingLspOps.push(op);
+  };
+
+  void (async (): Promise<void> => {
+    const client = await connectLsp(opts.lang);
+    if (client === null) return;
+    lspClient = client;
+    while (pendingLspOps.length > 0) {
+      const op = pendingLspOps.shift();
+      if (op !== undefined) {
+        try {
+          op(client);
+        } catch (e) {
+          console.warn('[projectEditor] queued lsp op threw:', e);
+        }
+      }
+    }
+  })();
+
+  const lspDidOpen = (path: string, content: string): void => {
+    const langId = lspLanguageIdForPath(path);
+    if (langId === null) return;
+    enqueueLsp((client) => {
+      const uri = pathToFileUri(client.rootUri, path);
+      client.didOpenUri(uri, langId, content);
+    });
+  };
+
+  const lspDidChange = (path: string, content: string): void => {
+    const langId = lspLanguageIdForPath(path);
+    if (langId === null) return;
+    enqueueLsp((client) => {
+      const uri = pathToFileUri(client.rootUri, path);
+      client.didChangeUri(uri, content);
+    });
+  };
+
+  const lspDidClose = (path: string): void => {
+    const langId = lspLanguageIdForPath(path);
+    if (langId === null) return;
+    enqueueLsp((client) => {
+      const uri = pathToFileUri(client.rootUri, path);
+      client.didCloseUri(uri);
+    });
+  };
+
   // The update listener has to live inside every per-file state we build —
   // view.setState() replaces extensions wholesale, so a single instance
   // attached only to the initial state would be lost on first tab switch.
@@ -214,6 +305,10 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     const tab = tabs.get(active);
     if (tab === undefined) return;
     tab.state = update.state;
+    // Push the new content to the LSP before kicking off the disk save.
+    // OmniSharp / Roslyn / tsserver maintain their own in-memory buffer that
+    // overrides on-disk content as long as didOpen is in effect.
+    lspDidChange(tab.path, update.state.doc.toString());
     scheduleSave(tab);
     renderTabs();
   });
@@ -389,6 +484,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     // editor view. Non-markdown files ignore this field.
     tabs.set(path, { path, state, savedContent: content, saveTimer: null, mdMode: 'preview' });
     openOrder.push(path);
+    lspDidOpen(path, content);
     switchTo(path);
     notifyTabs();
   }
@@ -413,6 +509,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     }
     tabs.delete(path);
     openOrder = openOrder.filter((p) => p !== path);
+    lspDidClose(path);
     if (active === path) {
       const fallback = openOrder[openOrder.length - 1] ?? null;
       setViewToTab(fallback);
@@ -476,6 +573,9 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
         const state = buildState(content, path);
         tabs.set(path, { path, state, savedContent: content, saveTimer: null, mdMode: 'preview' });
         openOrder.push(path);
+        // Push hydrated tab content to the LSP. enqueueLsp handles the case
+        // where connectLsp hasn't resolved yet — these calls queue and replay.
+        lspDidOpen(path, content);
       } catch {
         // skip files that no longer exist
       }
@@ -545,6 +645,8 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     tabs.delete(oldPath);
     tabs.set(newPath, newTab);
     openOrder = openOrder.map((p) => (p === oldPath ? newPath : p));
+    lspDidClose(oldPath);
+    lspDidOpen(newPath, content);
     if (wasActive) {
       active = newPath;
       suppressUpdate = true;
@@ -566,6 +668,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     }
     tabs.delete(path);
     openOrder = openOrder.filter((p) => p !== path);
+    lspDidClose(path);
     if (active === path) {
       const fallback = openOrder[openOrder.length - 1] ?? null;
       setViewToTab(fallback);
@@ -629,6 +732,9 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
         })
         .filter((f): f is { path: string; content: string; dirty: boolean } => f !== null);
     },
+    getLspClient(): LspClient | null {
+      return lspClient;
+    },
     destroy(): void {
       // Flush any in-flight saves.
       for (const tab of tabs.values()) {
@@ -636,6 +742,12 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
           window.clearTimeout(tab.saveTimer);
           void flushSave(tab);
         }
+      }
+      // Drop the LSP session — the supervisor reaps the child server-side.
+      if (lspClient !== null) {
+        const client = lspClient;
+        lspClient = null;
+        void client.dispose();
       }
       view.destroy();
     },
