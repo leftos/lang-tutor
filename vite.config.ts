@@ -81,6 +81,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [tailwindcss(), toolchainPlugin()],
     server: {
+      host: true,
       proxy: {
         '/v1': {
           target: 'https://api.anthropic.com',

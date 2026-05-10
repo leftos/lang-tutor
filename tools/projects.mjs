@@ -330,7 +330,7 @@ const SCAFFOLD_WEB = {
       name: 'lang-tutor-web',
       private: true,
       type: 'module',
-      scripts: { dev: 'vite --port 5180 --strictPort --host 127.0.0.1' },
+      scripts: { dev: 'vite --port 5180 --strictPort --host 0.0.0.0' },
       devDependencies: { vite: '^7.0.0' },
     },
     null,

@@ -204,7 +204,7 @@ function renderFileSpec(): void {
     cpp: 'gcc · c++23',
     python: 'pyodide · 3.12',
     csharp: 'c# 12 · run in vs/rider',
-    web: 'vite · http://localhost:5180',
+    web: `vite · http://${window.location.hostname || 'localhost'}:5180`,
   };
   spec.textContent = map[lang.id];
 }
