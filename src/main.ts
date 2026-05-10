@@ -838,6 +838,64 @@ function initResize(): void {
   });
 }
 
+const ASIDE_WIDTH_KEY = 'lang-tutor:aside-width';
+const ASIDE_MIN_WIDTH = 320;
+
+function clampAsideWidth(width: number): number {
+  const split = el('bodySplit').getBoundingClientRect().width;
+  const max = Math.max(ASIDE_MIN_WIDTH + 200, split * 0.75);
+  return Math.max(ASIDE_MIN_WIDTH, Math.min(width, max));
+}
+
+function initAsideResize(): void {
+  const bar = el('asideResize');
+  const aside = document.querySelector<HTMLElement>('.aside');
+  if (aside === null) return;
+
+  const stored = storageGet<number>(ASIDE_WIDTH_KEY);
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    aside.style.flex = `0 0 ${clampAsideWidth(stored)}px`;
+  }
+
+  let startX = 0;
+  let startW = 0;
+
+  function onMove(e: MouseEvent): void {
+    const next = clampAsideWidth(startW + (e.clientX - startX));
+    if (aside !== null) aside.style.flex = `0 0 ${next}px`;
+  }
+
+  function onUp(): void {
+    bar.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (aside !== null) {
+      const finalWidth = aside.getBoundingClientRect().width;
+      storageSet(ASIDE_WIDTH_KEY, finalWidth);
+    }
+  }
+
+  bar.addEventListener('mousedown', (e: MouseEvent) => {
+    if (aside === null) return;
+    startX = e.clientX;
+    startW = aside.getBoundingClientRect().width;
+    bar.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  });
+
+  bar.addEventListener('dblclick', () => {
+    if (aside === null) return;
+    aside.style.flex = '';
+    storageDelete(ASIDE_WIDTH_KEY);
+  });
+}
+
 // ── Migration: old rust-* keys → namespaced lang-tutor:rust:* ─────────────
 function migrateOldStorage(): void {
   const oldHistory = storageGet<Message[]>('rust-history');
@@ -898,6 +956,7 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>('.lang-tab')) {
 }
 
 initResize();
+initAsideResize();
 
 // ── Init ──────────────────────────────────────────────────────────────────
 applyStoredTheme();

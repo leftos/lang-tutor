@@ -459,12 +459,22 @@
 }
 
 .aside {
-  width: 38%;
-  min-width: 360px;
+  flex: 0 0 38%;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--rule);
   min-height: 0;
+}
+
+.aside-resize {
+  flex: 0 0 5px;
+  cursor: ew-resize;
+  background: var(--rule);
+  transition: background 120ms ease;
+}
+.aside-resize:hover,
+.aside-resize.dragging {
+  background: var(--sig);
 }
 
 /* ─── Aside tabs ─────────────────────────────────────────── */
