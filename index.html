@@ -124,6 +124,24 @@
           <div class="proj-tabs" id="projTabs" role="tablist"></div>
           <div class="proj-editor" id="projEditor"></div>
           <div class="proj-status" id="projStatus"></div>
+          <div id="projPreviewResize" class="proj-preview-resize" role="separator" aria-orientation="horizontal" aria-label="Resize preview pane"></div>
+          <div class="proj-preview" id="projPreview" style="flex: 0 0 280px">
+            <div class="proj-preview-header">
+              <div class="proj-preview-tabs" id="projPreviewTabs" role="tablist"></div>
+              <span class="proj-preview-status" id="projPreviewStatus">stopped</span>
+              <button type="button" id="projReloadBtn" class="proj-preview-icon-btn" title="Reload preview" disabled>
+                <i class="ti ti-refresh" aria-hidden="true"></i>
+              </button>
+              <button type="button" id="projOpenExternalBtn" class="proj-preview-icon-btn" title="Open preview in new tab" disabled>
+                <i class="ti ti-external-link" aria-hidden="true"></i>
+              </button>
+              <button type="button" id="projRunBtn" class="proj-preview-run-btn">
+                <i class="ti ti-player-play-filled" aria-hidden="true"></i>
+                <span id="projRunLabel">Run</span>
+              </button>
+            </div>
+            <div class="proj-preview-body" id="projPreviewBody"></div>
+          </div>
         </section>
       </div>
     </main>

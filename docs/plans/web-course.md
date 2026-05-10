@@ -214,11 +214,13 @@ Foundation. Nothing user-visible yet beyond the new dropdown option showing a "s
 
 ### M4 — Preview pane & dev loop
 
-- [ ] Replace single `<pre id="outputPre">` with a tabbed view for `kind === 'project'`: **Preview** | **Server logs** | **Build errors**. Existing pre stays for `kind === 'single'`.
-- [ ] Preview tab: `<iframe>` loaded with `http://localhost:5180/`. Reload button. Address bar showing the current iframe URL (read-only, since user navigation in the iframe should be reflected).
-- [ ] Server logs tab: SSE-driven append-only console. Color-code stderr.
-- [ ] Build errors tab: parse Vite error overlay payload (or just dump stderr lines matching `^✘\b` / `error:`); blank when there are none.
-- [ ] Run/Stop button at the top of the project area calls `/proj/start` / `/proj/stop`. Status pill shows "running on :5180" / "stopped".
+- [x] Tabbed preview pane below the editor: **Preview** | **Server logs** | **Build errors** (count badge when populated). Single-buffer `<pre id="outputPre">` stays for `kind === 'single'`.
+- [x] Preview tab: sandboxed `<iframe>` loaded with `http://127.0.0.1:5180/`. Reload + open-in-new-tab buttons.
+- [x] Server logs tab: SSE-driven append-only console. stderr → red, system → italic muted.
+- [x] Build errors tab: stderr lines + lines matching `/\bERROR\b/i`, `/^✘/`, `/\bFAILED\b/`, `/Error:/` (lightweight pattern-based heuristic).
+- [x] Run/Stop button calls `/proj/start` / `/proj/stop`. Status pill shows "running on :5180" / "starting" / "stopped" / error. Auto-reconciles via `getStatus` poll if the dev server dies on its own.
+- [x] Resizable preview height (drag bar between editor and preview, double-click to reset). Persisted in localStorage.
+- [x] Windows fix: `spawn(.cmd, …)` requires `shell: true` since Node 20 (CVE-2024-27980). Args are hardcoded constants so no injection risk.
 
 ### M5 — Evaluate flow for projects
 

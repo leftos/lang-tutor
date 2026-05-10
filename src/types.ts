@@ -56,6 +56,8 @@ export interface ProjectLanguage {
   readonly id: LanguageId;
   readonly name: string;
   readonly scaffoldDir: string;
+  /** Port the dev server binds to. Mirrors PORTS in tools/projects.mjs. */
+  readonly defaultVitePort: number;
   readonly topics: readonly Topic[];
   readonly systemPromptIntro: string;
   readonly firstSessionPrompt: string;

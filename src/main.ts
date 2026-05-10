@@ -27,6 +27,7 @@ import {
   subscribeFsEvents,
 } from './projectApi';
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
+import { createProjectPreview, type ProjectPreview } from './projectPreview';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { storageDelete, storageGet, storageSet } from './storage';
@@ -520,6 +521,11 @@ function setWorkshopMode(mode: 'single' | 'project'): void {
 // ── Lazy project UI (created on first web activation, kept across switches) ─
 let projectEditorInstance: ProjectEditor | null = null;
 let projectFileTree: FileTreeHandle | null = null;
+// Held so M5 can query the iframe for DOM snapshots; not used yet.
+let projectPreviewInstance: ProjectPreview | null = null;
+export function _getProjectPreview(): ProjectPreview | null {
+  return projectPreviewInstance;
+}
 
 async function refreshTree(id: LanguageId): Promise<void> {
   try {
@@ -649,6 +655,74 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
   // The EventSource auto-reconnects on disconnect; we never tear this down
   // for the life of the page (the workspace is the only owner).
   subscribeFsEvents(id, (event) => handleFsEvent(id, event));
+
+  if (lang.kind === 'project') {
+    projectPreviewInstance = createProjectPreview({
+      lang: id,
+      defaultPort: lang.defaultVitePort,
+      tabsHost: el('projPreviewTabs'),
+      bodyHost: el('projPreviewBody'),
+      statusEl: el('projPreviewStatus'),
+      runBtn: el<HTMLButtonElement>('projRunBtn'),
+      runLabelEl: el('projRunLabel'),
+      reloadBtn: el<HTMLButtonElement>('projReloadBtn'),
+      externalBtn: el<HTMLButtonElement>('projOpenExternalBtn'),
+    });
+    initProjectPreviewResize();
+  }
+}
+
+const PROJ_PREVIEW_HEIGHT_KEY = 'lang-tutor:proj-preview-height';
+const PROJ_PREVIEW_MIN = 80;
+
+function clampPreviewHeight(height: number, max: number): number {
+  return Math.max(PROJ_PREVIEW_MIN, Math.min(height, max));
+}
+
+function initProjectPreviewResize(): void {
+  const bar = el('projPreviewResize');
+  const pane = el('projPreview');
+
+  const stored = storageGet<number>(PROJ_PREVIEW_HEIGHT_KEY);
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    pane.style.flex = `0 0 ${stored}px`;
+  }
+
+  let startY = 0;
+  let startH = 0;
+
+  function onMove(e: MouseEvent): void {
+    const editorPane = pane.parentElement;
+    if (editorPane === null) return;
+    const max = editorPane.getBoundingClientRect().height - 120;
+    const next = clampPreviewHeight(startH - (e.clientY - startY), max);
+    pane.style.flex = `0 0 ${next}px`;
+  }
+
+  function onUp(): void {
+    bar.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    storageSet(PROJ_PREVIEW_HEIGHT_KEY, pane.getBoundingClientRect().height);
+  }
+
+  bar.addEventListener('mousedown', (e: MouseEvent) => {
+    startY = e.clientY;
+    startH = pane.getBoundingClientRect().height;
+    bar.classList.add('dragging');
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  });
+
+  bar.addEventListener('dblclick', () => {
+    pane.style.flex = '';
+    storageDelete(PROJ_PREVIEW_HEIGHT_KEY);
+  });
 }
 
 // ── Project state hydration ──────────────────────────────────────────────

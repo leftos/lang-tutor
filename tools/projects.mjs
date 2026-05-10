@@ -351,7 +351,10 @@ function spawnLogged(state, cmd, args, cwd, phaseTag) {
   pushLog(state, 'system', `$ ${cmd} ${args.join(' ')}  (in ${cwd})`);
   let proc;
   try {
-    proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+    // Node 20+ on Windows refuses to spawn .cmd/.bat files without shell:true
+    // (CVE-2024-27980). Args here are hardcoded constants ('install', 'dev'),
+    // and cwd is a validated absolute path — no injection vector.
+    proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
   } catch (e) {
     pushLog(state, 'system', `[${phaseTag}] failed to spawn: ${e.message}`);
     state.phase = 'error';

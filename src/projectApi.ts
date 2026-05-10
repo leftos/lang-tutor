@@ -114,6 +114,12 @@ export interface FsWatchEvent {
   readonly message?: string;
 }
 
+export interface ProjectLogEntry {
+  readonly stream: 'stdout' | 'stderr' | 'system';
+  readonly line: string;
+  readonly ts: number;
+}
+
 /**
  * Open an SSE connection to /fs/watch?lang=… and call onEvent for each event.
  * The connection auto-reconnects on disconnect (EventSource behavior).
@@ -135,6 +141,25 @@ export function subscribeFsEvents(lang: LanguageId, onEvent: (event: FsWatchEven
     // EventSource auto-reconnects; surface the connection state but don't
     // tear down — the SSE client will retry.
     onEvent({ type: 'error', message: 'fs-watch connection error (auto-retrying)' });
+  });
+
+  return () => source.close();
+}
+
+/**
+ * Open an SSE connection to /proj/logs?lang=… and call onEntry for each log line.
+ * The server sends recent buffered logs first, then live log lines as they arrive.
+ */
+export function subscribeProjectLogs(lang: LanguageId, onEntry: (entry: ProjectLogEntry) => void): () => void {
+  const url = `/proj/logs?lang=${encodeURIComponent(lang)}`;
+  const source = new EventSource(url);
+
+  source.addEventListener('message', (e) => {
+    try {
+      onEntry(JSON.parse(e.data) as ProjectLogEntry);
+    } catch {
+      // ignore malformed events
+    }
   });
 
   return () => source.close();
