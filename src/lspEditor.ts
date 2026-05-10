@@ -21,7 +21,19 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view';
-import type { LspClient, LspDiagnostic, LspHover, LspInlayHint, LspPosition, LspRange, LspSeverity, LspSignatureHelp } from './lspClient';
+import type {
+  LspClient,
+  LspCodeAction,
+  LspDiagnostic,
+  LspHover,
+  LspInlayHint,
+  LspPosition,
+  LspRange,
+  LspSeverity,
+  LspSignatureHelp,
+  LspTextEdit,
+  LspWorkspaceEdit,
+} from './lspClient';
 
 // ── Position / range converters (LSP uses UTF-16 offsets, matching JS strings) ─
 
@@ -538,6 +550,209 @@ export function lspInlayHintExtension(getClient: () => LspClient | null, getUri?
         }
       }
     ),
+  ];
+}
+
+// ── Code actions / quickfix ─────────────────────────────────────────────────
+
+/**
+ * Apply a list of LSP `TextEdit`s to a single CodeMirror view. Edits are
+ * sorted in document order (LSP guarantees no overlap but not delivery
+ * order); applied as a single dispatched transaction.
+ */
+function applyTextEditsToView(view: EditorView, edits: readonly LspTextEdit[]): boolean {
+  if (edits.length === 0) return false;
+  const sorted = [...edits].sort((a, b) => {
+    if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
+    return a.range.start.character - b.range.start.character;
+  });
+  const changes = sorted.map((e) => ({
+    from: lspPositionToOffset(view.state, e.range.start),
+    to: lspPositionToOffset(view.state, e.range.end),
+    insert: e.newText,
+  }));
+  view.dispatch({ changes });
+  return true;
+}
+
+/**
+ * Type used by the code-action extension to apply a WorkspaceEdit. The
+ * single-buffer editor passes a closure that knows about its lone view; a
+ * project-workspace caller would pass a closure that routes per-URI to the
+ * appropriate tab. Returns the count of URIs successfully applied to.
+ */
+export type WorkspaceEditApplier = (edit: LspWorkspaceEdit) => number;
+
+/**
+ * Build a `WorkspaceEditApplier` for a single-buffer editor. Edits whose URI
+ * doesn't match the view's `viewUri` are skipped — single-buffer extensions
+ * never have other tabs to write to. Both arguments are getters so the
+ * applier resolves them lazily at call time (the view is typically created
+ * after the extension list).
+ */
+export function buildSingleBufferApplier(getView: () => EditorView | null, getViewUri: () => string | null): WorkspaceEditApplier {
+  return (edit: LspWorkspaceEdit): number => {
+    const view = getView();
+    const viewUri = getViewUri();
+    if (view === null || viewUri === null) return 0;
+    let applied = 0;
+    if (edit.changes !== undefined) {
+      const editsForView = edit.changes[viewUri];
+      if (editsForView !== undefined && applyTextEditsToView(view, editsForView)) applied += 1;
+    }
+    if (edit.documentChanges !== undefined) {
+      for (const dc of edit.documentChanges) {
+        if (dc.textDocument.uri !== viewUri) continue;
+        if (applyTextEditsToView(view, dc.edits)) applied += 1;
+      }
+    }
+    return applied;
+  };
+}
+
+const setCodeActionTooltip = StateEffect.define<Tooltip | null>();
+
+const codeActionField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setCodeActionTooltip)) return e.value;
+    }
+    return value;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+function buildCodeActionTooltip(actions: LspCodeAction[], pos: number, onPick: (action: LspCodeAction) => void): Tooltip | null {
+  if (actions.length === 0) return null;
+  return {
+    pos,
+    above: false,
+    create: () => {
+      const dom = document.createElement('div');
+      dom.className = 'cm-tooltip-cursor lsp-code-actions';
+      dom.style.padding = '4px 0';
+      dom.style.maxWidth = '60ch';
+      dom.style.fontFamily = 'var(--font-body)';
+      dom.style.fontSize = '12px';
+      dom.style.minWidth = '24ch';
+
+      const list = document.createElement('ul');
+      list.style.listStyle = 'none';
+      list.style.margin = '0';
+      list.style.padding = '0';
+
+      for (const action of actions) {
+        const item = document.createElement('li');
+        item.style.padding = '4px 9px';
+        item.style.cursor = 'pointer';
+        item.style.borderLeft = action.isPreferred === true ? '2px solid var(--sig)' : '2px solid transparent';
+        item.style.userSelect = 'none';
+        item.textContent = action.title;
+        if (action.kind !== undefined && action.kind.length > 0) {
+          const tag = document.createElement('span');
+          tag.style.marginLeft = '8px';
+          tag.style.opacity = '0.5';
+          tag.style.fontSize = '10px';
+          tag.textContent = action.kind;
+          item.appendChild(tag);
+        }
+        item.addEventListener('mouseenter', () => {
+          item.style.backgroundColor = 'var(--sig-soft)';
+        });
+        item.addEventListener('mouseleave', () => {
+          item.style.backgroundColor = '';
+        });
+        item.addEventListener('mousedown', (ev) => {
+          ev.preventDefault();
+          onPick(action);
+        });
+        list.appendChild(item);
+      }
+      dom.appendChild(list);
+      return { dom };
+    },
+  };
+}
+
+/**
+ * CodeMirror extension that fetches `textDocument/codeAction` on Mod-. and
+ * shows a popup of available actions. Clicking an action resolves it (if the
+ * server lazy-defers `edit`/`command`) and applies the resulting WorkspaceEdit
+ * via the supplied `applyEdit` closure. Escape dismisses.
+ *
+ * `getDiagnostics` returns the LSP diagnostics overlapping the current cursor
+ * range — passed as `context.diagnostics` so the server scopes the action set
+ * to the issue at hand instead of returning every refactor it can think of.
+ *
+ * Pass `getUri` for project workspaces; single-buffer falls back to the
+ * client's `mainFileUri`.
+ */
+export function lspCodeActionExtension(
+  getClient: () => LspClient | null,
+  getDiagnostics: () => LspDiagnostic[],
+  applyEdit: WorkspaceEditApplier,
+  getUri?: () => string | null
+) {
+  const trigger = async (view: EditorView): Promise<boolean> => {
+    const client = getClient();
+    if (client === null || !client.isOpen()) return false;
+    const cap = client.capabilities.codeActionProvider;
+    if (cap === undefined || cap === false) return false;
+
+    const sel = view.state.selection.main;
+    const range: LspRange = {
+      start: offsetToLspPosition(view.state, Math.min(sel.from, sel.to)),
+      end: offsetToLspPosition(view.state, Math.max(sel.from, sel.to)),
+    };
+
+    // Filter diagnostics to the ones whose range overlaps the cursor's line.
+    const cursorLine = range.start.line;
+    const relevantDiags = getDiagnostics().filter((d) => d.range.start.line <= cursorLine && d.range.end.line >= cursorLine);
+
+    const uri = getUri?.() ?? null;
+    const actions = uri !== null ? await client.codeActionUri(uri, range, relevantDiags) : await client.codeAction(range, relevantDiags);
+    if (actions === null || actions.length === 0) {
+      view.dispatch({ effects: setCodeActionTooltip.of(null) });
+      return true;
+    }
+
+    const onPick = async (action: LspCodeAction): Promise<void> => {
+      view.dispatch({ effects: setCodeActionTooltip.of(null) });
+      const resolved = await client.resolveCodeAction(action);
+      if (resolved === null) return;
+      if (resolved.edit !== undefined) {
+        applyEdit(resolved.edit);
+      }
+      // We deliberately do NOT execute server commands — that opens a
+      // separate workspace/executeCommand flow with arbitrary side-effects.
+      // For now, action.edit is sufficient for the common quickfix surface.
+    };
+
+    const tooltip = buildCodeActionTooltip(actions, sel.from, (a) => void onPick(a));
+    view.dispatch({ effects: setCodeActionTooltip.of(tooltip) });
+    return true;
+  };
+
+  return [
+    codeActionField,
+    keymap.of([
+      {
+        key: 'Mod-.',
+        run: (view) => {
+          void trigger(view);
+          return true;
+        },
+      },
+      {
+        key: 'Escape',
+        run: (view) => {
+          if (view.state.field(codeActionField, false) === null) return false;
+          view.dispatch({ effects: setCodeActionTooltip.of(null) });
+          return true;
+        },
+      },
+    ]),
   ];
 }
 

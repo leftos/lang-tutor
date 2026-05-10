@@ -33,6 +33,8 @@ import { fetchDiagnostics, fetchFormatted } from './lint';
 import { connectLsp, type LspClient } from './lspClient';
 import {
   applyLspDiagnostics,
+  buildSingleBufferApplier,
+  lspCodeActionExtension,
   lspCompletionExtension,
   lspDocSyncExtension,
   lspHoverExtension,
@@ -163,6 +165,16 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     lspHoverExtension(getLspClient),
     lspSignatureHelpExtension(getLspClient),
     lspInlayHintExtension(getLspClient),
+    lspCodeActionExtension(
+      getLspClient,
+      () => lspClient?.getDiagnostics() ?? [],
+      // The view ref is closed-over below; lazy getter so the applier can
+      // be built before the view exists.
+      buildSingleBufferApplier(
+        () => view,
+        () => lspClient?.mainFileUri ?? null
+      )
+    ),
     lspDocSyncExtension(getLspClient),
   ];
 

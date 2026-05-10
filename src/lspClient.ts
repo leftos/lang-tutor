@@ -122,6 +122,31 @@ export interface LspInlayHint {
   paddingRight?: boolean;
 }
 
+/** LSP CodeAction (server returns either a Command or a CodeAction; we treat them uniformly). */
+export interface LspCodeAction {
+  title: string;
+  /** quickfix | refactor | refactor.extract | source.organizeImports | etc. */
+  kind?: string;
+  /** Diagnostics this action addresses. */
+  diagnostics?: LspDiagnostic[];
+  /** Inline edit to apply. Either edit OR command may be present (or both). */
+  edit?: LspWorkspaceEdit;
+  /** Server-side command to execute (post-resolve). */
+  command?: { title: string; command: string; arguments?: unknown[] };
+  /** Opaque token the server expects back on codeAction/resolve. */
+  data?: unknown;
+  /** True when the server wants the user's preferred fix highlighted. */
+  isPreferred?: boolean;
+}
+
+export interface LspWorkspaceEdit {
+  changes?: Record<string, LspTextEdit[]>;
+  documentChanges?: Array<{
+    textDocument: { uri: string; version?: number | null };
+    edits: LspTextEdit[];
+  }>;
+}
+
 export interface LspServerCapabilities {
   textDocumentSync?: number | { openClose?: boolean; change?: number };
   hoverProvider?: boolean | object;
@@ -130,6 +155,7 @@ export interface LspServerCapabilities {
   documentFormattingProvider?: boolean | object;
   inlayHintProvider?: boolean | { resolveProvider?: boolean };
   documentSymbolProvider?: boolean | object;
+  codeActionProvider?: boolean | { codeActionKinds?: string[]; resolveProvider?: boolean };
   [key: string]: unknown;
 }
 
@@ -212,6 +238,9 @@ export interface LspClient {
   documentSymbol(): Promise<LspDocumentSymbol[] | null>;
   documentSymbolUri(uri: string): Promise<LspDocumentSymbol[] | null>;
   formattingUri(uri: string): Promise<LspTextEdit[] | null>;
+  codeAction(range: LspRange, diagnostics: readonly LspDiagnostic[]): Promise<LspCodeAction[] | null>;
+  codeActionUri(uri: string, range: LspRange, diagnostics: readonly LspDiagnostic[]): Promise<LspCodeAction[] | null>;
+  resolveCodeAction(action: LspCodeAction): Promise<LspCodeAction | null>;
   /** Broadcast a workspace/didChangeWatchedFiles notification to every server in the bundle. */
   notifyWatchedFilesChanged(uris: readonly string[], type?: 1 | 2 | 3): void;
   getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]>;
@@ -817,6 +846,82 @@ class LspClientImpl implements LspClient {
     });
   }
 
+  codeAction(range: LspRange, diagnostics: readonly LspDiagnostic[]): Promise<LspCodeAction[] | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.codeActionUri(this.mainFileUri, range, diagnostics);
+  }
+
+  /**
+   * Fetch code actions for the given range. The bundle queries every server
+   * whose `acceptsLanguageIds` covers the URI's tracked langId AND whose
+   * capabilities advertise `codeActionProvider`. Results are concatenated so
+   * actions from tsserver + biome (overlapping for `.ts`) both surface.
+   *
+   * Returned actions may be unresolved (have `data` but no `edit`); callers
+   * pass them to `resolveCodeAction` before applying.
+   */
+  async codeActionUri(uri: string, range: LspRange, diagnostics: readonly LspDiagnostic[]): Promise<LspCodeAction[] | null> {
+    const langId = this.uriLangIds.get(normalizeUri(uri)) ?? this.languageId;
+    const targets = this.servers.filter(
+      (s) => s.isOpen() && s.accepts(langId) && s.capabilities.codeActionProvider !== undefined && s.capabilities.codeActionProvider !== false
+    );
+    if (targets.length === 0) return null;
+
+    const params = {
+      textDocument: { uri },
+      range,
+      context: { diagnostics: [...diagnostics], triggerKind: 1 /* Invoked */ },
+    };
+    const all: LspCodeAction[] = [];
+    for (const t of targets) {
+      const result = await t.sendRequest<Array<LspCodeAction | { title: string; command: string; arguments?: unknown[] }>>(
+        'textDocument/codeAction',
+        params
+      );
+      if (result === null) continue;
+      for (const item of result) {
+        if (item === null || typeof item !== 'object') continue;
+        // Server may send either CodeAction or Command; normalize Command into a CodeAction with no edit.
+        if ('command' in item && typeof (item as { command: unknown }).command === 'string') {
+          const cmd = item as { title: string; command: string; arguments?: unknown[] };
+          const wrapped: LspCodeAction = {
+            title: cmd.title,
+            command:
+              cmd.arguments !== undefined
+                ? { title: cmd.title, command: cmd.command, arguments: cmd.arguments }
+                : { title: cmd.title, command: cmd.command },
+          };
+          all.push(wrapped);
+          continue;
+        }
+        all.push(item as LspCodeAction);
+      }
+    }
+    return all;
+  }
+
+  /**
+   * Resolve a code action whose `edit`/`command` was lazily deferred. Servers
+   * that advertise `codeActionProvider.resolveProvider: true` ship just the
+   * title + data initially and fill in the edit on resolve. Returns the
+   * fully-populated action, or the original if no resolve was needed.
+   */
+  async resolveCodeAction(action: LspCodeAction): Promise<LspCodeAction | null> {
+    // Already resolved or simple Command — nothing to do.
+    if (action.edit !== undefined || (action.command !== undefined && action.data === undefined)) return action;
+    // Find any server that advertises resolveProvider; we don't know which
+    // server produced the action, so fan out — first non-null wins.
+    for (const s of this.servers) {
+      if (!s.isOpen()) continue;
+      const cap = s.capabilities.codeActionProvider;
+      if (cap === undefined || cap === false || cap === true) continue;
+      if (cap.resolveProvider !== true) continue;
+      const resolved = await s.sendRequest<LspCodeAction>('codeAction/resolve', action);
+      if (resolved !== null) return resolved;
+    }
+    return action;
+  }
+
   getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]> {
     // Build a fresh merged map per call. Cheap (only invoked when assembling
     // [LSP] block at evaluate time + on tab switch).
@@ -893,6 +998,17 @@ function clientCapabilities() {
       formatting: { dynamicRegistration: false },
       inlayHint: { dynamicRegistration: false, resolveSupport: { properties: [] } },
       documentSymbol: { dynamicRegistration: false, hierarchicalDocumentSymbolSupport: true },
+      codeAction: {
+        dynamicRegistration: false,
+        codeActionLiteralSupport: {
+          codeActionKind: {
+            valueSet: ['', 'quickfix', 'refactor', 'refactor.extract', 'refactor.inline', 'refactor.rewrite', 'source', 'source.organizeImports'],
+          },
+        },
+        isPreferredSupport: true,
+        dataSupport: true,
+        resolveSupport: { properties: ['edit', 'command'] },
+      },
     },
     workspace: { workspaceFolders: true },
     general: { positionEncodings: ['utf-16'] },
