@@ -31,7 +31,14 @@ import { csharp } from '@replit/codemirror-lang-csharp';
 
 import { fetchDiagnostics, fetchFormatted } from './lint';
 import { connectLsp, type LspClient } from './lspClient';
-import { applyLspDiagnostics, lspCompletionExtension, lspDocSyncExtension, lspHoverExtension, lspPositionToOffset } from './lspEditor';
+import {
+  applyLspDiagnostics,
+  lspCompletionExtension,
+  lspDocSyncExtension,
+  lspHoverExtension,
+  lspPositionToOffset,
+  lspSignatureHelpExtension,
+} from './lspEditor';
 import type { SingleBufferLanguageId } from './types';
 
 const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
@@ -148,7 +155,12 @@ export function createEditor(opts: EditorOptions): TutorEditor {
   let lspGeneration = 0;
   const getLspClient = (): LspClient | null => lspClient;
 
-  const lspExtensionsActive = [lspCompletionExtension(getLspClient), lspHoverExtension(getLspClient), lspDocSyncExtension(getLspClient)];
+  const lspExtensionsActive = [
+    lspCompletionExtension(getLspClient),
+    lspHoverExtension(getLspClient),
+    lspSignatureHelpExtension(getLspClient),
+    lspDocSyncExtension(getLspClient),
+  ];
 
   /**
    * Try to apply an LSP TextEdit to the current view. Returns true if any edit

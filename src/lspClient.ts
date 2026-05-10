@@ -157,6 +157,7 @@ export interface LspClient {
   didCloseUri(uri: string): void;
   hoverUri(uri: string, line: number, character: number): Promise<LspHover | null>;
   completionUri(uri: string, line: number, character: number, triggerCharacter?: string): Promise<LspCompletionList | null>;
+  signatureHelpUri(uri: string, line: number, character: number): Promise<LspSignatureHelp | null>;
   formattingUri(uri: string): Promise<LspTextEdit[] | null>;
   getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]>;
   onAnyDiagnostics(cb: AnyDiagnosticsListener): () => void;
@@ -348,17 +349,9 @@ class LspClientImpl implements LspClient {
     return this.completionUri(this.mainFileUri, line, character, triggerCharacter);
   }
 
-  async signatureHelp(line: number, character: number): Promise<LspSignatureHelp | null> {
-    if (this.mainFileUri === null) return null;
-    if (!this.isOpen() || this.capabilities.signatureHelpProvider === undefined) return null;
-    try {
-      return (await this.request('textDocument/signatureHelp', {
-        textDocument: { uri: this.mainFileUri },
-        position: { line, character },
-      })) as LspSignatureHelp | null;
-    } catch {
-      return null;
-    }
+  signatureHelp(line: number, character: number): Promise<LspSignatureHelp | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.signatureHelpUri(this.mainFileUri, line, character);
   }
 
   formatting(): Promise<LspTextEdit[] | null> {
@@ -440,6 +433,18 @@ class LspClientImpl implements LspClient {
       if (result === null) return null;
       if (Array.isArray(result)) return { isIncomplete: false, items: result };
       return result;
+    } catch {
+      return null;
+    }
+  }
+
+  async signatureHelpUri(uri: string, line: number, character: number): Promise<LspSignatureHelp | null> {
+    if (!this.isOpen() || this.capabilities.signatureHelpProvider === undefined) return null;
+    try {
+      return (await this.request('textDocument/signatureHelp', {
+        textDocument: { uri },
+        position: { line, character },
+      })) as LspSignatureHelp | null;
     } catch {
       return null;
     }

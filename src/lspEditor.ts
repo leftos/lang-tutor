@@ -8,9 +8,9 @@
 
 import { autocompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { type Diagnostic, setDiagnostics } from '@codemirror/lint';
-import type { EditorState } from '@codemirror/state';
-import { EditorView, hoverTooltip, type Tooltip, ViewPlugin, type ViewUpdate } from '@codemirror/view';
-import type { LspClient, LspDiagnostic, LspHover, LspPosition, LspSeverity } from './lspClient';
+import { type EditorState, StateEffect, StateField } from '@codemirror/state';
+import { EditorView, hoverTooltip, keymap, showTooltip, type Tooltip, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import type { LspClient, LspDiagnostic, LspHover, LspPosition, LspSeverity, LspSignatureHelp } from './lspClient';
 
 // ── Position / range converters (LSP uses UTF-16 offsets, matching JS strings) ─
 
@@ -66,7 +66,8 @@ export function applyLspDiagnostics(view: EditorView, diagnostics: LspDiagnostic
 
 // ── Hover ───────────────────────────────────────────────────────────────────
 
-function renderHoverContents(contents: LspHover['contents']): string {
+function renderHoverContents(contents: LspHover['contents'] | { kind: string; value: string } | undefined): string {
+  if (contents === undefined) return '';
   if (typeof contents === 'string') return contents;
   if (Array.isArray(contents)) {
     return contents.map((c) => (typeof c === 'string' ? c : c.value)).join('\n\n');
@@ -191,6 +192,181 @@ export function lspDocSyncExtension(getClient: () => LspClient | null) {
       }
     }
   );
+}
+
+// ── Signature help ──────────────────────────────────────────────────────────
+
+const setSignatureHelpTooltip = StateEffect.define<Tooltip | null>();
+
+const signatureHelpField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setSignatureHelpTooltip)) return e.value;
+    }
+    return value;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+function buildSignatureTooltip(sig: LspSignatureHelp, pos: number): Tooltip | null {
+  if (sig.signatures.length === 0) return null;
+  const idx = Math.max(0, Math.min(sig.activeSignature ?? 0, sig.signatures.length - 1));
+  const active = sig.signatures[idx];
+  if (active === undefined) return null;
+  const activeParam = active.activeParameter ?? sig.activeParameter ?? 0;
+
+  return {
+    pos,
+    above: true,
+    create: () => {
+      const dom = document.createElement('div');
+      dom.className = 'cm-tooltip-cursor lsp-sig-help';
+      dom.style.padding = '6px 9px';
+      dom.style.maxWidth = '80ch';
+      dom.style.whiteSpace = 'pre-wrap';
+      dom.style.fontFamily = 'var(--font-mono)';
+      dom.style.fontSize = '12px';
+
+      const sigLine = document.createElement('div');
+      const label = active.label;
+      const params = active.parameters ?? [];
+      const ap = params[activeParam];
+      let highlighted = false;
+      if (ap !== undefined) {
+        if (Array.isArray(ap.label)) {
+          const [s, e] = ap.label;
+          if (s >= 0 && e <= label.length && s < e) {
+            sigLine.appendChild(document.createTextNode(label.slice(0, s)));
+            const strong = document.createElement('strong');
+            strong.textContent = label.slice(s, e);
+            sigLine.appendChild(strong);
+            sigLine.appendChild(document.createTextNode(label.slice(e)));
+            highlighted = true;
+          }
+        } else if (typeof ap.label === 'string' && ap.label.length > 0) {
+          const at = label.indexOf(ap.label);
+          if (at >= 0) {
+            sigLine.appendChild(document.createTextNode(label.slice(0, at)));
+            const strong = document.createElement('strong');
+            strong.textContent = ap.label;
+            sigLine.appendChild(strong);
+            sigLine.appendChild(document.createTextNode(label.slice(at + ap.label.length)));
+            highlighted = true;
+          }
+        }
+      }
+      if (!highlighted) sigLine.textContent = label;
+      dom.appendChild(sigLine);
+
+      // Doc for the active parameter, then for the signature as a whole.
+      const docs: string[] = [];
+      if (ap !== undefined) {
+        const pdoc = renderHoverContents(ap.documentation).trim();
+        if (pdoc.length > 0) docs.push(pdoc);
+      }
+      const sdoc = renderHoverContents(active.documentation).trim();
+      if (sdoc.length > 0) docs.push(sdoc);
+      if (docs.length > 0) {
+        const docDiv = document.createElement('div');
+        docDiv.className = 'lsp-sig-help-doc';
+        docDiv.style.marginTop = '4px';
+        docDiv.style.color = 'var(--ink-mute)';
+        docDiv.style.whiteSpace = 'pre-wrap';
+        docDiv.textContent = docs.join('\n\n');
+        dom.appendChild(docDiv);
+      }
+
+      // Signature counter when the server returned multiple overloads.
+      if (sig.signatures.length > 1) {
+        const counter = document.createElement('div');
+        counter.className = 'lsp-sig-help-counter';
+        counter.style.marginTop = '4px';
+        counter.style.fontSize = '11px';
+        counter.style.color = 'var(--ink-mute)';
+        counter.textContent = `${idx + 1} of ${sig.signatures.length}`;
+        dom.appendChild(counter);
+      }
+
+      return { dom };
+    },
+  };
+}
+
+/**
+ * CodeMirror extension that fetches `textDocument/signatureHelp` from the
+ * given LSP client when the user types a trigger character (default `(`,
+ * `,`) and re-fetches as the cursor moves between arguments. The popup
+ * dismisses automatically when the server reports no signatures.
+ *
+ * For project workspaces, pass an optional `getUri` to query a specific
+ * file's URI; if omitted, falls back to the client's `mainFileUri`
+ * (single-buffer case).
+ */
+export function lspSignatureHelpExtension(getClient: () => LspClient | null, getUri?: () => string | null) {
+  const plugin = ViewPlugin.fromClass(
+    class {
+      private pendingId = 0;
+      constructor(private readonly view: EditorView) {}
+
+      update(update: ViewUpdate): void {
+        if (!update.docChanged && !update.selectionSet) return;
+        const client = getClient();
+        if (client === null || !client.isOpen()) return;
+        const sigCap = client.capabilities.signatureHelpProvider;
+        if (sigCap === undefined) return;
+
+        const triggers = sigCap.triggerCharacters ?? ['(', ','];
+        const retriggers = sigCap.retriggerCharacters ?? [];
+        const tooltipShowing = update.startState.field(signatureHelpField, false) !== null;
+
+        let shouldFetch = false;
+        if (update.docChanged) {
+          // Inspect the last inserted character for trigger / retrigger.
+          let lastChar = '';
+          update.changes.iterChanges((_fa, _ta, _fb, _tb, ins) => {
+            const s = ins.toString();
+            if (s.length > 0) lastChar = s.charAt(s.length - 1);
+          });
+          if (triggers.includes(lastChar) || retriggers.includes(lastChar)) shouldFetch = true;
+          else if (tooltipShowing) shouldFetch = true; // refresh while popup is up; server hides if context lost
+        } else if (update.selectionSet && tooltipShowing) {
+          shouldFetch = true;
+        }
+        if (!shouldFetch) return;
+
+        const id = ++this.pendingId;
+        const pos = update.state.selection.main.head;
+        const lspPos = offsetToLspPosition(update.state, pos);
+        const uri = getUri?.() ?? null;
+        const req = uri !== null ? client.signatureHelpUri(uri, lspPos.line, lspPos.character) : client.signatureHelp(lspPos.line, lspPos.character);
+        void req.then((sig) => {
+          if (id !== this.pendingId) return;
+          if (sig === null) {
+            this.view.dispatch({ effects: setSignatureHelpTooltip.of(null) });
+            return;
+          }
+          const tooltip = buildSignatureTooltip(sig, pos);
+          this.view.dispatch({ effects: setSignatureHelpTooltip.of(tooltip) });
+        });
+      }
+    }
+  );
+
+  // Escape dismisses an open signature help tooltip without affecting the
+  // rest of the editor's escape behaviour (handlers are tried in order).
+  const dismissKeymap = keymap.of([
+    {
+      key: 'Escape',
+      run: (view) => {
+        if (view.state.field(signatureHelpField, false) === null) return false;
+        view.dispatch({ effects: setSignatureHelpTooltip.of(null) });
+        return true;
+      },
+    },
+  ]);
+
+  return [signatureHelpField, plugin, dismissKeymap];
 }
 
 // ── Re-export for editor.ts convenience ─────────────────────────────────────
