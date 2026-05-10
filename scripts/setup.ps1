@@ -221,25 +221,26 @@ if (-not $SkipInstall) {
     }
 
     Write-Step "LLVM (clang + clang-format)"
-    if ((Test-Tool 'clang') -and (Test-Tool 'clang-format')) {
-        Write-Skip "clang $((& clang --version | Select-Object -First 1)) already installed"
-    } else {
-        # Probe well-known install paths first — the LLVM.LLVM winget package
-        # often installs to C:\Program Files\LLVM but doesn't update PATH, so we
-        # may already have it on disk and just need to wire it up.
+    # Probe disk first — if a prior install left LLVM at any known path, just
+    # ensure it's on user PATH (idempotent) and skip the winget install. The
+    # LLVM.LLVM winget package installs to C:\Program Files\LLVM by default
+    # but doesn't update PATH, so the disk probe must run regardless of PATH.
+    $llvmBin = Find-LlvmBin
+    if ($null -eq $llvmBin -and -not (Test-Tool 'clang')) {
+        Install-WingetPackage -Id 'LLVM.LLVM' -DisplayName 'LLVM'
         $llvmBin = Find-LlvmBin
-        if ($null -ne $llvmBin) {
-            Write-Host "    found LLVM at $llvmBin — adding to user PATH..."
-            Add-DirectoryToUserPath -Directory $llvmBin
-        } else {
-            Install-WingetPackage -Id 'LLVM.LLVM' -DisplayName 'LLVM'
-            # winget may have just installed it without updating PATH — probe again.
-            $llvmBin = Find-LlvmBin
-            if ($null -ne $llvmBin -and -not (Test-Tool 'clang')) {
-                Write-Host "    LLVM installed at $llvmBin — adding to user PATH..."
-                Add-DirectoryToUserPath -Directory $llvmBin
-            }
+        if ($null -eq $llvmBin) {
+            # winget reported success but no clang.exe at known paths — almost
+            # always a stale uninstall registry entry from a prior manual install
+            # making winget treat the package as already installed.
+            Write-Warn-Local "winget reported LLVM installed but no clang.exe found at known paths."
+            Write-Warn-Local "This usually means a stale registry entry is shadowing the install. To clean:"
+            Write-Warn-Local "  Remove-Item 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LLVM' -Recurse -Force"
+            Write-Warn-Local "Then re-run this script."
         }
+    }
+    if ($null -ne $llvmBin) {
+        Add-DirectoryToUserPath -Directory $llvmBin
     }
     if (Test-Tool 'clang') {
         Write-Ok "clang $((& clang --version | Select-Object -First 1))"
@@ -329,36 +330,31 @@ $psi.CreateNoWindow = $false
 $proc = New-Object System.Diagnostics.Process
 $proc.StartInfo = $psi
 
-# Forward output to console AND capture to a buffer until we see "Local:".
-$ready = $false
-$serverUrl = $null
-$mutex = New-Object System.Object
-
-$outHandler = {
-    param($sender, $eventArgs)
-    if ($null -eq $eventArgs.Data) { return }
-    $line = $eventArgs.Data
-    Write-Host $line
-    Add-Content -Path $using:logFile -Value $line
-    if (-not $using:ready -and $line -match 'Local:\s+(https?://\S+)') {
-        $script:serverUrl = $Matches[1].TrimEnd('/')
-        $script:ready = $true
-    }
-}
-
-# We can't share state into Register-ObjectEvent's scriptblock easily; poll the log instead.
 $null = $proc.Start()
+
+# Forward stdout/stderr to console AND tee into the log file so the polling
+# loop below can detect the "Local: <url>" line Vite prints when ready.
+# Pass the log path via -MessageData; Register-ObjectEvent scriptblocks run
+# in their own scope and can't capture parent variables ($using: doesn't apply).
+Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived `
+    -SourceIdentifier 'ViteStdout' -MessageData $logFile -Action {
+    $line = $EventArgs.Data
+    if ($null -ne $line) {
+        Write-Host $line
+        try { Add-Content -Path $Event.MessageData -Value $line -ErrorAction Stop } catch { }
+    }
+} | Out-Null
+Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived `
+    -SourceIdentifier 'ViteStderr' -MessageData $logFile -Action {
+    $line = $EventArgs.Data
+    if ($null -ne $line) {
+        Write-Host $line -ForegroundColor DarkGray
+        try { Add-Content -Path $Event.MessageData -Value $line -ErrorAction Stop } catch { }
+    }
+} | Out-Null
+
 $proc.BeginOutputReadLine()
 $proc.BeginErrorReadLine()
-
-Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action {
-    $line = $EventArgs.Data
-    if ($null -ne $line) { Write-Host $line }
-} | Out-Null
-Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action {
-    $line = $EventArgs.Data
-    if ($null -ne $line) { Write-Host $line -ForegroundColor DarkGray }
-} | Out-Null
 
 Write-Host ""
 Write-Host "    waiting for dev server to come up..." -ForegroundColor DarkGray
