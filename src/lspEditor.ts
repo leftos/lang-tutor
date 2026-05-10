@@ -8,9 +8,20 @@
 
 import { autocompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { type Diagnostic, setDiagnostics } from '@codemirror/lint';
-import { type EditorState, StateEffect, StateField } from '@codemirror/state';
-import { EditorView, hoverTooltip, keymap, showTooltip, type Tooltip, ViewPlugin, type ViewUpdate } from '@codemirror/view';
-import type { LspClient, LspDiagnostic, LspHover, LspPosition, LspSeverity, LspSignatureHelp } from './lspClient';
+import { type EditorState, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state';
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  hoverTooltip,
+  keymap,
+  showTooltip,
+  type Tooltip,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType,
+} from '@codemirror/view';
+import type { LspClient, LspDiagnostic, LspHover, LspInlayHint, LspPosition, LspRange, LspSeverity, LspSignatureHelp } from './lspClient';
 
 // ── Position / range converters (LSP uses UTF-16 offsets, matching JS strings) ─
 
@@ -367,6 +378,167 @@ export function lspSignatureHelpExtension(getClient: () => LspClient | null, get
   ]);
 
   return [signatureHelpField, plugin, dismissKeymap];
+}
+
+// ── Inlay hints ─────────────────────────────────────────────────────────────
+
+class InlayHintWidget extends WidgetType {
+  constructor(
+    private readonly text: string,
+    private readonly kind: number | undefined,
+    private readonly tooltip: string | undefined,
+    private readonly paddingLeft: boolean,
+    private readonly paddingRight: boolean
+  ) {
+    super();
+  }
+
+  override eq(other: InlayHintWidget): boolean {
+    return (
+      this.text === other.text &&
+      this.kind === other.kind &&
+      this.tooltip === other.tooltip &&
+      this.paddingLeft === other.paddingLeft &&
+      this.paddingRight === other.paddingRight
+    );
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = `cm-lsp-inlay cm-lsp-inlay-${this.kind === 2 ? 'param' : 'type'}`;
+    span.textContent = (this.paddingLeft ? ' ' : '') + this.text + (this.paddingRight ? ' ' : '');
+    span.style.opacity = '0.7';
+    span.style.fontStyle = 'italic';
+    span.style.color = 'var(--ink-mute)';
+    span.style.fontSize = '11px';
+    if (this.tooltip !== undefined && this.tooltip.length > 0) span.title = this.tooltip;
+    return span;
+  }
+
+  override get estimatedHeight(): number {
+    return -1;
+  }
+
+  override ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+function inlayHintLabelToText(label: LspInlayHint['label']): string {
+  if (typeof label === 'string') return label;
+  return label.map((p) => p.value).join('');
+}
+
+function inlayHintTooltipText(hint: LspInlayHint): string | undefined {
+  if (hint.tooltip !== undefined) {
+    const t = renderHoverContents(hint.tooltip).trim();
+    if (t.length > 0) return t;
+  }
+  if (Array.isArray(hint.label)) {
+    const parts: string[] = [];
+    for (const p of hint.label) {
+      const t = renderHoverContents(p.tooltip).trim();
+      if (t.length > 0) parts.push(t);
+    }
+    if (parts.length > 0) return parts.join('\n\n');
+  }
+  return undefined;
+}
+
+const setInlayHints = StateEffect.define<DecorationSet>();
+
+const inlayHintField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    let next = value.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setInlayHints)) next = e.value;
+    }
+    return next;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+function buildInlayDecorations(state: EditorState, hints: LspInlayHint[]): DecorationSet {
+  // RangeSetBuilder requires entries in ascending `from` order; sort to be safe.
+  const sorted = [...hints].sort((a, b) => {
+    if (a.position.line !== b.position.line) return a.position.line - b.position.line;
+    return a.position.character - b.position.character;
+  });
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const h of sorted) {
+    const offset = lspPositionToOffset(state, h.position);
+    const text = inlayHintLabelToText(h.label).trim();
+    if (text.length === 0) continue;
+    const widget = new InlayHintWidget(text, h.kind, inlayHintTooltipText(h), h.paddingLeft === true, h.paddingRight === true);
+    builder.add(offset, offset, Decoration.widget({ widget, side: 1 }));
+  }
+  return builder.finish();
+}
+
+const INLAY_DEBOUNCE_MS = 300;
+
+/**
+ * CodeMirror extension that requests `textDocument/inlayHint` for the visible
+ * range and renders each hint as an inline widget. Requests are debounced
+ * after viewport / doc changes; in-flight requests are cancelled by an
+ * incrementing generation counter so a slow response can't paint stale hints.
+ *
+ * Pass `getUri` to query a specific URI in project workspaces; otherwise the
+ * single-buffer `mainFileUri` is used.
+ */
+export function lspInlayHintExtension(getClient: () => LspClient | null, getUri?: () => string | null) {
+  return [
+    inlayHintField,
+    ViewPlugin.fromClass(
+      class {
+        private generation = 0;
+        private timer: number | null = null;
+        constructor(private readonly view: EditorView) {
+          this.schedule();
+        }
+
+        update(update: ViewUpdate): void {
+          if (update.docChanged || update.viewportChanged) this.schedule();
+        }
+
+        private schedule(): void {
+          if (this.timer !== null) window.clearTimeout(this.timer);
+          this.timer = window.setTimeout(() => {
+            this.timer = null;
+            void this.fetch();
+          }, INLAY_DEBOUNCE_MS);
+        }
+
+        private async fetch(): Promise<void> {
+          const client = getClient();
+          if (client === null || !client.isOpen()) return;
+          if (client.capabilities.inlayHintProvider === undefined || client.capabilities.inlayHintProvider === false) return;
+
+          const id = ++this.generation;
+          const { from, to } = this.view.viewport;
+          const range: LspRange = {
+            start: offsetToLspPosition(this.view.state, from),
+            end: offsetToLspPosition(this.view.state, to),
+          };
+          const uri = getUri?.() ?? null;
+          const hints = uri !== null ? await client.inlayHintUri(uri, range) : await client.inlayHint(range);
+          if (id !== this.generation) return;
+          if (hints === null || hints.length === 0) {
+            this.view.dispatch({ effects: setInlayHints.of(Decoration.none) });
+            return;
+          }
+          const decos = buildInlayDecorations(this.view.state, hints);
+          this.view.dispatch({ effects: setInlayHints.of(decos) });
+        }
+
+        destroy(): void {
+          if (this.timer !== null) window.clearTimeout(this.timer);
+          this.generation += 1;
+        }
+      }
+    ),
+  ];
 }
 
 // ── Re-export for editor.ts convenience ─────────────────────────────────────

@@ -81,12 +81,30 @@ export interface LspSignatureHelp {
   activeParameter?: number;
 }
 
+/** LSP InlayHintKind: 1 = Type, 2 = Parameter. */
+export type LspInlayHintKind = 1 | 2;
+
+export interface LspInlayHintLabelPart {
+  value: string;
+  tooltip?: string | { kind: string; value: string };
+}
+
+export interface LspInlayHint {
+  position: LspPosition;
+  label: string | LspInlayHintLabelPart[];
+  kind?: LspInlayHintKind;
+  tooltip?: string | { kind: string; value: string };
+  paddingLeft?: boolean;
+  paddingRight?: boolean;
+}
+
 export interface LspServerCapabilities {
   textDocumentSync?: number | { openClose?: boolean; change?: number };
   hoverProvider?: boolean | object;
   completionProvider?: { triggerCharacters?: string[]; resolveProvider?: boolean };
   signatureHelpProvider?: { triggerCharacters?: string[]; retriggerCharacters?: string[] };
   documentFormattingProvider?: boolean | object;
+  inlayHintProvider?: boolean | { resolveProvider?: boolean };
   [key: string]: unknown;
 }
 
@@ -158,6 +176,8 @@ export interface LspClient {
   hoverUri(uri: string, line: number, character: number): Promise<LspHover | null>;
   completionUri(uri: string, line: number, character: number, triggerCharacter?: string): Promise<LspCompletionList | null>;
   signatureHelpUri(uri: string, line: number, character: number): Promise<LspSignatureHelp | null>;
+  inlayHint(range: LspRange): Promise<LspInlayHint[] | null>;
+  inlayHintUri(uri: string, range: LspRange): Promise<LspInlayHint[] | null>;
   formattingUri(uri: string): Promise<LspTextEdit[] | null>;
   getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]>;
   onAnyDiagnostics(cb: AnyDiagnosticsListener): () => void;
@@ -438,6 +458,25 @@ class LspClientImpl implements LspClient {
     }
   }
 
+  inlayHint(range: LspRange): Promise<LspInlayHint[] | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.inlayHintUri(this.mainFileUri, range);
+  }
+
+  async inlayHintUri(uri: string, range: LspRange): Promise<LspInlayHint[] | null> {
+    if (!this.isOpen() || this.capabilities.inlayHintProvider === undefined || this.capabilities.inlayHintProvider === false) {
+      return null;
+    }
+    try {
+      return (await this.request('textDocument/inlayHint', {
+        textDocument: { uri },
+        range,
+      })) as LspInlayHint[] | null;
+    } catch {
+      return null;
+    }
+  }
+
   async signatureHelpUri(uri: string, line: number, character: number): Promise<LspSignatureHelp | null> {
     if (!this.isOpen() || this.capabilities.signatureHelpProvider === undefined) return null;
     try {
@@ -614,6 +653,7 @@ function clientCapabilities() {
         },
       },
       formatting: { dynamicRegistration: false },
+      inlayHint: { dynamicRegistration: false, resolveSupport: { properties: [] } },
     },
     workspace: { workspaceFolders: true },
     general: { positionEncodings: ['utf-16'] },

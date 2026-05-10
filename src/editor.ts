@@ -36,6 +36,7 @@ import {
   lspCompletionExtension,
   lspDocSyncExtension,
   lspHoverExtension,
+  lspInlayHintExtension,
   lspPositionToOffset,
   lspSignatureHelpExtension,
 } from './lspEditor';
@@ -159,6 +160,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     lspCompletionExtension(getLspClient),
     lspHoverExtension(getLspClient),
     lspSignatureHelpExtension(getLspClient),
+    lspInlayHintExtension(getLspClient),
     lspDocSyncExtension(getLspClient),
   ];
 
