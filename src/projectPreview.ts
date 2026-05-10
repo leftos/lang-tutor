@@ -254,7 +254,10 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   }
 
   function urlForPort(): string {
-    return `http://127.0.0.1:${vitePort}/`;
+    // Use the hostname the user is browsing from so this works over LAN
+    // (laptop hitting desktop's IP) as well as locally.
+    const host = window.location.hostname || '127.0.0.1';
+    return `http://${host}:${vitePort}/`;
   }
 
   function setRunningState(isRunning: boolean): void {
