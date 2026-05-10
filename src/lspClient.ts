@@ -212,6 +212,8 @@ export interface LspClient {
   documentSymbol(): Promise<LspDocumentSymbol[] | null>;
   documentSymbolUri(uri: string): Promise<LspDocumentSymbol[] | null>;
   formattingUri(uri: string): Promise<LspTextEdit[] | null>;
+  /** Broadcast a workspace/didChangeWatchedFiles notification to every server in the bundle. */
+  notifyWatchedFilesChanged(uris: readonly string[], type?: 1 | 2 | 3): void;
   getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]>;
   onAnyDiagnostics(cb: AnyDiagnosticsListener): () => void;
 
@@ -455,6 +457,12 @@ class ServerSession {
     } catch {
       return null;
     }
+  }
+
+  /** Generic LSP notification (fire-and-forget; no response). */
+  sendNotification(method: string, params: unknown): void {
+    if (!this.isOpen()) return;
+    this.notify(method, params);
   }
 
   async dispose(): Promise<void> {
@@ -721,6 +729,23 @@ class LspClientImpl implements LspClient {
   didCloseUri(uri: string): void {
     for (const s of this.servers) s.didClose(uri);
     this.uriLangIds.delete(normalizeUri(uri));
+  }
+
+  /**
+   * Broadcast a `workspace/didChangeWatchedFiles` notification to every
+   * server in the bundle. Used after initial tab hydration to nudge servers
+   * with sluggish workspace indexers (OmniSharp's first-load) into picking
+   * up the seeded files. Notification-only — fire-and-forget.
+   *
+   * @param uris  the file URIs that changed
+   * @param type  1 = Created, 2 = Changed (default), 3 = Deleted
+   */
+  notifyWatchedFilesChanged(uris: readonly string[], type: 1 | 2 | 3 = 2): void {
+    if (uris.length === 0) return;
+    const changes = uris.map((uri) => ({ uri, type }));
+    for (const s of this.servers) {
+      s.sendNotification('workspace/didChangeWatchedFiles', { changes });
+    }
   }
 
   hoverUri(uri: string, line: number, character: number): Promise<LspHover | null> {

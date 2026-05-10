@@ -639,6 +639,16 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     setViewToTab(target);
     renderTabs();
     notifyTabs();
+
+    // After all initial tabs are open, broadcast a workspace/didChangeWatchedFiles
+    // notification so servers with sluggish first-load indexers (OmniSharp on
+    // C# cold start, in particular) re-evaluate the seeded files immediately
+    // instead of waiting for their internal timers / MSBuild design-time build
+    // to complete. Fire-and-forget; servers that don't care will ignore it.
+    enqueueLsp((client) => {
+      const uris = openOrder.filter((p) => lspLanguageIdForPath(p) !== null).map((p) => pathToFileUri(client.rootUri, p));
+      client.notifyWatchedFilesChanged(uris, 2 /* Changed */);
+    });
   })();
 
   // Default empty render so the tab strip isn't blank during hydration.
