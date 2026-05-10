@@ -33,11 +33,16 @@ pnpm install                # first time
 pnpm dev                    # Vite dev server (default port 5173) — proxies /v1/messages → Anthropic API
 pnpm build                  # type-check + Vite build to dist/
 pnpm serve                  # node --env-file=.env server.mjs (default port 3000)
+pnpm preview                # vite preview (preview the production build via Vite)
 pnpm typecheck              # tsc --noEmit
 pnpm lint                   # biome check --write .
 ```
 
 Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` before first run. The browser never sees the key — Vite's dev proxy and `server.mjs` both inject it server-side.
+
+**Windows Ctrl+C tip:** `pnpm dev` / `pnpm serve` go through a `.cmd` wrapper, so Ctrl+C triggers the *"Terminate batch job (Y/N)?"* prompt. Use `.\dev.ps1` and `.\serve.ps1` instead — they invoke Node directly so Ctrl+C kills cleanly. Prefer these when iterating.
+
+**Slow-command output:** capture builds, test runs, and Vite/dotnet logs to `.tmp/` (gitignored, project-root) instead of re-running. `cmd 2>&1 | tee .tmp/output.log` then Read/Grep the file.
 
 ## Architecture
 
@@ -84,8 +89,8 @@ Active language is one of `'rust' | 'cpp' | 'python' | 'csharp' | 'web'` (`Langu
 
 - `SingleBufferLanguage` (`kind: 'single'`) — `rust` / `cpp` / `python`. Carries `starterCode`, `fileName`, `fenceLang` (the inline-editor metadata).
 - `ProjectLanguage` (`kind: 'project'`) — `csharp` / `web`. Carries `scaffoldDir` and a `runtime` discriminator:
-  - `WebProjectRuntime` (`{ kind: 'web-vite', port }`) — Vite dev server in an iframe.
-  - `DesktopProjectRuntime` (`{ kind: 'desktop-process' }`) — supervised native process (no HTTP, no iframe).
+  - `WebProjectRuntime` (`{ kind: 'web-vite', port }`) — Vite dev server in an iframe. Web's port is `5180` — the iframe loads `http://127.0.0.1:5180/` and the readiness probe polls the same.
+  - `DesktopProjectRuntime` (`{ kind: 'desktop-process' }`) — supervised native process (no HTTP, no iframe). For C# the WPF window opens on the user's actual desktop.
 
 Both shapes share `topics`, `systemPromptIntro`, `firstSessionPrompt`. The runtime kind drives every per-language UI decision in `projectPreview.ts` (`createWebVitePreview` vs `createDesktopPreview`) and per-language config in `tools/projects.mjs` (`PROJECT_CONFIG[lang]` — install / dev commands, readiness probe, treeIgnore, bootstrap).
 
