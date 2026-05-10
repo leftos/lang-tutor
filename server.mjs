@@ -16,6 +16,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { checkCode, formatCode } from './tools/checker.mjs';
+import { handleProjectRequest } from './tools/project-routes.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -62,6 +63,8 @@ const server = createServer(async (req, res) => {
     res.end();
     return;
   }
+
+  if (await handleProjectRequest(req, res)) return;
 
   if (req.method === 'POST' && (req.url === '/check' || req.url === '/format')) {
     try {

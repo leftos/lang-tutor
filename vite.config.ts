@@ -2,6 +2,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 // @ts-expect-error -- plain JS module with JSDoc types
 import { checkCode, formatCode } from './tools/checker.mjs';
+// @ts-expect-error -- plain JS module
+import { handleProjectRequest } from './tools/project-routes.mjs';
 
 interface CheckBody {
   lang?: 'rust' | 'cpp' | 'python';
@@ -22,6 +24,11 @@ function toolchainPlugin(): Plugin {
   return {
     name: 'lang-tutor-toolchain',
     configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (await handleProjectRequest(req, res)) return;
+        next();
+      });
+
       server.middlewares.use('/check', async (req, res, next) => {
         if (req.method !== 'POST') return next();
         try {

@@ -1,4 +1,4 @@
-export type LanguageId = 'rust' | 'cpp' | 'python';
+export type LanguageId = 'rust' | 'cpp' | 'python' | 'web';
 
 export interface Topic {
   readonly id: string;
@@ -39,7 +39,8 @@ export interface RunResult {
   output: string;
 }
 
-export interface Language {
+export interface SingleBufferLanguage {
+  readonly kind: 'single';
   readonly id: LanguageId;
   readonly name: string;
   readonly fileName: string;
@@ -48,4 +49,22 @@ export interface Language {
   readonly topics: readonly Topic[];
   readonly systemPromptIntro: string;
   readonly firstSessionPrompt: string;
+}
+
+export interface ProjectLanguage {
+  readonly kind: 'project';
+  readonly id: LanguageId;
+  readonly name: string;
+  readonly scaffoldDir: string;
+  readonly topics: readonly Topic[];
+  readonly systemPromptIntro: string;
+  readonly firstSessionPrompt: string;
+}
+
+export type Language = SingleBufferLanguage | ProjectLanguage;
+
+export type SingleBufferLanguageId = Exclude<LanguageId, 'web'>;
+
+export function isSingleBufferLanguage(lang: Language): lang is SingleBufferLanguage {
+  return lang.kind === 'single';
 }

@@ -5,7 +5,8 @@ import { createEditor, type TutorEditor } from './editor';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { storageDelete, storageGet, storageSet } from './storage';
-import type { Language, LanguageId, Message, Progress, TopicStatus } from './types';
+import type { Language, LanguageId, Message, Progress, SingleBufferLanguageId, TopicStatus } from './types';
+import { isSingleBufferLanguage } from './types';
 
 const THEME_KEY = 'lang-tutor:theme';
 
@@ -140,9 +141,7 @@ function renderChapterStrip(): void {
 
   const sessionN = progress.sessionCount ?? 1;
   const last = progress.lastSeen ?? '';
-  meta.textContent = last
-    ? `session ${pad2(sessionN)} · last seen ${last}`
-    : `session ${pad2(sessionN)}`;
+  meta.textContent = last ? `session ${pad2(sessionN)} · last seen ${last}` : `session ${pad2(sessionN)}`;
 }
 
 function renderLanguageRail(): void {
@@ -169,6 +168,7 @@ function renderFileSpec(): void {
     rust: 'edition 2021 · stable',
     cpp: 'gcc · c++23',
     python: 'pyodide · 3.12',
+    web: 'vite · http://localhost:5180',
   };
   spec.textContent = map[lang.id];
 }
@@ -475,6 +475,45 @@ function clearOutput(): void {
   outputPre.appendChild(span('Run the program to capture its output here.', 'muted'));
 }
 
+// ── Single-buffer vs project workshop layout ─────────────────────────────
+const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'codeArea', 'resizeBar', 'outputPre']);
+
+function setWorkshopMode(mode: 'single' | 'project'): void {
+  const isProject = mode === 'project';
+  for (const id of SINGLE_BUFFER_IDS) {
+    el(id).style.display = isProject ? 'none' : '';
+  }
+  // Output eyebrow has no id — toggle by class.
+  const eyebrow = document.querySelector<HTMLElement>('.output-eyebrow');
+  if (eyebrow !== null) eyebrow.style.display = isProject ? 'none' : '';
+
+  let placeholder = document.getElementById('projectPlaceholder');
+  if (isProject) {
+    if (placeholder === null) {
+      placeholder = div('project-placeholder');
+      placeholder.id = 'projectPlaceholder';
+      const heading = document.createElement('h3');
+      heading.textContent = 'Web workshop';
+      placeholder.appendChild(heading);
+      const body = div('project-placeholder-body');
+      body.appendChild(document.createTextNode('Workspace lives on disk under '));
+      const codeEl = document.createElement('code');
+      codeEl.textContent = 'projects/web/';
+      body.appendChild(codeEl);
+      body.appendChild(
+        document.createTextNode('. The chat tutor is wired up; the file tree, multi-tab editor, and live preview will land in upcoming milestones.')
+      );
+      placeholder.appendChild(body);
+      const main = document.querySelector<HTMLElement>('.main');
+      if (main !== null) main.appendChild(placeholder);
+    } else {
+      placeholder.style.display = '';
+    }
+  } else if (placeholder !== null) {
+    placeholder.style.display = 'none';
+  }
+}
+
 // ── Progress extraction ───────────────────────────────────────────────────
 async function extractProgress(): Promise<void> {
   if (extractionQueued) return;
@@ -570,6 +609,9 @@ async function sendMessage(text: string): Promise<void> {
 
 // ── Code panel ────────────────────────────────────────────────────────────
 async function runActiveCode(): Promise<void> {
+  const lang = getLanguage(activeLang);
+  if (!isSingleBufferLanguage(lang)) return;
+
   const code = editor.getContent();
   const runBtn = el<HTMLButtonElement>('runBtn');
   const outputPre = el<HTMLPreElement>('outputPre');
@@ -579,7 +621,7 @@ async function runActiveCode(): Promise<void> {
   outputPre.textContent = '';
 
   const langAtStart = activeLang;
-  const result = await runCode(activeLang, code, (msg) => {
+  const result = await runCode(lang.id as SingleBufferLanguageId, code, (msg) => {
     if (activeLang === langAtStart) outputPre.textContent = msg;
   });
 
@@ -597,6 +639,8 @@ async function runActiveCode(): Promise<void> {
 
 async function evaluateCode(): Promise<void> {
   const lang = getLanguage(activeLang);
+  if (!isSingleBufferLanguage(lang)) return;
+
   const code = editor.getContent().trim();
   const out = el<HTMLPreElement>('outputPre').textContent ?? '';
   const hasOut = out && !out.includes('Run the program') && out !== 'Compiling…' && out !== 'Running…';
@@ -618,7 +662,7 @@ async function resetCurrentLanguage(): Promise<void> {
   if (!confirm(`Reset all ${lang.name} progress and start fresh?`)) return;
   storageDelete(progressKey(activeLang));
   storageDelete(historyKey(activeLang));
-  storageDelete(codeKey(activeLang));
+  if (isSingleBufferLanguage(lang)) storageDelete(codeKey(activeLang));
   location.reload();
 }
 
@@ -633,14 +677,21 @@ function loadLanguageState(id: LanguageId): void {
   const lang = getLanguage(activeLang);
   currentSystemPrompt = buildSystem(progress, lang);
 
-  el('fileLabel').textContent = lang.fileName;
   renderFileSpec();
 
-  const storedCode = storageGet<string>(codeKey(activeLang));
-  editor.setContent(storedCode ?? lang.starterCode);
-  editor.setLanguage(activeLang);
+  if (isSingleBufferLanguage(lang)) {
+    setWorkshopMode('single');
+    el('fileLabel').textContent = lang.fileName;
 
-  clearOutput();
+    const storedCode = storageGet<string>(codeKey(activeLang));
+    editor.setContent(storedCode ?? lang.starterCode);
+    editor.setLanguage(lang.id as SingleBufferLanguageId);
+
+    clearOutput();
+  } else {
+    setWorkshopMode('project');
+  }
+
   renderChatView();
   renderProgressTab();
   renderChapterStrip();
@@ -650,7 +701,10 @@ function loadLanguageState(id: LanguageId): void {
 
 function setLanguage(newLang: LanguageId): void {
   if (newLang === activeLang) return;
-  storageSet(codeKey(activeLang), editor.getContent());
+  const prev = getLanguage(activeLang);
+  if (isSingleBufferLanguage(prev)) {
+    storageSet(codeKey(activeLang), editor.getContent());
+  }
   loadLanguageState(newLang);
 }
 
@@ -714,7 +768,11 @@ function makeDebouncedCodeSaver(): (doc: string) => void {
   return (doc: string) => {
     if (saveTimer !== null) window.clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
-      storageSet(codeKey(activeLang), doc);
+      // Only persist editor content for single-buffer languages — project
+      // languages own their files on disk, not in localStorage.
+      if (isSingleBufferLanguage(getLanguage(activeLang))) {
+        storageSet(codeKey(activeLang), doc);
+      }
     }, 400);
   };
 }
@@ -748,11 +806,16 @@ applyStoredTheme();
 migrateOldStorage();
 const initialLang = loadInitialActiveLang();
 const initialLangObj = getLanguage(initialLang);
-const initialCode = storageGet<string>(codeKey(initialLang)) ?? initialLangObj.starterCode;
+
+// The CodeMirror editor only handles single-buffer languages. If the user's
+// last session was a project language (e.g. 'web'), boot the editor with a
+// fallback single-buffer language; loadLanguageState will hide it anyway.
+const editorBootLang: SingleBufferLanguageId = isSingleBufferLanguage(initialLangObj) ? (initialLangObj.id as SingleBufferLanguageId) : 'rust';
+const editorBootCode = isSingleBufferLanguage(initialLangObj) ? (storageGet<string>(codeKey(initialLang)) ?? initialLangObj.starterCode) : '';
 editor = createEditor({
   parent: el('codeArea'),
-  initialDoc: initialCode,
-  lang: initialLang,
+  initialDoc: editorBootCode,
+  lang: editorBootLang,
   onChange: makeDebouncedCodeSaver(),
 });
 loadLanguageState(initialLang);

@@ -4,10 +4,11 @@ export const CLAUDE_MODEL = 'claude-sonnet-4-6';
 export const ACTIVE_LANG_KEY = 'lang-tutor:active';
 export const MAX_HISTORY = 30;
 
-export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'python'] as const;
+export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'python', 'web'] as const;
 export const DEFAULT_LANGUAGE: LanguageId = 'rust';
 
 const RUST: Language = {
+  kind: 'single',
   id: 'rust',
   name: 'Rust',
   fileName: 'main.rs',
@@ -41,6 +42,7 @@ const RUST: Language = {
 };
 
 const CPP: Language = {
+  kind: 'single',
   id: 'cpp',
   name: 'C++',
   fileName: 'main.cpp',
@@ -80,6 +82,7 @@ int main() {
 };
 
 const PYTHON: Language = {
+  kind: 'single',
   id: 'python',
   name: 'Python',
   fileName: 'main.py',
@@ -114,10 +117,52 @@ const PYTHON: Language = {
     'Then begin with "Pythonic idioms vs C++/C#" — give a short explanation and a first exercise that highlights the contrast.',
 };
 
+const WEB: Language = {
+  kind: 'project',
+  id: 'web',
+  name: 'Web',
+  scaffoldDir: 'web',
+  topics: [
+    { id: 'html-structure', title: 'HTML structure & semantic elements' },
+    { id: 'css-box', title: 'CSS: selectors, specificity, the box model' },
+    { id: 'css-layout', title: 'CSS: flexbox & grid' },
+    { id: 'css-responsive', title: 'Responsive design & media queries' },
+    { id: 'js-basics', title: 'JS in the browser: variables, functions, control flow' },
+    { id: 'js-dom', title: 'DOM manipulation & events' },
+    { id: 'js-fetch', title: 'fetch, async/await, JSON' },
+    { id: 'ts-basics', title: 'TypeScript: types, interfaces, generics' },
+    { id: 'vite', title: 'Vite, ES modules, npm/pnpm' },
+    { id: 'biome', title: 'Biome lint/format' },
+    { id: 'react-jsx', title: 'React: components, JSX, props' },
+    { id: 'react-state', title: 'React: useState, useEffect, derived state' },
+    { id: 'react-forms', title: 'React: forms & controlled inputs' },
+    { id: 'react-compose', title: 'React: composition, lifting state, custom hooks' },
+    { id: 'react-router', title: 'Client-side routing' },
+    { id: 'hono-basics', title: 'Hono: routes, request/response, middleware' },
+    { id: 'hono-validation', title: 'Zod validation' },
+    { id: 'sqlite', title: 'SQLite via better-sqlite3 & migrations' },
+    { id: 'crud', title: 'End-to-end CRUD endpoints' },
+    { id: 'frontend-backend', title: 'Frontend ↔ backend integration patterns' },
+    { id: 'auth', title: 'Sessions, cookies, basic auth' },
+    { id: 'deploy', title: 'Deployment mental model' },
+  ],
+  systemPromptIntro:
+    'You are an expert, friendly full-stack web development teacher. The student is fluent in other languages (Rust, C++, Python) but is new to web development. ' +
+    'The course progresses through phases: vanilla HTML/CSS/JS → TypeScript & tooling → React → Hono backend → SQLite → full-stack glue. ' +
+    'The student works in a multi-file project workspace at projects/web/ with a live dev server on http://localhost:5180. They have a sidebar file tree, multiple tabs, and a preview pane. ' +
+    'Format code examples in fenced blocks with the appropriate language label (`html`, `css`, `js`, `ts`, `tsx`, `json`). Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria — usually "create or edit file X to do Y" so the student practices file-tree navigation along with the concept. ' +
+    "The student has a 'Send to tutor' button that auto-bundles the open files, the rendered DOM, recent browser console output, and recent server logs as a [FILES]/[DOM]/[CONSOLE]/[SERVER] message — when you want them to share their work with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive such a message, evaluate code, rendered output, and runtime behavior together.",
+  firstSessionPrompt:
+    "This is the student's FIRST web-development session. Greet them, briefly explain that the course goes vanilla → TypeScript → React → Hono → SQLite, " +
+    'and ask whether they have any prior HTML/CSS/JS exposure. ' +
+    'Then begin with "HTML structure & semantic elements" — give a short explanation and a first exercise that has them edit index.html.',
+};
+
 export const LANGUAGES: Record<LanguageId, Language> = {
   rust: RUST,
   cpp: CPP,
   python: PYTHON,
+  web: WEB,
 };
 
 export function getLanguage(id: LanguageId): Language {

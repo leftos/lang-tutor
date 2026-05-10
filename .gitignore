@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Web-course workspace (created on demand, owned by the dev/prod server)
+projects/
+
 # Local env (never commit secrets)
 .env
 .env.local

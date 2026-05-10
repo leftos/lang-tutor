@@ -29,9 +29,9 @@ import {
 import { tags as t } from '@lezer/highlight';
 
 import { fetchDiagnostics, fetchFormatted } from './lint';
-import type { LanguageId } from './types';
+import type { SingleBufferLanguageId } from './types';
 
-const langExtension: Record<LanguageId, () => Extension> = {
+const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
   rust: () => rust(),
   cpp: () => cpp(),
   python: () => python(),
@@ -117,14 +117,14 @@ const tutorTheme = EditorView.theme({
 export interface EditorOptions {
   parent: HTMLElement;
   initialDoc: string;
-  lang: LanguageId;
+  lang: SingleBufferLanguageId;
   onChange: (doc: string) => void;
 }
 
 export interface TutorEditor {
   getContent(): string;
   setContent(text: string): void;
-  setLanguage(lang: LanguageId): void;
+  setLanguage(lang: SingleBufferLanguageId): void;
   format(): Promise<void>;
   destroy(): void;
 }
@@ -132,7 +132,7 @@ export interface TutorEditor {
 export function createEditor(opts: EditorOptions): TutorEditor {
   const langCompartment = new Compartment();
   const linterCompartment = new Compartment();
-  let currentLang: LanguageId = opts.lang;
+  let currentLang: SingleBufferLanguageId = opts.lang;
 
   const formatNow = async (): Promise<void> => {
     const code = view.state.doc.toString();
@@ -204,7 +204,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     setContent(text: string): void {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
     },
-    setLanguage(lang: LanguageId): void {
+    setLanguage(lang: SingleBufferLanguageId): void {
       if (lang === currentLang) return;
       currentLang = lang;
       view.dispatch({ effects: langCompartment.reconfigure(langExtension[lang]()) });

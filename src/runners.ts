@@ -1,4 +1,4 @@
-import type { LanguageId, RunResult } from './types';
+import type { RunResult, SingleBufferLanguageId } from './types';
 
 // ── Rust: public Rust Playground ──────────────────────────────────────────
 async function runRust(code: string): Promise<RunResult> {
@@ -102,7 +102,7 @@ async function runPython(code: string, onProgress?: (msg: string) => void): Prom
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────
-export async function runCode(lang: LanguageId, code: string, onProgress?: (msg: string) => void): Promise<RunResult> {
+export async function runCode(lang: SingleBufferLanguageId, code: string, onProgress?: (msg: string) => void): Promise<RunResult> {
   switch (lang) {
     case 'rust':
       return runRust(code);
