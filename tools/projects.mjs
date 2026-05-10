@@ -52,40 +52,39 @@ const BOOTSTRAP_END = '<!-- lang-tutor:bootstrap-end -->';
 
 const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
 <script>
-(function () {
+(() => {
   if (window.__langTutorBootstrap) return;
   window.__langTutorBootstrap = true;
-  var buffer = [];
-  var MAX = 200;
-  ['log', 'warn', 'error', 'info', 'debug'].forEach(function (level) {
-    var orig = console[level].bind(console);
-    console[level] = function () {
+  const buffer = [];
+  const MAX = 200;
+  for (const level of ['log', 'warn', 'error', 'info', 'debug']) {
+    const orig = console[level].bind(console);
+    console[level] = (...args) => {
       try {
-        var args = Array.prototype.slice.call(arguments);
-        var line = args.map(function (a) {
+        const line = args.map((a) => {
           if (typeof a === 'string') return a;
-          try { return JSON.stringify(a); } catch (_) { return String(a); }
+          try { return JSON.stringify(a); } catch { return String(a); }
         }).join(' ');
-        buffer.push({ level: level, line: line, ts: Date.now() });
+        buffer.push({ level, line, ts: Date.now() });
         if (buffer.length > MAX) buffer.shift();
-      } catch (_) {}
-      orig.apply(null, arguments);
+      } catch {}
+      orig(...args);
     };
-  });
-  window.addEventListener('error', function (e) {
-    buffer.push({ level: 'error', line: '[uncaught] ' + (e.message || String(e.error)), ts: Date.now() });
+  }
+  window.addEventListener('error', (e) => {
+    buffer.push({ level: 'error', line: \`[uncaught] \${e.message || String(e.error)}\`, ts: Date.now() });
     if (buffer.length > MAX) buffer.shift();
   });
-  window.addEventListener('message', function (event) {
-    var data = event.data;
+  window.addEventListener('message', (event) => {
+    const data = event.data;
     if (!data || data.type !== 'lang-tutor:snapshot-request') return;
-    var reply = {
+    const reply = {
       type: 'lang-tutor:snapshot-reply',
       requestId: data.requestId,
       dom: document.documentElement.outerHTML,
       consoleBuffer: buffer.slice(),
       url: location.href,
-      title: document.title
+      title: document.title,
     };
     if (event.source && typeof event.source.postMessage === 'function') {
       event.source.postMessage(reply, event.origin || '*');
