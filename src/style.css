@@ -618,6 +618,63 @@
     "SOFT" 30;
 }
 
+.msg-error {
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--danger);
+  padding: 9px 14px;
+  border-left: 2px solid var(--danger);
+  background: var(--danger-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.msg-error-text {
+  flex: 1 1 auto;
+  word-wrap: break-word;
+  min-width: 0;
+}
+.retry-btn {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 1px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.retry-btn:hover {
+  background: var(--danger);
+  color: var(--paper);
+}
+.retry-btn:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.msg-block.is-not-delivered .msg-you {
+  opacity: 0.5;
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-mute);
+}
+.msg-not-delivered {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--danger);
+  font-style: italic;
+  margin-top: 4px;
+}
+
 .code-fence {
   font-family: var(--font-mono);
   font-size: 12px;

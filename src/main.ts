@@ -398,6 +398,52 @@ interface StreamingBubble {
   finalize(): void;
 }
 
+function appendErrorMsg(text: string, onRetry: () => void): void {
+  const msgList = el('msgList');
+  const bl = div('msg-block', 'is-error');
+  const lbl = div('msg-label');
+  lbl.textContent = 'tutor';
+  const body = div('msg-error');
+
+  const errText = div('msg-error-text');
+  errText.textContent = text;
+  body.appendChild(errText);
+
+  const retryBtn = document.createElement('button');
+  retryBtn.type = 'button';
+  retryBtn.className = 'retry-btn';
+  retryBtn.textContent = 'Retry';
+  retryBtn.addEventListener('click', () => {
+    if (isSending) return;
+    bl.remove();
+    onRetry();
+  });
+  body.appendChild(retryBtn);
+
+  bl.appendChild(lbl);
+  bl.appendChild(body);
+  msgList.appendChild(bl);
+  msgList.scrollTop = msgList.scrollHeight;
+}
+
+// If the previous turn failed, the trailing history entry is a user message
+// with no assistant reply. Mark its bubble as not-delivered and remove the
+// trailing error bubble. Caller is responsible for popping history.
+function discardPendingFailure(): void {
+  const msgList = el('msgList');
+  for (const block of msgList.querySelectorAll<HTMLElement>('.msg-block.is-error')) {
+    block.remove();
+  }
+  const blocks = msgList.querySelectorAll<HTMLElement>('.msg-block');
+  const last = blocks[blocks.length - 1];
+  if (last !== undefined && last.querySelector('.msg-you') !== null && !last.classList.contains('is-not-delivered')) {
+    last.classList.add('is-not-delivered');
+    const caption = div('msg-not-delivered');
+    caption.textContent = '(not delivered)';
+    last.appendChild(caption);
+  }
+}
+
 function appendMsgStreaming(): StreamingBubble {
   const msgList = el('msgList');
   const bl = div('msg-block');
@@ -820,54 +866,66 @@ async function extractProgress(): Promise<void> {
 }
 
 // ── Session control ───────────────────────────────────────────────────────
-async function streamReply(): Promise<string> {
+async function streamReply(): Promise<{ ok: boolean; text: string }> {
   const state = { bubble: null as StreamingBubble | null };
-  const reply = await callClaude(history, currentSystemPrompt, (chunk) => {
+  const result = await callClaude(history, currentSystemPrompt, (chunk) => {
     if (state.bubble === null) {
       removeThinking();
       state.bubble = appendMsgStreaming();
     }
     state.bubble.onDelta(chunk);
   });
-  if (state.bubble === null) {
-    removeThinking();
-    appendMsg('assistant', reply);
-  } else {
+
+  if (state.bubble !== null) {
     state.bubble.finalize();
+    return result;
   }
-  return reply;
+
+  removeThinking();
+  if (result.ok) {
+    appendMsg('assistant', result.text);
+  } else {
+    appendErrorMsg(result.text, () => void deliverReply());
+  }
+  return result;
+}
+
+async function deliverReply(): Promise<void> {
+  setSendingState(true);
+  showThinking();
+  const result = await streamReply();
+  if (result.ok) {
+    history.push({ role: 'assistant', content: result.text });
+    storageSet(historyKey(activeLang), history.slice(-MAX_HISTORY));
+  }
+  setSendingState(false);
+  el<HTMLTextAreaElement>('chatInput').focus();
 }
 
 async function startSession(): Promise<void> {
   document.getElementById('startScreen')?.remove();
   el('inputRow').style.display = 'flex';
   el('resetBtn').style.display = 'inline-flex';
-  setSendingState(true);
 
   const lang = getLanguage(activeLang);
   const initMsg = `Hello! I'd like to start a ${lang.name} tutoring session.`;
   history.push({ role: 'user', content: initMsg });
 
-  showThinking();
-  const reply = await streamReply();
-  history.push({ role: 'assistant', content: reply });
-  storageSet(historyKey(activeLang), history.slice(-MAX_HISTORY));
-  setSendingState(false);
-  el<HTMLTextAreaElement>('chatInput').focus();
+  await deliverReply();
 }
 
 async function sendMessage(text: string): Promise<void> {
   if (!text.trim() || isSending) return;
   el<HTMLTextAreaElement>('chatInput').value = '';
+
+  if (history.at(-1)?.role === 'user') {
+    history.pop();
+    discardPendingFailure();
+  }
+
   history.push({ role: 'user', content: text });
   appendMsg('user', text);
-  setSendingState(true);
-  showThinking();
-  const reply = await streamReply();
-  history.push({ role: 'assistant', content: reply });
-  storageSet(historyKey(activeLang), history.slice(-MAX_HISTORY));
-  setSendingState(false);
-  el<HTMLTextAreaElement>('chatInput').focus();
+  await deliverReply();
 }
 
 // ── Code panel ────────────────────────────────────────────────────────────

@@ -51,12 +51,18 @@ interface StreamEvent {
   error?: { message: string };
 }
 
+export interface CallResult {
+  ok: boolean;
+  text: string;
+}
+
 /**
  * Stream a Claude completion. Calls `onDelta` with each text chunk as it arrives,
- * and resolves with the full assembled text when the stream completes.
- * On error, returns a user-facing error string and emits no deltas.
+ * and resolves with `{ ok, text }`. On `ok: false`, `text` is a user-facing error
+ * message and no deltas were emitted. Partial-stream-then-error is treated as a
+ * success: callers see whatever text streamed, and the trailing error is logged.
  */
-export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<string> {
+export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
   let r: Response;
   try {
     r = await fetch('/v1/messages', {
@@ -73,7 +79,7 @@ export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk:
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[api] streaming fetch threw:', e);
-    return `Network error: ${msg}. Is the dev server running and the proxy reachable?`;
+    return { ok: false, text: `Network error: ${msg}. Is the dev server running and the proxy reachable?` };
   }
 
   if (!r.ok) {
@@ -85,12 +91,12 @@ export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk:
     } catch {
       console.error(`[api] Anthropic API error (HTTP ${r.status}), no JSON body.`);
     }
-    return `API error: ${errMsg}`;
+    return { ok: false, text: `API error: ${errMsg}` };
   }
 
   if (r.body === null) {
     console.error('[api] streaming response had no body.');
-    return 'API returned no response body.';
+    return { ok: false, text: 'API returned no response body.' };
   }
 
   const reader = r.body.getReader();
@@ -133,12 +139,12 @@ export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk:
     }
   } catch (e) {
     console.error('[api] stream read error:', e);
-    if (fullText === '') return `Stream error: ${e instanceof Error ? e.message : String(e)}`;
+    if (fullText === '') return { ok: false, text: `Stream error: ${e instanceof Error ? e.message : String(e)}` };
   }
 
-  if (streamError !== null && fullText === '') return `API error: ${streamError}`;
-  if (fullText === '') return 'Stream produced no text. See console for details.';
-  return fullText;
+  if (streamError !== null && fullText === '') return { ok: false, text: `API error: ${streamError}` };
+  if (fullText === '') return { ok: false, text: 'Stream produced no text. See console for details.' };
+  return { ok: true, text: fullText };
 }
 
 export async function fetchProgressExtraction(history: Message[], topics: readonly Topic[]): Promise<Progress | null> {
