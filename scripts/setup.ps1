@@ -192,15 +192,19 @@ if (-not $SkipInstall) {
     }
     Write-Ok "pnpm $((& pnpm --version))"
 
-    Write-Step "Rust (rustc + cargo + rustfmt)"
-    if ((Test-Tool 'rustc') -and (Test-Tool 'rustfmt')) {
+    Write-Step "Rust (rustc + cargo + rustfmt + rust-analyzer)"
+    if ((Test-Tool 'rustc') -and (Test-Tool 'rustfmt') -and (Test-Tool 'rust-analyzer')) {
         Write-Skip "rustc $((& rustc --version)) already installed"
     } else {
-        Install-WingetPackage -Id 'Rustlang.Rustup' -DisplayName 'Rust (rustup)'
-        # rustup ships rustc/cargo/rustfmt in the default toolchain
+        if (-not ((Test-Tool 'rustc') -and (Test-Tool 'rustfmt'))) {
+            Install-WingetPackage -Id 'Rustlang.Rustup' -DisplayName 'Rust (rustup)'
+        }
+        # rustup ships rustc/cargo/rustfmt in the default toolchain.
+        # rust-analyzer is a separate component — install it idempotently for LSP-driven tutoring.
         if (Test-Tool 'rustup') {
             & rustup default stable | Out-Host
             & rustup component add rustfmt | Out-Host
+            & rustup component add rust-analyzer | Out-Host
             Refresh-Path
         }
     }
@@ -208,6 +212,11 @@ if (-not $SkipInstall) {
         Write-Ok "rustc $((& rustc --version))"
     } else {
         Write-Warn-Local "rustc still not on PATH — live Rust checking will be disabled."
+    }
+    if (Test-Tool 'rust-analyzer') {
+        Write-Ok "rust-analyzer $((& rust-analyzer --version))"
+    } else {
+        Write-Warn-Local "rust-analyzer still not on PATH — LSP-based Rust tutoring will be disabled (fall-soft to rustc --error-format=json)."
     }
 
     Write-Step "Python 3.13"
@@ -264,6 +273,22 @@ if (-not $SkipInstall) {
         & $py -m pip install --user --quiet black | Out-Host
         Refresh-Path
         if (Test-Tool 'black') { Write-Ok "black installed" } else { Write-Warn-Local "black not on PATH after install — Python formatting will be disabled." }
+    }
+
+    Write-Step "basedpyright (Python LSP)"
+    if ($null -eq $py) {
+        Write-Warn-Local "Python not found, skipping basedpyright."
+    } elseif (Test-Tool 'basedpyright-langserver') {
+        Write-Skip "basedpyright already installed"
+    } else {
+        Write-Host "    pip install --user basedpyright ..."
+        & $py -m pip install --user --quiet basedpyright | Out-Host
+        Refresh-Path
+        if (Test-Tool 'basedpyright-langserver') {
+            Write-Ok "basedpyright installed"
+        } else {
+            Write-Warn-Local "basedpyright-langserver not on PATH after install — LSP-based Python tutoring will be disabled (fall-soft to ast.parse)."
+        }
     }
 } else {
     Write-Step "Skipping runtime install (--SkipInstall)"

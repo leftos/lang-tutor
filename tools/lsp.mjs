@@ -52,6 +52,39 @@ const LSP_CONFIG = {
     },
     versionArgs: ['--version'],
   },
+
+  rust: {
+    bin: 'rust-analyzer',
+    args: [],
+    // rust-analyzer expects a Cargo workspace; the main file lives under src/.
+    mainFile: 'src/main.rs',
+    workspaceFiles: {
+      'Cargo.toml': [
+        '[package]',
+        'name = "lesson"',
+        'version = "0.0.1"',
+        'edition = "2021"',
+        '',
+        '[[bin]]',
+        'name = "lesson"',
+        'path = "src/main.rs"',
+        '',
+      ].join('\n'),
+    },
+    versionArgs: ['--version'],
+  },
+
+  python: {
+    // basedpyright ships the langserver as `basedpyright-langserver`; --stdio
+    // is required to speak LSP over our pipe-based bridge.
+    bin: 'basedpyright-langserver',
+    args: ['--stdio'],
+    mainFile: 'main.py',
+    workspaceFiles: {
+      'pyrightconfig.json': JSON.stringify({ pythonVersion: '3.13', typeCheckingMode: 'standard', reportMissingImports: 'warning' }, null, 2),
+    },
+    versionArgs: ['--version'],
+  },
 };
 
 // ── Globals (HMR-safe) ──────────────────────────────────────────────────────
@@ -262,9 +295,15 @@ function createWorkspace(lang, sessionId) {
   const dir = join(TMP_LSP_ROOT, sessionId);
   mkdirSync(dir, { recursive: true });
   // Seed an empty main file so root discovery has something to anchor to.
-  writeFileSync(join(dir, config.mainFile), '');
+  // mainFile may include a subdirectory (e.g. rust's `src/main.rs`); ensure
+  // its parent exists before writing.
+  const mainPath = join(dir, config.mainFile);
+  mkdirSync(dirname(mainPath), { recursive: true });
+  writeFileSync(mainPath, '');
   for (const [name, body] of Object.entries(config.workspaceFiles)) {
-    writeFileSync(join(dir, name), body);
+    const filePath = join(dir, name);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, body);
   }
   return dir;
 }
@@ -283,14 +322,20 @@ function destroyWorkspace(workspaceDir) {
 /**
  * Compute a `file:///` URI for an absolute on-disk path. Windows paths need
  * forward-slash normalization and a leading slash before the drive letter
- * (`file:///X:/foo/bar` not `file://X:\foo\bar`).
+ * (`file:///x:/foo/bar` not `file://X:\foo\bar`). The drive letter is
+ * lowercased — rust-analyzer (and some other servers) canonicalize this way,
+ * and a mismatch means publishDiagnostics fires for a different URI than the
+ * client opened, silently breaking diagnostic delivery.
  *
  * @param {string} absPath
  * @returns {string}
  */
 function pathToFileUri(absPath) {
   const normalized = absPath.replaceAll('\\', '/');
-  return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`;
+  // Lowercase the drive letter on Windows. The match accepts either an
+  // already-leading-slashed path (`/c:/foo`) or a raw drive path (`X:/foo`).
+  const lowerDrive = normalized.replace(/^(\/?)([A-Za-z]):/, (_, slash, letter) => `${slash}${letter.toLowerCase()}:`);
+  return lowerDrive.startsWith('/') ? `file://${lowerDrive}` : `file:///${lowerDrive}`;
 }
 
 /**
