@@ -18,6 +18,8 @@ pnpm-debug.log*
 # Editor / OS
 .vscode/
 .idea/
+.claude/settings.local.json
+.claude/worktrees/
 *.swp
 .DS_Store
 Thumbs.db
