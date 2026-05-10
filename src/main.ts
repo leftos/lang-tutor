@@ -22,6 +22,7 @@ import {
   writeFile as apiWriteFile,
   ensureScaffold,
   type FsWatchEvent,
+  fetchRecentLogs,
   fetchTree,
   flattenFiles,
   subscribeFsEvents,
@@ -910,6 +911,81 @@ async function evaluateCode(): Promise<void> {
   void extractProgress();
 }
 
+function fenceLangFromPath(path: string): string {
+  const dot = path.lastIndexOf('.');
+  if (dot === -1) return '';
+  const ext = path.slice(dot + 1).toLowerCase();
+  switch (ext) {
+    case 'html':
+    case 'htm':
+      return 'html';
+    case 'css':
+      return 'css';
+    case 'js':
+    case 'mjs':
+    case 'cjs':
+      return 'js';
+    case 'jsx':
+      return 'jsx';
+    case 'ts':
+      return 'ts';
+    case 'tsx':
+      return 'tsx';
+    case 'json':
+      return 'json';
+    case 'md':
+    case 'markdown':
+      return 'md';
+    default:
+      return '';
+  }
+}
+
+async function evaluateProjectCode(): Promise<void> {
+  if (projectEditorInstance === null) return;
+  const langWhenStarted = activeLang;
+
+  const files = projectEditorInstance.getOpenFiles();
+  const preview = projectPreviewInstance;
+
+  const snapshotPromise = preview?.isRunning() ? preview.requestSnapshot() : Promise.resolve(null);
+  const logsPromise = fetchRecentLogs(langWhenStarted, 60).catch(() => ({ lines: [] as { stream: string; line: string; ts: number }[] }));
+
+  const [snapshot, logs] = await Promise.all([snapshotPromise, logsPromise]);
+  if (langWhenStarted !== activeLang) return;
+
+  const blocks: string[] = [];
+
+  if (files.length > 0) {
+    const fileBlock = files
+      .map((f) => `--- ${f.path}${f.dirty ? ' (unsaved)' : ''} ---\n\`\`\`${fenceLangFromPath(f.path)}\n${f.content}\n\`\`\``)
+      .join('\n\n');
+    blocks.push(`[FILES]\n${fileBlock}`);
+  } else {
+    blocks.push('[FILES]\n(no files open — open a file in the tree first so the tutor can see what you are working on)');
+  }
+
+  if (snapshot !== null) {
+    blocks.push(`[DOM] (rendered at ${snapshot.url})\n\`\`\`html\n${snapshot.dom}\n\`\`\``);
+    if (snapshot.consoleBuffer.length > 0) {
+      const consoleBlock = snapshot.consoleBuffer.map((c) => `${c.level}: ${c.line}`).join('\n');
+      blocks.push(`[CONSOLE]\n\`\`\`\n${consoleBlock}\n\`\`\``);
+    } else {
+      blocks.push('[CONSOLE]\n(empty)');
+    }
+  } else if (preview !== null && !preview.isRunning()) {
+    blocks.push('[DOM]\n(dev server is stopped — Run to capture)');
+  }
+
+  if (logs.lines.length > 0) {
+    const serverBlock = logs.lines.map((l) => l.line).join('\n');
+    blocks.push(`[SERVER]\n\`\`\`\n${serverBlock}\n\`\`\``);
+  }
+
+  await sendMessage(blocks.join('\n\n'));
+  void extractProgress();
+}
+
 // ── Tab switching ─────────────────────────────────────────────────────────
 function switchTab(tab: 'chat' | 'progress'): void {
   el('chatView').style.display = tab === 'chat' ? 'flex' : 'none';
@@ -1119,6 +1195,7 @@ el<HTMLTextAreaElement>('chatInput').addEventListener('keydown', (e: KeyboardEve
 });
 el('runBtn').addEventListener('click', () => void runActiveCode());
 el('evalBtn').addEventListener('click', () => void evaluateCode());
+el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
 el('resetBtn').addEventListener('click', () => void resetCurrentLanguage());
 el('themeToggle').addEventListener('click', toggleTheme);
 

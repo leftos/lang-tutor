@@ -1319,7 +1319,8 @@
   border-color: var(--danger);
 }
 .proj-preview-icon-btn,
-.proj-preview-run-btn {
+.proj-preview-run-btn,
+.proj-preview-eval-btn {
   background: transparent;
   border: 1px solid var(--rule-2);
   border-radius: 1px;
@@ -1336,13 +1337,18 @@
   font-size: 13px;
   line-height: 1;
 }
+.proj-preview-eval-btn {
+  letter-spacing: 0.04em;
+}
 .proj-preview-icon-btn:hover:not(:disabled),
-.proj-preview-run-btn:hover:not(:disabled) {
+.proj-preview-run-btn:hover:not(:disabled),
+.proj-preview-eval-btn:hover:not(:disabled) {
   border-color: var(--sig);
   color: var(--sig);
 }
 .proj-preview-icon-btn:disabled,
-.proj-preview-run-btn:disabled {
+.proj-preview-run-btn:disabled,
+.proj-preview-eval-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

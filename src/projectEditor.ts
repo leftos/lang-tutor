@@ -64,6 +64,8 @@ export interface ProjectEditor {
   forgetTab(path: string): void;
   /** Currently open tab paths (for external callers checking what's affected by FS events). */
   getOpenPaths(): string[];
+  /** Currently open files with their in-memory contents (includes unsaved edits). */
+  getOpenFiles(): Array<{ path: string; content: string; dirty: boolean }>;
   destroy(): void;
 }
 
@@ -454,6 +456,21 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     forgetTab,
     getOpenPaths(): string[] {
       return [...openOrder];
+    },
+    getOpenFiles(): Array<{ path: string; content: string; dirty: boolean }> {
+      // The active tab's authoritative state lives on view.state, not the
+      // cached tab.state — sync it before snapshotting.
+      if (active !== null) {
+        const tab = tabs.get(active);
+        if (tab !== undefined) tab.state = view.state;
+      }
+      return openOrder
+        .map((path) => {
+          const tab = tabs.get(path);
+          if (tab === undefined) return null;
+          return { path, content: tab.state.doc.toString(), dirty: isDirty(tab) };
+        })
+        .filter((f): f is { path: string; content: string; dirty: boolean } => f !== null);
     },
     destroy(): void {
       // Flush any in-flight saves.

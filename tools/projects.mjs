@@ -41,6 +41,89 @@ const PNPM = IS_WIN ? 'pnpm.cmd' : 'pnpm';
 
 const TREE_IGNORE = new Set(['node_modules', '.git', 'dist', '.vite']);
 
+// ── Iframe bootstrap (DOM snapshot + console capture for evaluate) ──
+//
+// Re-injected into projects/<lang>/index.html on every /proj/start so the
+// student can't accidentally break the Send-to-tutor flow. Idempotent via
+// the marker comments.
+
+const BOOTSTRAP_START = '<!-- lang-tutor:bootstrap-start -->';
+const BOOTSTRAP_END = '<!-- lang-tutor:bootstrap-end -->';
+
+const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
+<script>
+(function () {
+  if (window.__langTutorBootstrap) return;
+  window.__langTutorBootstrap = true;
+  var buffer = [];
+  var MAX = 200;
+  ['log', 'warn', 'error', 'info', 'debug'].forEach(function (level) {
+    var orig = console[level].bind(console);
+    console[level] = function () {
+      try {
+        var args = Array.prototype.slice.call(arguments);
+        var line = args.map(function (a) {
+          if (typeof a === 'string') return a;
+          try { return JSON.stringify(a); } catch (_) { return String(a); }
+        }).join(' ');
+        buffer.push({ level: level, line: line, ts: Date.now() });
+        if (buffer.length > MAX) buffer.shift();
+      } catch (_) {}
+      orig.apply(null, arguments);
+    };
+  });
+  window.addEventListener('error', function (e) {
+    buffer.push({ level: 'error', line: '[uncaught] ' + (e.message || String(e.error)), ts: Date.now() });
+    if (buffer.length > MAX) buffer.shift();
+  });
+  window.addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== 'lang-tutor:snapshot-request') return;
+    var reply = {
+      type: 'lang-tutor:snapshot-reply',
+      requestId: data.requestId,
+      dom: document.documentElement.outerHTML,
+      consoleBuffer: buffer.slice(),
+      url: location.href,
+      title: document.title
+    };
+    if (event.source && typeof event.source.postMessage === 'function') {
+      event.source.postMessage(reply, event.origin || '*');
+    }
+  });
+})();
+</script>
+${BOOTSTRAP_END}`;
+
+function injectBootstrap(lang) {
+  const root = getProjectRoot(lang);
+  const indexPath = join(root, 'index.html');
+  if (!existsSync(indexPath)) return;
+  const original = readFileSync(indexPath, 'utf8');
+
+  // Strip any existing bootstrap block (so an update to BOOTSTRAP_SCRIPT
+  // takes effect on next start).
+  const startIdx = original.indexOf(BOOTSTRAP_START);
+  const endIdx = original.indexOf(BOOTSTRAP_END);
+  let stripped = original;
+  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+    const before = original.slice(0, startIdx).replace(/\s+$/, '');
+    const after = original.slice(endIdx + BOOTSTRAP_END.length);
+    stripped = before + after;
+  }
+
+  // Inject right after the opening <head> tag — earliest point where a
+  // script can intercept console calls before page scripts run.
+  const headOpen = stripped.search(/<head\b[^>]*>/i);
+  if (headOpen === -1) return; // not an HTML doc with <head> — skip silently
+  const headEnd = stripped.indexOf('>', headOpen) + 1;
+  const updated = `${stripped.slice(0, headEnd)}\n${BOOTSTRAP_SCRIPT}\n${stripped.slice(headEnd).replace(/^\s+/, '')}`;
+
+  if (updated === original) return;
+  writeFileSync(indexPath, updated, 'utf8');
+  markSelfWrite(indexPath);
+}
+
 const SELF_WRITE_SUPPRESS_MS = 500;
 
 /** Timestamps of recent self-mutations (abs path → ms). Watch events that
@@ -402,6 +485,7 @@ export async function startProject(lang) {
   }
 
   ensureScaffold(lang);
+  injectBootstrap(lang);
   const cwd = getProjectRoot(lang);
   state.error = null;
 

@@ -36,8 +36,24 @@ export interface ProjectPreviewOptions {
   externalBtn: HTMLButtonElement;
 }
 
+export interface ConsoleEntry {
+  level: 'log' | 'warn' | 'error' | 'info' | 'debug';
+  line: string;
+  ts: number;
+}
+
+export interface DomSnapshot {
+  dom: string;
+  consoleBuffer: ConsoleEntry[];
+  url: string;
+  title: string;
+}
+
 export interface ProjectPreview {
   destroy(): void;
+  isRunning(): boolean;
+  /** Ask the iframe for its current DOM and recent console output. Returns null if not running or on timeout. */
+  requestSnapshot(): Promise<DomSnapshot | null>;
 }
 
 function div(...classes: string[]): HTMLDivElement {
@@ -300,10 +316,47 @@ export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPrevie
   setStatusPill('stopped', 'stopped');
   setRunButton('Run', 'run');
 
+  function requestSnapshot(): Promise<DomSnapshot | null> {
+    if (!running || iframe.contentWindow === null) return Promise.resolve(null);
+    const requestId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise((resolveSnap) => {
+      let settled = false;
+      const onMessage = (event: MessageEvent): void => {
+        const data = event.data as { type?: string; requestId?: string } & DomSnapshot;
+        if (data?.type !== 'lang-tutor:snapshot-reply') return;
+        if (data.requestId !== requestId) return;
+        settled = true;
+        window.removeEventListener('message', onMessage);
+        resolveSnap({
+          dom: data.dom,
+          consoleBuffer: data.consoleBuffer,
+          url: data.url,
+          title: data.title,
+        });
+      };
+      window.addEventListener('message', onMessage);
+      try {
+        iframe.contentWindow?.postMessage({ type: 'lang-tutor:snapshot-request', requestId }, '*');
+      } catch {
+        // postMessage shouldn't throw, but fall through to timeout
+      }
+      window.setTimeout(() => {
+        if (!settled) {
+          window.removeEventListener('message', onMessage);
+          resolveSnap(null);
+        }
+      }, 1500);
+    });
+  }
+
   return {
     destroy(): void {
       unsubLogs();
       if (statusPoll !== null) window.clearInterval(statusPoll);
     },
+    isRunning(): boolean {
+      return running;
+    },
+    requestSnapshot,
   };
 }

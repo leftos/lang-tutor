@@ -224,11 +224,13 @@ Foundation. Nothing user-visible yet beyond the new dropdown option showing a "s
 
 ### M5 — Evaluate flow for projects
 
-- [ ] Inject the snapshot bootstrap script into `projects/web/index.html` on every `/proj/start` (idempotent via marker comment).
-- [ ] In `main.ts`, branch `evaluateCode()` on `kind`. For `project`: gather files (open tabs), DOM snapshot via `postMessage`, recent console buffer (in the snapshot reply), recent server stdout via `/proj/logs/recent?lang=web&n=200`.
-- [ ] System prompt for `web` mentions the `[FILES] [DOM] [CONSOLE] [SERVER]` block format and tells the model to evaluate all four.
-- [ ] Progress extraction unchanged — reads `topics` from the active language entry.
-- [ ] Late-arrival guard: capture `langWhenStarted` at the start, drop the result if user switched away.
+- [x] Snapshot bootstrap injected into `projects/web/index.html` on every `/proj/start` between `<!-- lang-tutor:bootstrap-start/end -->` markers. Buffers up to 200 console.* calls + uncaught errors. Idempotent: stripped + re-injected so script updates take effect.
+- [x] New project-mode Send-to-tutor button in the preview header (`#projEvalBtn`).
+- [x] `evaluateProjectCode()` in `main.ts`: gathers `getOpenFiles()` (with `(unsaved)` marker for dirty tabs), races `requestSnapshot()` against a 1500 ms timeout, fetches recent server logs from `/proj/logs/recent?n=60`, and concatenates `[FILES]/[DOM]/[CONSOLE]/[SERVER]` blocks.
+- [x] Web system prompt rewritten to describe each of the four blocks and tell the model to quote selectors / log lines.
+- [x] Progress extraction unchanged — reads `topics` from the active language entry.
+- [x] Late-arrival guard: `langWhenStarted` captured at the start; result dropped if user switched language mid-flight.
+- [x] When the dev server is stopped, the message includes only `[FILES]` + a `(dev server is stopped — Run to capture)` placeholder for `[DOM]`.
 
 ### M6 — Polish
 

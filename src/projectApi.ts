@@ -146,6 +146,10 @@ export function subscribeFsEvents(lang: LanguageId, onEvent: (event: FsWatchEven
   return () => source.close();
 }
 
+export async function fetchRecentLogs(lang: LanguageId, n: number): Promise<{ lines: ProjectLogEntry[] }> {
+  return getJson(`/proj/logs/recent?lang=${encodeURIComponent(lang)}&n=${n}`);
+}
+
 /**
  * Open an SSE connection to /proj/logs?lang=… and call onEntry for each log line.
  * The server sends recent buffered logs first, then live log lines as they arrive.
