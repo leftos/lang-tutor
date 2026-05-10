@@ -215,6 +215,7 @@ const WEB: Language = {
     '[CONSOLE] = recent `console.*` calls and uncaught errors from the iframe; ' +
     '[SERVER] = recent stdout/stderr from the Vite/Node dev server. ' +
     'When you receive such a message, evaluate code, rendered output, and runtime behavior together. Quote specific selectors / log lines when explaining issues. ' +
+    'When the message includes an [LSP] block, those are diagnostics from the TypeScript language server (also reading .js files via the workspace jsconfig.json with checkJs enabled) — `error`, `warning`, `info`, or `hint` lines with `Filename.ext:line:col` locations. They reflect the current unsaved buffer state and catch issues before the page renders. The [SERVER] block additionally surfaces vite-plugin-checker output (Biome lint + tsc) when the dev server is running. Lead with [LSP] / lint diagnostics over generic advice when present. ' +
     "When you want the student to share their work, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. " +
     'If the [DOM] block says the dev server is stopped, gently remind them to click Run before sending — you cannot evaluate behavior without a rendered page.',
   firstSessionPrompt:

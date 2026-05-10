@@ -102,6 +102,19 @@ const LSP_CONFIG = {
     projectDir: 'csharp',
     versionArgs: ['--version'],
   },
+
+  web: {
+    // typescript-language-server wraps tsserver and speaks LSP over --stdio.
+    // It happily handles `.js` files when a jsconfig.json with checkJs is
+    // present in the workspace, so we get type-checking-quality diagnostics
+    // even on plain JavaScript lessons. HTML/CSS LSPs are deferred — those
+    // errors surface via the iframe console / Vite-plugin-checker stderr.
+    bin: 'typescript-language-server',
+    args: ['--stdio'],
+    workspaceMode: 'project',
+    projectDir: 'web',
+    versionArgs: ['--version'],
+  },
 };
 
 // ── Globals (HMR-safe) ──────────────────────────────────────────────────────

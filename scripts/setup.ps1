@@ -275,6 +275,20 @@ if (-not $SkipInstall) {
         if (Test-Tool 'black') { Write-Ok "black installed" } else { Write-Warn-Local "black not on PATH after install — Python formatting will be disabled." }
     }
 
+    Write-Step "typescript-language-server (Web LSP)"
+    if (Test-Tool 'typescript-language-server') {
+        Write-Skip "typescript-language-server already installed"
+    } else {
+        Write-Host "    npm install -g typescript-language-server typescript ..."
+        & npm install -g typescript-language-server typescript --silent | Out-Host
+        Refresh-Path
+        if (Test-Tool 'typescript-language-server') {
+            Write-Ok "typescript-language-server installed"
+        } else {
+            Write-Warn-Local "typescript-language-server not on PATH after install — LSP-based Web tutoring will be disabled."
+        }
+    }
+
     Write-Step "OmniSharp (C# LSP) — optional"
     if (Test-Tool 'omnisharp') {
         Write-Skip "omnisharp already installed"

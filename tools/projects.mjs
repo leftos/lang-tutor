@@ -331,7 +331,71 @@ const SCAFFOLD_WEB = {
       private: true,
       type: 'module',
       scripts: { dev: 'vite --port 5180 --strictPort --host 0.0.0.0' },
-      devDependencies: { vite: '^7.0.0' },
+      devDependencies: {
+        vite: '^7.0.0',
+        // vite-plugin-checker runs tsc / biome in a worker and surfaces
+        // diagnostics in the HMR overlay AND on stderr — captured by the
+        // supervisor and forwarded to the tutor's [SERVER] block.
+        'vite-plugin-checker': '^0.7.0',
+        '@biomejs/biome': '^2.0.0',
+        // typescript ships with tsserver; the language-server binary is
+        // installed globally (see scripts/setup.ps1) but typescript itself
+        // must be in the workspace so checker.tsc can resolve it.
+        typescript: '^5.5.0',
+      },
+    },
+    null,
+    2
+  )}\n`,
+
+  'vite.config.js': `import { defineConfig } from 'vite';
+import checker from 'vite-plugin-checker';
+
+// vite-plugin-checker — runs in a worker so it doesn't block HMR. tsc reads
+// jsconfig.json (checkJs is enabled) so plain .js files get type-checked.
+// Biome handles linting/formatting. Errors surface in the HMR overlay AND in
+// stderr, the latter is what makes them flow into the lang-tutor [SERVER]
+// block when the student clicks Send to tutor.
+export default defineConfig({
+  plugins: [
+    checker({
+      typescript: { tsconfigPath: 'jsconfig.json' },
+      biomejs: true,
+      overlay: { initialIsOpen: false },
+      enableBuild: false,
+    }),
+  ],
+});
+`,
+
+  'jsconfig.json': `${JSON.stringify(
+    {
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'Bundler',
+        checkJs: true,
+        strict: true,
+        noUncheckedIndexedAccess: true,
+        skipLibCheck: true,
+        esModuleInterop: true,
+        allowImportingTsExtensions: false,
+        // tsserver / typescript-language-server picks this up to provide hover,
+        // completion, and diagnostics for .js files. Without checkJs they'd be
+        // syntax-only — with it enabled, JSDoc + inferred types catch real bugs.
+      },
+      include: ['./*.js', './*.html'],
+    },
+    null,
+    2
+  )}\n`,
+
+  'biome.json': `${JSON.stringify(
+    {
+      $schema: 'https://biomejs.dev/schemas/2.0.0/schema.json',
+      formatter: { enabled: true, indentStyle: 'space', indentWidth: 2 },
+      linter: { enabled: true, rules: { recommended: true } },
+      files: { includes: ['**/*.js', '**/*.html', '**/*.css'] },
     },
     null,
     2
