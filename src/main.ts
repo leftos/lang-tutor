@@ -727,6 +727,15 @@ function clampPreviewHeight(height: number, max: number): number {
   return Math.max(PROJ_PREVIEW_MIN, Math.min(height, max));
 }
 
+function updatePreviewAriaValue(bar: HTMLElement, pane: HTMLElement): void {
+  const editorPane = pane.parentElement;
+  if (editorPane === null) return;
+  const total = editorPane.getBoundingClientRect().height;
+  if (total <= 0) return;
+  const pct = Math.round((pane.getBoundingClientRect().height / total) * 100);
+  bar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, pct))));
+}
+
 function initProjectPreviewResize(): void {
   const bar = el('projPreviewResize');
   const pane = el('projPreview');
@@ -735,6 +744,7 @@ function initProjectPreviewResize(): void {
   if (typeof stored === 'number' && Number.isFinite(stored)) {
     pane.style.flex = `0 0 ${stored}px`;
   }
+  updatePreviewAriaValue(bar, pane);
 
   let startY = 0;
   let startH = 0;
@@ -745,6 +755,7 @@ function initProjectPreviewResize(): void {
     const max = editorPane.getBoundingClientRect().height - 120;
     const next = clampPreviewHeight(startH - (e.clientY - startY), max);
     pane.style.flex = `0 0 ${next}px`;
+    updatePreviewAriaValue(bar, pane);
   }
 
   function onUp(): void {
@@ -754,6 +765,7 @@ function initProjectPreviewResize(): void {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
     storageSet(PROJ_PREVIEW_HEIGHT_KEY, pane.getBoundingClientRect().height);
+    updatePreviewAriaValue(bar, pane);
   }
 
   bar.addEventListener('mousedown', (e: MouseEvent) => {
@@ -770,6 +782,7 @@ function initProjectPreviewResize(): void {
   bar.addEventListener('dblclick', () => {
     pane.style.flex = '';
     storageDelete(PROJ_PREVIEW_HEIGHT_KEY);
+    requestAnimationFrame(() => updatePreviewAriaValue(bar, pane));
   });
 }
 
@@ -1156,6 +1169,13 @@ function clampAsideWidth(width: number): number {
   return Math.max(ASIDE_MIN_WIDTH, Math.min(width, max));
 }
 
+function updateAsideAriaValue(bar: HTMLElement, aside: HTMLElement): void {
+  const total = el('bodySplit').getBoundingClientRect().width;
+  if (total <= 0) return;
+  const pct = Math.round((aside.getBoundingClientRect().width / total) * 100);
+  bar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, pct))));
+}
+
 function initAsideResize(): void {
   const bar = el('asideResize');
   const aside = document.querySelector<HTMLElement>('.aside');
@@ -1165,13 +1185,17 @@ function initAsideResize(): void {
   if (typeof stored === 'number' && Number.isFinite(stored)) {
     aside.style.flex = `0 0 ${clampAsideWidth(stored)}px`;
   }
+  updateAsideAriaValue(bar, aside);
 
   let startX = 0;
   let startW = 0;
 
   function onMove(e: MouseEvent): void {
     const next = clampAsideWidth(startW + (e.clientX - startX));
-    if (aside !== null) aside.style.flex = `0 0 ${next}px`;
+    if (aside !== null) {
+      aside.style.flex = `0 0 ${next}px`;
+      updateAsideAriaValue(bar, aside);
+    }
   }
 
   function onUp(): void {
@@ -1183,6 +1207,7 @@ function initAsideResize(): void {
     if (aside !== null) {
       const finalWidth = aside.getBoundingClientRect().width;
       storageSet(ASIDE_WIDTH_KEY, finalWidth);
+      updateAsideAriaValue(bar, aside);
     }
   }
 
@@ -1202,6 +1227,7 @@ function initAsideResize(): void {
     if (aside === null) return;
     aside.style.flex = '';
     storageDelete(ASIDE_WIDTH_KEY);
+    requestAnimationFrame(() => updateAsideAriaValue(bar, aside));
   });
 }
 
