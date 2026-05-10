@@ -1165,3 +1165,20 @@
   padding: 0.1em 0.4em;
   border-radius: 2px;
 }
+.project-placeholder-stats {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-top: 4px;
+}
+.project-placeholder-stat {
+  color: var(--ink);
+}
+.project-placeholder-sep {
+  color: var(--rule-2);
+}

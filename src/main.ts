@@ -1,11 +1,24 @@
 import './style.css';
 import { callClaude, fetchProgressExtraction } from './api';
-import { ACTIVE_LANG_KEY, codeKey, DEFAULT_LANGUAGE, getLanguage, historyKey, LANGUAGE_IDS, LANGUAGES, MAX_HISTORY, progressKey } from './constants';
+import {
+  ACTIVE_LANG_KEY,
+  activeTabKey,
+  codeKey,
+  DEFAULT_LANGUAGE,
+  getLanguage,
+  historyKey,
+  LANGUAGE_IDS,
+  LANGUAGES,
+  MAX_HISTORY,
+  openTabsKey,
+  progressKey,
+} from './constants';
 import { createEditor, type TutorEditor } from './editor';
+import { ensureScaffold, fetchTree, flattenFiles } from './projectApi';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { storageDelete, storageGet, storageSet } from './storage';
-import type { Language, LanguageId, Message, Progress, SingleBufferLanguageId, TopicStatus } from './types';
+import type { Language, LanguageId, Message, Progress, ProjectState, SingleBufferLanguageId, TopicStatus } from './types';
 import { isSingleBufferLanguage } from './types';
 
 const THEME_KEY = 'lang-tutor:theme';
@@ -18,6 +31,9 @@ let currentSystemPrompt = '';
 let extractionQueued = false;
 let isSending = false;
 let editor: TutorEditor;
+// Per-language project state. Project-kind languages (e.g. 'web') own
+// files on disk; this map caches the tree + tab UI state in memory.
+const projectStates = new Map<LanguageId, ProjectState>();
 
 // ── DOM helpers ───────────────────────────────────────────────────────────
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -478,39 +494,127 @@ function clearOutput(): void {
 // ── Single-buffer vs project workshop layout ─────────────────────────────
 const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'codeArea', 'resizeBar', 'outputPre']);
 
+function ensurePlaceholderShell(): HTMLElement {
+  const existing = document.getElementById('projectPlaceholder');
+  if (existing !== null) return existing;
+
+  const placeholder = div('project-placeholder');
+  placeholder.id = 'projectPlaceholder';
+
+  const heading = document.createElement('h3');
+  heading.textContent = 'Web workshop';
+  placeholder.appendChild(heading);
+
+  const body = div('project-placeholder-body');
+  body.id = 'projectPlaceholderBody';
+  placeholder.appendChild(body);
+
+  const stats = div('project-placeholder-stats');
+  stats.id = 'projectPlaceholderStats';
+  placeholder.appendChild(stats);
+
+  const main = document.querySelector<HTMLElement>('.main');
+  if (main !== null) main.appendChild(placeholder);
+  return placeholder;
+}
+
+function renderProjectPlaceholder(lang: Language, state: ProjectState | null): void {
+  if (lang.kind !== 'project') return;
+  const body = el('projectPlaceholderBody');
+  const stats = el('projectPlaceholderStats');
+
+  body.textContent = '';
+  body.appendChild(document.createTextNode('Workspace lives on disk under '));
+  const codeEl = document.createElement('code');
+  codeEl.textContent = `projects/${lang.scaffoldDir}/`;
+  body.appendChild(codeEl);
+  body.appendChild(
+    document.createTextNode('. The chat tutor is wired up; the file tree, multi-tab editor, and live preview will land in upcoming milestones.')
+  );
+
+  stats.textContent = '';
+  if (state === null) {
+    stats.appendChild(span('Loading workspace…', 'muted'));
+    return;
+  }
+  if (!state.scaffolded) {
+    stats.appendChild(span('Workspace not scaffolded yet.', 'muted'));
+    return;
+  }
+  const fileCount = flattenFiles(state.tree).length;
+  stats.appendChild(span(`${pad2(fileCount)} files`, 'project-placeholder-stat'));
+  stats.appendChild(span('·', 'project-placeholder-sep'));
+  stats.appendChild(span(`${pad2(state.openTabs.length)} tabs open`, 'project-placeholder-stat'));
+}
+
 function setWorkshopMode(mode: 'single' | 'project'): void {
   const isProject = mode === 'project';
   for (const id of SINGLE_BUFFER_IDS) {
     el(id).style.display = isProject ? 'none' : '';
   }
-  // Output eyebrow has no id — toggle by class.
   const eyebrow = document.querySelector<HTMLElement>('.output-eyebrow');
   if (eyebrow !== null) eyebrow.style.display = isProject ? 'none' : '';
 
-  let placeholder = document.getElementById('projectPlaceholder');
   if (isProject) {
-    if (placeholder === null) {
-      placeholder = div('project-placeholder');
-      placeholder.id = 'projectPlaceholder';
-      const heading = document.createElement('h3');
-      heading.textContent = 'Web workshop';
-      placeholder.appendChild(heading);
-      const body = div('project-placeholder-body');
-      body.appendChild(document.createTextNode('Workspace lives on disk under '));
-      const codeEl = document.createElement('code');
-      codeEl.textContent = 'projects/web/';
-      body.appendChild(codeEl);
-      body.appendChild(
-        document.createTextNode('. The chat tutor is wired up; the file tree, multi-tab editor, and live preview will land in upcoming milestones.')
-      );
-      placeholder.appendChild(body);
-      const main = document.querySelector<HTMLElement>('.main');
-      if (main !== null) main.appendChild(placeholder);
-    } else {
-      placeholder.style.display = '';
+    const placeholder = ensurePlaceholderShell();
+    placeholder.style.display = '';
+  } else {
+    const placeholder = document.getElementById('projectPlaceholder');
+    if (placeholder !== null) placeholder.style.display = 'none';
+  }
+}
+
+// ── Project state hydration ──────────────────────────────────────────────
+function loadProjectStateFromStorage(id: LanguageId): ProjectState {
+  const openTabs = storageGet<string[]>(openTabsKey(id)) ?? [];
+  const activeTab = storageGet<string>(activeTabKey(id));
+  return {
+    tree: null,
+    openTabs,
+    activeTab,
+    scaffolded: false,
+  };
+}
+
+async function hydrateProjectState(id: LanguageId, lang: Language): Promise<void> {
+  if (lang.kind !== 'project') return;
+  const langWhenStarted = id;
+
+  try {
+    let response = await fetchTree(id);
+    if (!response.scaffolded) {
+      await ensureScaffold(id);
+      response = await fetchTree(id);
     }
-  } else if (placeholder !== null) {
-    placeholder.style.display = 'none';
+    if (activeLang !== langWhenStarted) return;
+
+    const state = projectStates.get(id) ?? loadProjectStateFromStorage(id);
+    state.tree = response.tree;
+    state.scaffolded = response.scaffolded;
+
+    // Drop any persisted open-tab paths that no longer exist on disk.
+    const liveFiles = new Set(flattenFiles(response.tree));
+    state.openTabs = state.openTabs.filter((p) => liveFiles.has(p));
+    if (state.activeTab !== null && !liveFiles.has(state.activeTab)) {
+      state.activeTab = state.openTabs[0] ?? null;
+    }
+
+    projectStates.set(id, state);
+    storageSet(openTabsKey(id), state.openTabs);
+    if (state.activeTab !== null) {
+      storageSet(activeTabKey(id), state.activeTab);
+    } else {
+      storageDelete(activeTabKey(id));
+    }
+
+    renderProjectPlaceholder(lang, state);
+  } catch (e) {
+    console.error('[project] failed to hydrate', id, e);
+    if (activeLang === langWhenStarted) {
+      const placeholderStats = el('projectPlaceholderStats');
+      placeholderStats.textContent = '';
+      placeholderStats.appendChild(span(`Failed to load workspace: ${(e as Error).message}`, 'muted'));
+    }
   }
 }
 
@@ -662,7 +766,13 @@ async function resetCurrentLanguage(): Promise<void> {
   if (!confirm(`Reset all ${lang.name} progress and start fresh?`)) return;
   storageDelete(progressKey(activeLang));
   storageDelete(historyKey(activeLang));
-  if (isSingleBufferLanguage(lang)) storageDelete(codeKey(activeLang));
+  if (isSingleBufferLanguage(lang)) {
+    storageDelete(codeKey(activeLang));
+  } else {
+    storageDelete(openTabsKey(activeLang));
+    storageDelete(activeTabKey(activeLang));
+    projectStates.delete(activeLang);
+  }
   location.reload();
 }
 
@@ -690,6 +800,10 @@ function loadLanguageState(id: LanguageId): void {
     clearOutput();
   } else {
     setWorkshopMode('project');
+    const cached = projectStates.get(id) ?? loadProjectStateFromStorage(id);
+    projectStates.set(id, cached);
+    renderProjectPlaceholder(lang, cached.scaffolded ? cached : null);
+    void hydrateProjectState(id, lang);
   }
 
   renderChatView();

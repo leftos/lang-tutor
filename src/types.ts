@@ -68,3 +68,32 @@ export type SingleBufferLanguageId = Exclude<LanguageId, 'web'>;
 export function isSingleBufferLanguage(lang: Language): lang is SingleBufferLanguage {
   return lang.kind === 'single';
 }
+
+// ── Project-language file system & UI state ─────────────────────────────
+
+export interface FsFile {
+  readonly type: 'file';
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface FsDir {
+  readonly type: 'dir';
+  readonly name: string;
+  readonly path: string;
+  readonly children: readonly FsNode[];
+}
+
+export type FsNode = FsFile | FsDir;
+
+export interface FsTreeResponse {
+  readonly tree: FsNode | null;
+  readonly scaffolded: boolean;
+}
+
+export interface ProjectState {
+  tree: FsNode | null;
+  openTabs: string[];
+  activeTab: string | null;
+  scaffolded: boolean;
+}

@@ -180,3 +180,18 @@ export function progressKey(lang: LanguageId): string {
 export function codeKey(lang: LanguageId): string {
   return `lang-tutor:${lang}:code`;
 }
+
+// ── Project-language storage keys (web etc.) ──────────────────────────────
+// Files themselves live on disk; localStorage holds only UI/session state.
+
+export function openTabsKey(lang: LanguageId): string {
+  return `lang-tutor:${lang}:openTabs`;
+}
+
+export function activeTabKey(lang: LanguageId): string {
+  return `lang-tutor:${lang}:activeTab`;
+}
+
+export function treeStateKey(lang: LanguageId): string {
+  return `lang-tutor:${lang}:treeState`;
+}

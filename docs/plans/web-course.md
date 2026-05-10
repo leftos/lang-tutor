@@ -196,11 +196,12 @@ Foundation. Nothing user-visible yet beyond the new dropdown option showing a "s
 
 ### M2 — Frontend project type plumbing
 
-- [ ] Refactor `Language` to discriminated union (`kind: 'single' | 'project'`). Update `types.ts`, `constants.ts`.
-- [ ] Gate every site that touches `.starterCode`/`.fileName`/`.fenceLang` in `main.ts` on `kind === 'single'`. For `kind === 'project'`, branch to project paths (mostly stubbed in this milestone).
-- [ ] `loadLanguageState` branches: for `project`, fetch tree + open tabs from storage, hydrate editor state.
-- [ ] Storage helpers: `openTabsKey(lang)`, `activeTabKey(lang)`, `treeStateKey(lang)`.
-- [ ] `migrateOldStorage` is unchanged (already only handles `rust-*` legacy keys).
+- [x] Refactor `Language` to discriminated union (`kind: 'single' | 'project'`). Update `types.ts`, `constants.ts`. *(landed in M1 — needed for compilation.)*
+- [x] Gate every site that touches `.starterCode`/`.fileName`/`.fenceLang` in `main.ts` on `kind === 'single'`. *(landed in M1.)*
+- [x] `loadLanguageState` branches: for `project`, fetch tree + restore open tabs from storage, hydrate state, render placeholder stats.
+- [x] Storage helpers: `openTabsKey(lang)`, `activeTabKey(lang)`, `treeStateKey(lang)`.
+- [x] Frontend FS client: `src/projectApi.ts` (`fetchTree`, `fetchFile`, `writeFile`, `renameFile`, `deleteFile`, `mkdir`, `startProject`, `stopProject`, `getStatus`, `flattenFiles`).
+- [x] `migrateOldStorage` is unchanged (already only handles `rust-*` legacy keys).
 
 ### M3 — Editor UI: tree + tabs
 
