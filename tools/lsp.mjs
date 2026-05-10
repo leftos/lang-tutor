@@ -52,6 +52,10 @@ const IS_WIN = process.platform === 'win32';
  * @property {string} [probeBin]            - optional alternate binary for the probe (defaults to `bin`).
  *           Useful when the LSP binary itself doesn't support a clean `--version`
  *           but a sibling CLI does (e.g. basedpyright-langserver vs basedpyright).
+ * @property {boolean} [syncToDisk]         - when true, the bridge intercepts didChange / didOpen
+ *           notifications, debounces, and writes the buffer to the file the URI points to. Use
+ *           for servers whose flycheck (or equivalent) reads on-disk content rather than the LSP
+ *           buffer (rust-analyzer + cargo check is the canonical case).
  */
 
 /** @type {Record<string, LspConfig>} */
@@ -71,6 +75,11 @@ const LSP_CONFIG = {
     args: [],
     // rust-analyzer expects a Cargo workspace; the main file lives under src/.
     mainFile: 'src/main.rs',
+    // rust-analyzer's flycheck (cargo check) reads on-disk content, not the
+    // LSP buffer, so without disk sync the server's name-resolution and type
+    // errors lag the editor by however long until the user saves. With this
+    // on, every didChange triggers a debounced disk write.
+    syncToDisk: true,
     workspaceFiles: {
       'Cargo.toml': [
         '[package]',
@@ -155,6 +164,7 @@ const WSS_KEY = '__langTutorLspWss';
  * @property {Buffer} stdoutBuffer        - partial Content-Length frame buffer
  * @property {number} lastActivity        - epoch ms; bumped on every byte either direction
  * @property {NodeJS.Timeout | null} idleTimer
+ * @property {Map<string, { timer: NodeJS.Timeout; text: string }>} [syncQueue] - per-URI debounced disk writes (lazy)
  */
 
 /** @type {Map<string, LspSession>} */
@@ -262,6 +272,106 @@ function frameMessage(json) {
   const body = Buffer.from(json, 'utf8');
   const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, 'ascii');
   return Buffer.concat([header, body]);
+}
+
+/**
+ * Convert a `file:///...` URI back to an absolute on-disk path. Inverse of
+ * pathToFileUri — handles percent-encoding (e.g. `%3A` → `:`) and the
+ * Windows-vs-POSIX leading-slash convention.
+ *
+ * Returns null for non-file URIs.
+ *
+ * @param {string} uri
+ * @returns {string | null}
+ */
+function fileUriToPath(uri) {
+  if (!uri.startsWith('file://')) return null;
+  // Strip the scheme; on Windows the path starts with /x:/...
+  let raw = uri.slice('file://'.length);
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (IS_WIN) {
+    // Drop the leading slash before the drive letter: '/x:/foo' → 'x:/foo'.
+    if (/^\/[A-Za-z]:/.test(raw)) raw = raw.slice(1);
+    return raw.replaceAll('/', '\\');
+  }
+  return raw;
+}
+
+/**
+ * Per-session debounced disk-sync writer. Holds the latest pending write per
+ * URI and flushes after `delay` ms of quiet. Bounded to paths inside the
+ * session's workspace as a defense-in-depth check.
+ */
+const SYNC_DEBOUNCE_MS = 500;
+
+function scheduleDiskSync(session, uri, text) {
+  const filePath = fileUriToPath(uri);
+  if (filePath === null) return;
+  // Defense in depth: never write outside the session's workspace dir, even
+  // though all URIs we generate point inside it. On Windows paths are
+  // case-insensitive but JS string comparison isn't, so lowercase both sides
+  // before checking containment — otherwise a `x:\foo` URI rejects against
+  // an `X:\foo` workspace.
+  const resolved = resolve(filePath);
+  const normResolved = IS_WIN ? resolved.toLowerCase() : resolved;
+  const normWorkspace = IS_WIN ? session.workspaceDir.toLowerCase() : session.workspaceDir;
+  if (!normResolved.startsWith(normWorkspace)) return;
+
+  if (session.syncQueue === undefined) session.syncQueue = new Map();
+  const queue = session.syncQueue;
+  const existing = queue.get(uri);
+  if (existing !== undefined) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    queue.delete(uri);
+    try {
+      writeFileSync(resolved, text);
+      console.info(`[lsp:${session.lang}] disk sync → ${resolved} (${text.length} bytes)`);
+    } catch (e) {
+      console.warn(`[lsp:${session.lang}] disk sync failed for ${resolved}:`, e instanceof Error ? e.message : e);
+    }
+  }, SYNC_DEBOUNCE_MS);
+  queue.set(uri, { timer, text });
+}
+
+/**
+ * Inspect an outgoing JSON-RPC message; if it's a textDocument/didOpen or
+ * didChange and the session opts into syncToDisk, queue a debounced write of
+ * the buffer to the file's on-disk path.
+ */
+function maybeSyncToDisk(session, jsonText) {
+  const config = LSP_CONFIG[session.lang];
+  if (config?.syncToDisk !== true) return;
+  let msg;
+  try {
+    msg = JSON.parse(jsonText);
+  } catch {
+    return;
+  }
+  if (msg === null || typeof msg !== 'object') return;
+  const params = msg.params;
+  if (params === undefined || params === null) return;
+  if (msg.method === 'textDocument/didOpen') {
+    const td = params.textDocument;
+    if (td?.uri !== undefined && typeof td.text === 'string') {
+      scheduleDiskSync(session, td.uri, td.text);
+    }
+  } else if (msg.method === 'textDocument/didChange') {
+    const td = params.textDocument;
+    const changes = params.contentChanges;
+    // Full-sync mode: contentChanges[0] is the entire new doc. Incremental
+    // mode would require re-applying ranges, which we don't implement; the
+    // frontend uses full-sync (see lspClient.didChange).
+    if (td?.uri !== undefined && Array.isArray(changes) && changes.length > 0) {
+      const last = changes[changes.length - 1];
+      if (typeof last?.text === 'string' && Object.keys(last).length === 1) {
+        scheduleDiskSync(session, td.uri, last.text);
+      }
+    }
+  }
 }
 
 // ── Availability probe ──────────────────────────────────────────────────────
@@ -517,6 +627,10 @@ async function startSession(lang) {
       }
     }
     if (session.idleTimer !== null) clearTimeout(session.idleTimer);
+    if (session.syncQueue !== undefined) {
+      for (const { timer } of session.syncQueue.values()) clearTimeout(timer);
+      session.syncQueue.clear();
+    }
     sessions.delete(sessionId);
     if (session.workspaceEphemeral) destroyWorkspace(session.workspaceDir);
   });
@@ -608,6 +722,7 @@ function attachWebSocket(sessionId, ws) {
       : data instanceof Buffer
         ? data.toString('utf8')
         : Buffer.from(/** @type {ArrayBuffer} */ (data)).toString('utf8');
+    maybeSyncToDisk(session, text);
     try {
       session.proc.stdin.write(frameMessage(text));
     } catch (e) {
