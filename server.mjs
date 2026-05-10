@@ -16,6 +16,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { checkCode, formatCode } from './tools/checker.mjs';
+import { handleLspRequest, handleLspUpgrade } from './tools/lsp.mjs';
 import { handleProjectRequest } from './tools/project-routes.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -64,6 +65,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (await handleLspRequest(req, res)) return;
   if (await handleProjectRequest(req, res)) return;
 
   if (req.method === 'POST' && (req.url === '/check' || req.url === '/format')) {
@@ -135,6 +137,10 @@ const server = createServer(async (req, res) => {
 
   res.writeHead(404);
   res.end('Not found');
+});
+
+server.on('upgrade', (req, socket, head) => {
+  handleLspUpgrade(req, socket, head);
 });
 
 server.listen(PORT, () => {

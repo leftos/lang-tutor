@@ -3,6 +3,8 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 // @ts-expect-error -- plain JS module with JSDoc types
 import { checkCode, formatCode } from './tools/checker.mjs';
 // @ts-expect-error -- plain JS module
+import { handleLspRequest, handleLspUpgrade } from './tools/lsp.mjs';
+// @ts-expect-error -- plain JS module
 import { handleProjectRequest } from './tools/project-routes.mjs';
 
 interface CheckBody {
@@ -25,8 +27,15 @@ function toolchainPlugin(): Plugin {
     name: 'lang-tutor-toolchain',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        if (await handleLspRequest(req, res)) return;
         if (await handleProjectRequest(req, res)) return;
         next();
+      });
+
+      // WebSocket upgrades on /lsp need to attach to the underlying http.Server.
+      // Vite's own HMR socket lives on /__hmr (no path collision).
+      server.httpServer?.on('upgrade', (req, socket, head) => {
+        handleLspUpgrade(req, socket, head);
       });
 
       server.middlewares.use('/check', async (req, res, next) => {
