@@ -1,85 +1,115 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-lang="rust">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Lang tutor</title>
+  <title>Lang · Tutor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..700,0..100;1,9..144,300..700,0..100&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="/src/style.css">
 </head>
-<body class="font-sans">
-<div id="app" class="flex flex-col h-screen max-w-[1000px] mx-auto bdr-x">
+<body>
+<div id="app">
 
-  <!-- Topbar -->
-  <div class="flex items-center justify-between px-[14px] py-[9px] bdr-b shrink-0">
-    <div class="flex items-center gap-3">
-      <div class="flex items-center gap-[7px]">
-        <i class="ti ti-code text-[17px]" aria-hidden="true"></i>
-        <span class="font-medium text-sm">Lang tutor</span>
-      </div>
-      <select id="langSelect" class="input-base text-[12px] py-[3px] pl-[8px] pr-[24px] cursor-pointer" aria-label="Select language">
-        <option value="rust">Rust</option>
-        <option value="cpp">C++</option>
-        <option value="python">Python</option>
-      </select>
+  <!-- ─── Header ───────────────────────────────────────────── -->
+  <header id="manualHeader">
+    <div class="header-mark">
+      <span class="mark-glyph">§</span>
+      <span class="mark-text">Lang<span class="mark-dot">·</span>Tutor</span>
+      <span class="mark-edition">a personal manual · ed. mmxxvi</span>
     </div>
-    <div class="flex items-center gap-2">
-      <span id="progBadge" class="text-[10px] text-muted px-[7px] py-[2px] bdr rounded-lg" style="display:none"></span>
-      <button type="button" id="resetBtn" class="btn text-[11px] px-[9px] py-[3px]" title="Reset progress for the current language" style="display:none">Reset</button>
+
+    <nav id="languageRail" class="language-rail" aria-label="Language">
+      <button type="button" class="lang-tab" data-lang="rust">
+        <span class="lang-num">i.</span>
+        <span class="lang-name">Rust</span>
+        <span class="lang-meta" data-lang-meta="rust">— · —</span>
+      </button>
+      <button type="button" class="lang-tab" data-lang="cpp">
+        <span class="lang-num">ii.</span>
+        <span class="lang-name">C<span class="cpp-plus">++</span></span>
+        <span class="lang-meta" data-lang-meta="cpp">— · —</span>
+      </button>
+      <button type="button" class="lang-tab" data-lang="python">
+        <span class="lang-num">iii.</span>
+        <span class="lang-name">Python</span>
+        <span class="lang-meta" data-lang-meta="python">— · —</span>
+      </button>
+    </nav>
+
+    <div class="header-tools">
+      <button type="button" id="themeToggle" class="ghost-btn icon-btn" aria-label="Toggle theme" title="Toggle light / dark">
+        <i class="ti ti-contrast-2-filled" aria-hidden="true"></i>
+      </button>
+      <button type="button" id="resetBtn" class="ghost-btn" title="Reset progress for the current language" style="display:none">Reset</button>
     </div>
+  </header>
+
+  <!-- ─── Chapter strip ───────────────────────────────────── -->
+  <div id="chapterStrip" class="chapter-strip">
+    <span class="folio" id="folio">Pg.&nbsp;—</span>
+    <h1 class="chapter-name" id="chapterName">A blank page</h1>
+    <span class="chapter-meta" id="chapterMeta"></span>
   </div>
 
-  <!-- Split -->
-  <div class="flex flex-1 overflow-hidden">
+  <!-- ─── Body ───────────────────────────────────────────── -->
+  <div id="bodySplit">
 
-    <!-- Left col: chat + progress -->
-    <div class="w-[43%] flex flex-col bdr-r min-w-0">
-
-      <!-- Tabs -->
-      <div class="flex bdr-b shrink-0">
-        <button type="button" class="subtab active" id="tabChatBtn">Chat</button>
-        <button type="button" class="subtab" id="tabProgBtn">Progress<span id="progCount" style="display:none"></span></button>
+    <aside class="aside">
+      <div class="aside-tabs">
+        <button type="button" class="aside-tab is-active" id="tabChatBtn" data-tab="chat">
+          <span class="aside-tab-num">i.</span>
+          <span class="aside-tab-name">The Tutor</span>
+        </button>
+        <button type="button" class="aside-tab" id="tabProgBtn" data-tab="progress">
+          <span class="aside-tab-num">ii.</span>
+          <span class="aside-tab-name">Lesson Plan</span>
+          <span id="progCount" class="aside-tab-meta" style="display:none"></span>
+        </button>
       </div>
 
-      <!-- Chat view -->
-      <div id="chatView" class="flex flex-col flex-1 overflow-hidden">
-        <div id="msgList" class="flex-1 overflow-y-auto p-3"></div>
-        <div id="inputRow" class="gap-[7px] px-[10px] py-2 bdr-t shrink-0" style="display:none">
-          <textarea id="chatInput"
-            class="input-base flex-1 h-[54px] text-[13px] px-[9px] py-[6px]"
-            placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"></textarea>
-          <button type="button" id="sendBtn" class="btn self-end px-[11px] py-[7px]" aria-label="Send">
-            <i class="ti ti-send" aria-hidden="true"></i>
+      <div id="chatView" class="chat-view">
+        <div id="msgList" class="msg-list"></div>
+        <div id="inputRow" class="input-row" style="display:none">
+          <textarea id="chatInput" class="chat-input" placeholder="Ask the tutor… &nbsp;(↵ to send · ⇧↵ for newline)"></textarea>
+          <button type="button" id="sendBtn" class="send-btn" aria-label="Send">
+            <i class="ti ti-arrow-up" aria-hidden="true"></i>
           </button>
         </div>
       </div>
 
-      <!-- Progress view -->
-      <div id="progressView" class="flex-col flex-1 overflow-hidden" style="display:none">
-        <div id="progressScroll" class="flex-1 overflow-y-auto p-3"></div>
+      <div id="progressView" class="prog-view" style="display:none">
+        <div id="progressScroll" class="prog-scroll"></div>
       </div>
+    </aside>
 
-    </div>
-
-    <!-- Right col: editor + output -->
-    <div class="flex-1 flex flex-col min-w-0">
-      <div class="flex items-center justify-between px-3 py-[7px] bdr-b shrink-0">
-        <span id="fileLabel" class="text-[11.5px] text-muted font-mono">main.rs</span>
-        <div class="flex gap-[7px]">
-          <button type="button" id="runBtn" class="btn text-[12px] px-3 py-1 flex items-center gap-1">
-            <i class="ti ti-player-play text-[13px]" aria-hidden="true"></i>
-            <span id="runLabel">Run</span>
-          </button>
-          <button type="button" id="evalBtn" class="btn text-[12px] px-3 py-1" title="Send your code + last run output to the tutor for review" disabled>Send to tutor →</button>
-        </div>
+    <main class="main">
+      <div class="main-toolbar">
+        <span id="fileLabel" class="file-label">main.rs</span>
+        <span class="file-spec" id="fileSpec">edition 2021 · debug</span>
+        <span id="progBadge" class="badge" style="display:none"></span>
+        <div class="toolbar-spacer"></div>
+        <button type="button" id="evalBtn" class="ghost-btn" title="Send your code + last run output to the tutor for review" disabled>
+          <span>Send to tutor</span>
+          <i class="ti ti-arrow-narrow-right" aria-hidden="true"></i>
+        </button>
+        <button type="button" id="runBtn" class="primary-btn">
+          <i class="ti ti-player-play-filled" aria-hidden="true"></i>
+          <span id="runLabel">Run</span>
+        </button>
       </div>
-      <div id="codeArea" class="flex-1 overflow-hidden bg-raised bdr-b min-h-0"></div>
+      <div id="codeArea" class="code-area"></div>
       <div id="resizeBar" class="resize-bar"></div>
-      <div class="px-3 py-[5px] bdr-b text-[10px] font-medium uppercase tracking-[0.07em] text-muted shrink-0">Output</div>
-      <pre id="outputPre"
-        class="overflow-y-auto m-0 px-3 py-[9px] font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap break-words text-primary"
-        style="flex: 0 0 120px"><span class="text-muted">Run your code to see output here</span></pre>
-    </div>
+      <div class="output-eyebrow">
+        <span class="output-eyebrow-fig">fig. ii</span>
+        <span class="output-eyebrow-name">output</span>
+        <span class="toolbar-spacer"></span>
+        <span class="output-eyebrow-spec">stdout / stderr</span>
+      </div>
+      <pre id="outputPre" class="output-pre" style="flex: 0 0 120px"><span class="muted">Run the program to capture its output here.</span></pre>
+    </main>
 
   </div>
 </div>

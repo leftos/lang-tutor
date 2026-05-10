@@ -37,7 +37,6 @@ const langExtension: Record<LanguageId, () => Extension> = {
   python: () => python(),
 };
 
-// Syntax highlight using CSS custom properties so light/dark mode flows naturally.
 const tutorHighlight = HighlightStyle.define([
   { tag: [t.keyword, t.modifier, t.controlKeyword, t.operatorKeyword], color: 'var(--syn-keyword)' },
   { tag: [t.string, t.special(t.string), t.regexp], color: 'var(--syn-string)' },
@@ -53,61 +52,66 @@ const tutorHighlight = HighlightStyle.define([
   { tag: t.invalid, color: 'var(--color-danger)' },
 ]);
 
-// Editor chrome that consumes our design tokens. Fonts and colors come from CSS vars.
+// Editor chrome consumes design tokens so light/dark + signature colour flow naturally.
 const tutorTheme = EditorView.theme({
   '&': {
     height: '100%',
     fontSize: '13px',
-    backgroundColor: 'var(--color-raised)',
-    color: 'var(--color-primary)',
+    backgroundColor: 'var(--paper-2)',
+    color: 'var(--ink)',
   },
   '.cm-scroller': {
-    fontFamily: 'var(--font-family-mono)',
-    lineHeight: '1.55',
+    fontFamily: 'var(--font-mono)',
+    lineHeight: '1.6',
   },
-  '.cm-content': { padding: '12px 0', caretColor: 'var(--color-primary)' },
-  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--color-primary)' },
+  '.cm-content': { padding: '14px 0', caretColor: 'var(--sig)' },
+  '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--sig)', borderLeftWidth: '2px' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, ::selection': {
-    backgroundColor: 'rgba(99, 153, 34, 0.22)',
+    backgroundColor: 'var(--sig-soft)',
   },
   '.cm-gutters': {
-    backgroundColor: 'var(--color-raised)',
-    color: 'var(--color-muted)',
+    backgroundColor: 'var(--paper-2)',
+    color: 'var(--ink-mute)',
     border: 'none',
-    paddingRight: '4px',
+    paddingRight: '6px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11px',
+    fontStyle: 'italic',
   },
-  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--color-primary)' },
-  '.cm-activeLine': { backgroundColor: 'rgba(127, 127, 127, 0.06)' },
-  '.cm-lineNumbers .cm-gutterElement': { padding: '0 6px 0 12px', minWidth: '28px' },
-  '.cm-foldGutter .cm-gutterElement': { color: 'var(--color-muted)' },
+  '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--sig)' },
+  '.cm-activeLine': { backgroundColor: 'var(--sig-soft)' },
+  '.cm-lineNumbers .cm-gutterElement': { padding: '0 8px 0 14px', minWidth: '30px' },
+  '.cm-foldGutter .cm-gutterElement': { color: 'var(--ink-mute)' },
   '.cm-tooltip': {
-    backgroundColor: 'var(--color-surface)',
-    color: 'var(--color-primary)',
-    border: '0.5px solid var(--bdr-strong)',
-    borderRadius: '6px',
+    backgroundColor: 'var(--paper)',
+    color: 'var(--ink)',
+    border: '1px solid var(--rule-2)',
+    borderRadius: '1px',
+    fontFamily: 'var(--font-body)',
   },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-    backgroundColor: 'var(--color-raised)',
+    backgroundColor: 'var(--sig-soft)',
+    color: 'var(--ink)',
   },
-  '.cm-searchMatch': { backgroundColor: 'rgba(186, 117, 23, 0.25)' },
-  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'rgba(186, 117, 23, 0.5)' },
+  '.cm-searchMatch': { backgroundColor: 'var(--sig-soft)', outline: '1px solid var(--sig)' },
+  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--sig)', color: 'var(--sig-fg)' },
   '.cm-panels': {
-    backgroundColor: 'var(--color-surface)',
-    color: 'var(--color-primary)',
-    borderTop: '0.5px solid var(--bdr)',
+    backgroundColor: 'var(--paper)',
+    color: 'var(--ink)',
+    borderTop: '1px solid var(--rule)',
   },
   '.cm-panels input, .cm-panels button': {
-    fontFamily: 'inherit',
-    fontSize: '12px',
-    backgroundColor: 'var(--color-raised)',
-    color: 'var(--color-primary)',
-    border: '0.5px solid var(--bdr-strong)',
-    borderRadius: '4px',
-    padding: '2px 6px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11.5px',
+    backgroundColor: 'var(--paper-2)',
+    color: 'var(--ink)',
+    border: '1px solid var(--rule-2)',
+    borderRadius: '1px',
+    padding: '3px 7px',
   },
-  '.cm-diagnostic-error': { borderLeftColor: 'var(--color-danger)' },
-  '.cm-diagnostic-warning': { borderLeftColor: '#ba7517' },
-  '.cm-diagnostic-info': { borderLeftColor: 'var(--color-muted)' },
+  '.cm-diagnostic-error': { borderLeftColor: 'var(--danger)' },
+  '.cm-diagnostic-warning': { borderLeftColor: 'var(--sig)' },
+  '.cm-diagnostic-info': { borderLeftColor: 'var(--ink-mute)' },
 });
 
 export interface EditorOptions {
@@ -137,16 +141,11 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     if (formatted === code) return;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: formatted },
-      // Preserve cursor position roughly — clamp to new doc end if it would overflow.
       selection: { anchor: Math.min(view.state.selection.main.anchor, formatted.length) },
     });
   };
 
-  // Linter source captures `currentLang` by reference so language switches feed through.
-  const lintSource = linter(
-    async (v) => fetchDiagnostics(currentLang, v.state),
-    { delay: 600 } // debounce: don't pelt the toolchain on every keystroke
-  );
+  const lintSource = linter(async (v) => fetchDiagnostics(currentLang, v.state), { delay: 600 });
 
   const baseExtensions: Extension[] = [
     lineNumbers(),
@@ -209,7 +208,6 @@ export function createEditor(opts: EditorOptions): TutorEditor {
       if (lang === currentLang) return;
       currentLang = lang;
       view.dispatch({ effects: langCompartment.reconfigure(langExtension[lang]()) });
-      // Force the linter to re-run for the new language by reconfiguring the compartment.
       view.dispatch({ effects: linterCompartment.reconfigure(lintSource) });
     },
     format: formatNow,

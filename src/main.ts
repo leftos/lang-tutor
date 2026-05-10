@@ -1,11 +1,13 @@
 import './style.css';
 import { callClaude, fetchProgressExtraction } from './api';
-import { ACTIVE_LANG_KEY, codeKey, DEFAULT_LANGUAGE, getLanguage, historyKey, LANGUAGE_IDS, MAX_HISTORY, progressKey } from './constants';
+import { ACTIVE_LANG_KEY, codeKey, DEFAULT_LANGUAGE, getLanguage, historyKey, LANGUAGE_IDS, LANGUAGES, MAX_HISTORY, progressKey } from './constants';
 import { createEditor, type TutorEditor } from './editor';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { storageDelete, storageGet, storageSet } from './storage';
 import type { Language, LanguageId, Message, Progress, TopicStatus } from './types';
+
+const THEME_KEY = 'lang-tutor:theme';
 
 // ── State ─────────────────────────────────────────────────────────────────
 let activeLang: LanguageId = DEFAULT_LANGUAGE;
@@ -36,6 +38,38 @@ function span(text: string, ...classes: string[]): HTMLSpanElement {
   return s;
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+// ── Theme ─────────────────────────────────────────────────────────────────
+function applyStoredTheme(): void {
+  const stored = storageGet<string>(THEME_KEY);
+  if (stored === 'dark' || stored === 'light') {
+    document.documentElement.setAttribute('data-theme', stored);
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+
+function toggleTheme(): void {
+  const root = document.documentElement;
+  const current = root.getAttribute('data-theme');
+  const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  // Cycle: auto → opposite of system → opposite of that → auto
+  // Simpler: if currently auto, lock to opposite of system. Otherwise flip.
+  let next: 'light' | 'dark';
+  if (current === null) {
+    next = systemDark ? 'light' : 'dark';
+  } else if (current === 'dark') {
+    next = 'light';
+  } else {
+    next = 'dark';
+  }
+  root.setAttribute('data-theme', next);
+  storageSet(THEME_KEY, next);
+}
+
 // ── System prompt builder ─────────────────────────────────────────────────
 function buildSystem(prog: Progress | null, lang: Language): string {
   if (prog === null) return `${lang.systemPromptIntro}\n\n${lang.firstSessionPrompt}`;
@@ -64,12 +98,87 @@ function buildSystem(prog: Progress | null, lang: Language): string {
   );
 }
 
+// ── Header / chapter strip ────────────────────────────────────────────────
+function findCurrentTopicIndex(prog: Progress | null, lang: Language): number {
+  if (prog === null) return -1;
+  if (prog.currentTopic !== undefined) {
+    const needle = prog.currentTopic.toLowerCase();
+    const matchIdx = lang.topics.findIndex((t) => t.title.toLowerCase().includes(needle) || needle.includes(t.title.toLowerCase()));
+    if (matchIdx !== -1) return matchIdx;
+  }
+  // Fallback: first in-progress topic, then first not-started after the last mastered.
+  const inProg = lang.topics.findIndex((t) => prog.topics?.find((p) => p.id === t.id)?.status === 'in-progress');
+  if (inProg !== -1) return inProg;
+  const lastMastered = (() => {
+    for (let i = lang.topics.length - 1; i >= 0; i--) {
+      const topic = lang.topics[i];
+      if (topic === undefined) continue;
+      if (prog.topics?.find((p) => p.id === topic.id)?.status === 'mastered') return i;
+    }
+    return -1;
+  })();
+  return Math.min(lastMastered + 1, lang.topics.length - 1);
+}
+
+function renderChapterStrip(): void {
+  const lang = getLanguage(activeLang);
+  const folio = el('folio');
+  const name = el('chapterName');
+  const meta = el('chapterMeta');
+
+  if (progress === null) {
+    folio.textContent = 'Pg. —';
+    name.textContent = 'A blank page';
+    meta.textContent = `awaiting first ${lang.name} session`;
+    return;
+  }
+
+  const idx = findCurrentTopicIndex(progress, lang);
+  const topic = idx >= 0 ? lang.topics[idx] : undefined;
+  folio.textContent = topic !== undefined ? `Ch. ${pad2(idx + 1)}` : 'Pg. —';
+  name.textContent = progress.currentTopic ?? topic?.title ?? 'In progress';
+
+  const sessionN = progress.sessionCount ?? 1;
+  const last = progress.lastSeen ?? '';
+  meta.textContent = last
+    ? `session ${pad2(sessionN)} · last seen ${last}`
+    : `session ${pad2(sessionN)}`;
+}
+
+function renderLanguageRail(): void {
+  for (const id of LANGUAGE_IDS) {
+    const tab = document.querySelector<HTMLButtonElement>(`.lang-tab[data-lang="${id}"]`);
+    const meta = document.querySelector<HTMLSpanElement>(`[data-lang-meta="${id}"]`);
+    if (tab !== null) tab.classList.toggle('is-active', id === activeLang);
+    if (meta === null) continue;
+    const langProg = id === activeLang ? progress : storageGet<Progress>(progressKey(id));
+    const langDef = LANGUAGES[id];
+    if (langProg === null) {
+      meta.textContent = `${pad2(0)} · ${pad2(langDef.topics.length)}`;
+    } else {
+      const mastered = (langProg.topics ?? []).filter((t) => t.status === 'mastered').length;
+      meta.textContent = `${pad2(mastered)} · ${pad2(langDef.topics.length)}`;
+    }
+  }
+}
+
+function renderFileSpec(): void {
+  const spec = el('fileSpec');
+  const lang = getLanguage(activeLang);
+  const map: Record<LanguageId, string> = {
+    rust: 'edition 2021 · stable',
+    cpp: 'gcc · c++23',
+    python: 'pyodide · 3.12',
+  };
+  spec.textContent = map[lang.id];
+}
+
 // ── Progress badge ────────────────────────────────────────────────────────
 function updateProgBadge(text: string | null): void {
   const badge = el('progBadge');
   if (text !== null) {
     badge.textContent = text;
-    badge.style.display = 'inline';
+    badge.style.display = 'inline-block';
   } else {
     badge.style.display = 'none';
   }
@@ -79,11 +188,15 @@ function updateProgCount(): void {
   const lang = getLanguage(activeLang);
   const mastered = (progress?.topics ?? []).filter((t) => t.status === 'mastered').length;
   const progCount = el('progCount');
-  progCount.textContent = ` ${mastered}/${lang.topics.length}`;
-  progCount.style.display = mastered > 0 ? 'inline' : 'none';
+  if (mastered > 0) {
+    progCount.textContent = `${pad2(mastered)} · ${pad2(lang.topics.length)}`;
+    progCount.style.display = 'inline';
+  } else {
+    progCount.style.display = 'none';
+  }
 }
 
-// ── Progress tab renderer ─────────────────────────────────────────────────
+// ── Lesson plan renderer ──────────────────────────────────────────────────
 function progSectionLabel(text: string): HTMLDivElement {
   const d = div('prog-section-label');
   d.textContent = text;
@@ -96,86 +209,118 @@ function renderProgressTab(): void {
   scroll.textContent = '';
 
   if (progress === null) {
-    const p = document.createElement('p');
-    p.className = 'text-muted text-[13px] py-5 text-center';
-    p.textContent = `No ${lang.name} progress recorded yet. Complete an evaluation to begin tracking.`;
-    scroll.appendChild(p);
+    const empty = div('prog-empty');
+    const glyph = span('§', 'empty-glyph');
+    empty.appendChild(glyph);
+    empty.appendChild(document.createTextNode(`No ${lang.name} progress recorded yet.\nFinish an evaluation to begin tracking.`));
+    scroll.appendChild(empty);
     return;
   }
 
-  // Overall progress
-  const overallSection = div('mb-4');
-  overallSection.appendChild(progSectionLabel(`${lang.name} progress`));
+  // ── Summary ──
+  const overall = div('prog-section');
+  overall.appendChild(progSectionLabel(`${lang.name} progress`));
+
   const done = (progress.topics ?? []).filter((t) => t.status === 'mastered').length;
-  const pct = Math.round((done / lang.topics.length) * 100);
-  const countLine = div('text-[13px] mb-1.5');
-  countLine.textContent = `${done} of ${lang.topics.length} topics mastered`;
-  overallSection.appendChild(countLine);
+  const total = lang.topics.length;
+  const pct = Math.round((done / total) * 100);
+
+  const summary = div('prog-summary-line');
+  summary.appendChild(document.createTextNode('You have mastered '));
+  const doneStrong = document.createElement('strong');
+  doneStrong.textContent = String(done);
+  summary.appendChild(doneStrong);
+  summary.appendChild(document.createTextNode(' of '));
+  const totalStrong = document.createElement('strong');
+  totalStrong.textContent = String(total);
+  summary.appendChild(totalStrong);
+  summary.appendChild(document.createTextNode(' topics — '));
+  const pctEm = document.createElement('em');
+  pctEm.textContent = `${pct}%`;
+  summary.appendChild(pctEm);
+  summary.appendChild(document.createTextNode('.'));
+  overall.appendChild(summary);
+
   const track = div('prog-bar-track');
   const fill = div('prog-bar-fill');
   fill.style.width = `${pct}%`;
   track.appendChild(fill);
-  overallSection.appendChild(track);
-  if (progress.lastSeen) {
-    const lastSeen = div('text-[11px] text-muted mt-1');
-    lastSeen.textContent = `Last session: ${progress.lastSeen}`;
-    overallSection.appendChild(lastSeen);
-  }
-  scroll.appendChild(overallSection);
+  overall.appendChild(track);
 
-  // Lesson plan
-  const planSection = div('mb-4');
+  const barMeta = div('prog-bar-meta');
+  barMeta.appendChild(span(`session ${pad2(progress.sessionCount ?? 1)}`));
+  barMeta.appendChild(span(progress.lastSeen ? `last seen ${progress.lastSeen}` : ''));
+  overall.appendChild(barMeta);
+  scroll.appendChild(overall);
+
+  // ── Topics ──
+  const planSection = div('prog-section');
   planSection.appendChild(progSectionLabel('Lesson plan'));
-  for (const t of lang.topics) {
-    const status = progress.topics?.find((x) => x.id === t.id)?.status ?? 'not-started';
-    const dotCls = status === 'mastered' ? 'dot-done' : status === 'in-progress' ? 'dot-active' : 'dot-empty';
-    const dotIcon = status === 'mastered' ? '✓' : status === 'in-progress' ? '→' : '';
-    const titleCls = status === 'mastered' ? 'done' : status === 'in-progress' ? 'active' : 'empty';
+
+  lang.topics.forEach((t, i) => {
+    const status = progress?.topics?.find((x) => x.id === t.id)?.status ?? 'not-started';
     const isCurrent =
-      progress.currentTopic !== undefined &&
+      progress?.currentTopic !== undefined &&
       (t.title === progress.currentTopic || t.title.toLowerCase().includes(progress.currentTopic.toLowerCase()));
 
-    const row = div('flex items-center gap-2 py-1');
-    const dot = div('topic-dot', dotCls);
-    dot.textContent = dotIcon;
-    row.appendChild(dot);
+    const row = div('topic-row');
+    row.appendChild(span(pad2(i + 1), 'topic-num'));
+
+    const glyphCls = status === 'mastered' ? 'is-mastered' : status === 'in-progress' ? 'is-active' : 'is-empty';
+    const glyph = div('topic-glyph', glyphCls);
+    if (status === 'mastered') glyph.textContent = '✓';
+    row.appendChild(glyph);
+
+    const titleCls = status === 'mastered' ? 'is-mastered' : status === 'in-progress' ? 'is-active' : 'is-empty';
     row.appendChild(span(t.title, 'topic-title', titleCls));
+
     if (isCurrent && status === 'in-progress') {
-      row.appendChild(span('← here', 'text-[10px] text-muted'));
+      row.appendChild(span('here', 'topic-here'));
     }
+
     planSection.appendChild(row);
-  }
+  });
   scroll.appendChild(planSection);
 
-  // Strengths
-  const strengthsSection = div('mb-4');
+  // ── Going well ──
+  const strengthsSection = div('prog-section');
   strengthsSection.appendChild(progSectionLabel('Going well'));
-  const strengthsContainer = div();
+  const strengthsRow = div('note-row');
   if (progress.strengths && progress.strengths.length > 0) {
-    for (const s of progress.strengths) strengthsContainer.appendChild(span(`+ ${s}`, 'note-pill'));
+    for (const s of progress.strengths) {
+      const p = div('note-pill', 'note-pill--good');
+      p.appendChild(span('+', 'pill-marker'));
+      p.appendChild(document.createTextNode(s));
+      strengthsRow.appendChild(p);
+    }
   } else {
-    strengthsContainer.appendChild(span('None recorded yet', 'text-muted text-[12.5px]'));
+    strengthsRow.appendChild(span('Nothing recorded yet', 'muted'));
   }
-  strengthsSection.appendChild(strengthsContainer);
+  strengthsSection.appendChild(strengthsRow);
   scroll.appendChild(strengthsSection);
 
-  // Struggles
-  const strugglesSection = div('mb-4');
+  // ── Needs work ──
+  const strugglesSection = div('prog-section');
   strugglesSection.appendChild(progSectionLabel('Needs work'));
-  const strugglesContainer = div();
+  const strugglesRow = div('note-row');
   if (progress.struggles && progress.struggles.length > 0) {
-    for (const s of progress.struggles) strugglesContainer.appendChild(span(`! ${s}`, 'note-pill'));
+    for (const s of progress.struggles) {
+      const p = div('note-pill', 'note-pill--bad');
+      p.appendChild(span('!', 'pill-marker'));
+      p.appendChild(document.createTextNode(s));
+      strugglesRow.appendChild(p);
+    }
   } else {
-    strugglesContainer.appendChild(span('None recorded yet', 'text-muted text-[12.5px]'));
+    strugglesRow.appendChild(span('Nothing recorded yet', 'muted'));
   }
-  strugglesSection.appendChild(strugglesContainer);
+  strugglesSection.appendChild(strugglesRow);
   scroll.appendChild(strugglesSection);
 
-  // Notes
+  // ── Notes ──
   if (progress.overallNotes) {
-    const notesSection = div('mb-4');
-    notesSection.appendChild(progSectionLabel('Notes'));
-    const notesText = div('text-[12.5px] leading-relaxed text-muted');
+    const notesSection = div('prog-section');
+    notesSection.appendChild(progSectionLabel('Marginalia'));
+    const notesText = div('prog-notes');
     notesText.textContent = progress.overallNotes;
     notesSection.appendChild(notesText);
     scroll.appendChild(notesSection);
@@ -185,9 +330,9 @@ function renderProgressTab(): void {
 // ── Message rendering ─────────────────────────────────────────────────────
 function appendMsg(role: 'user' | 'assistant', text: string): void {
   const msgList = el('msgList');
-  const bl = div('mb-[14px]');
+  const bl = div('msg-block');
   const lbl = div('msg-label');
-  lbl.textContent = role === 'user' ? 'You' : 'Tutor';
+  lbl.textContent = role === 'user' ? 'you' : 'tutor';
   const body = div(role === 'user' ? 'msg-you' : 'msg-ai');
   body.appendChild(role === 'user' ? renderPlainWithFences(text) : renderMarkdown(text));
   bl.appendChild(lbl);
@@ -199,11 +344,11 @@ function appendMsg(role: 'user' | 'assistant', text: string): void {
 let thinkingEl: HTMLElement | null = null;
 
 function showThinking(): void {
-  const wrapper = div('mb-[14px]');
+  const wrapper = div('msg-block');
   const lbl = div('msg-label');
-  lbl.textContent = 'Tutor';
+  lbl.textContent = 'tutor';
   const body = div('msg-ai');
-  body.appendChild(span('···', 'thinking', 'text-[20px]', 'tracking-[4px]'));
+  body.appendChild(span('···', 'thinking'));
   wrapper.appendChild(lbl);
   wrapper.appendChild(body);
   thinkingEl = wrapper;
@@ -224,9 +369,9 @@ interface StreamingBubble {
 
 function appendMsgStreaming(): StreamingBubble {
   const msgList = el('msgList');
-  const bl = div('mb-[14px]');
+  const bl = div('msg-block');
   const lbl = div('msg-label');
-  lbl.textContent = 'Tutor';
+  lbl.textContent = 'tutor';
   const body = div('msg-ai');
   bl.appendChild(lbl);
   bl.appendChild(body);
@@ -265,27 +410,42 @@ function setSendingState(sending: boolean): void {
   el<HTMLButtonElement>('evalBtn').disabled = sending || history.length === 0;
 }
 
-// ── Start screen (per-language, dynamic) ──────────────────────────────────
+// ── Start screen ──────────────────────────────────────────────────────────
 function showStartScreen(): void {
   const msgList = el('msgList');
   const lang = getLanguage(activeLang);
 
-  const screen = div('flex flex-col items-center justify-center h-full gap-[13px] text-center px-5');
+  const screen = div('start-screen');
   screen.id = 'startScreen';
 
-  const icon = document.createElement('i');
-  icon.className = 'ti ti-terminal-2 text-[44px] text-muted';
-  icon.setAttribute('aria-hidden', 'true');
-  screen.appendChild(icon);
+  const folio = div('start-folio');
+  folio.textContent = `vol. ${pad2(LANGUAGE_IDS.indexOf(lang.id) + 1)} · ${lang.name.toLowerCase()}`;
+  screen.appendChild(folio);
 
-  const startMsg = div('text-muted text-[13.5px] leading-relaxed whitespace-pre-line');
-  startMsg.textContent = `Learn ${lang.name} with an interactive AI tutor.\nWrite code, run it, get evaluated.`;
-  screen.appendChild(startMsg);
+  const rule = div('start-rule');
+  screen.appendChild(rule);
+
+  const glyph = div('start-glyph');
+  glyph.textContent = '§';
+  screen.appendChild(glyph);
+
+  const title = document.createElement('h2');
+  title.className = 'start-title';
+  title.textContent = `A new ${lang.name} reader.`;
+  screen.appendChild(title);
+
+  const body = div('start-body');
+  body.textContent = `An interactive manual. Write code in the workshop, run it, and submit your work for review. The tutor adapts to where you are.`;
+  screen.appendChild(body);
 
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'btn py-2 px-5 text-[13px]';
-  button.textContent = `Start ${lang.name} session →`;
+  button.className = 'start-btn';
+  button.appendChild(document.createTextNode(`Open the book`));
+  const arrow = document.createElement('i');
+  arrow.className = 'ti ti-arrow-narrow-right';
+  arrow.setAttribute('aria-hidden', 'true');
+  button.appendChild(arrow);
   button.addEventListener('click', () => void startSession());
   screen.appendChild(button);
 
@@ -299,7 +459,7 @@ function renderChatView(): void {
   if (history.length > 0) {
     for (const msg of history) appendMsg(msg.role, msg.content);
     el('inputRow').style.display = 'flex';
-    el('resetBtn').style.display = 'inline-block';
+    el('resetBtn').style.display = 'inline-flex';
   } else {
     showStartScreen();
     el('inputRow').style.display = 'none';
@@ -312,14 +472,14 @@ function clearOutput(): void {
   const outputPre = el<HTMLPreElement>('outputPre');
   outputPre.style.color = '';
   outputPre.textContent = '';
-  outputPre.appendChild(span('Run your code to see output here', 'text-muted'));
+  outputPre.appendChild(span('Run the program to capture its output here.', 'muted'));
 }
 
 // ── Progress extraction ───────────────────────────────────────────────────
 async function extractProgress(): Promise<void> {
   if (extractionQueued) return;
   extractionQueued = true;
-  updateProgBadge('Updating…');
+  updateProgBadge('Updating');
 
   const lang = getLanguage(activeLang);
   const langWhenStarted = activeLang;
@@ -327,7 +487,6 @@ async function extractProgress(): Promise<void> {
   try {
     const extracted = await fetchProgressExtraction(history, lang.topics);
     if (extracted === null) return;
-    // If user switched language during extraction, abandon — the result is for the wrong language
     if (langWhenStarted !== activeLang) return;
 
     const mergedTopics: TopicStatus[] = lang.topics.map((t) => {
@@ -347,6 +506,8 @@ async function extractProgress(): Promise<void> {
     storageSet(progressKey(activeLang), progress);
     currentSystemPrompt = buildSystem(progress, getLanguage(activeLang));
     renderProgressTab();
+    renderChapterStrip();
+    renderLanguageRail();
     updateProgCount();
   } catch (e) {
     console.error('Progress extraction error:', e);
@@ -358,7 +519,6 @@ async function extractProgress(): Promise<void> {
 
 // ── Session control ───────────────────────────────────────────────────────
 async function streamReply(): Promise<string> {
-  // Wrap in an object so TS tracks the property type, not a closure-narrowed local.
   const state = { bubble: null as StreamingBubble | null };
   const reply = await callClaude(history, currentSystemPrompt, (chunk) => {
     if (state.bubble === null) {
@@ -368,7 +528,6 @@ async function streamReply(): Promise<string> {
     state.bubble.onDelta(chunk);
   });
   if (state.bubble === null) {
-    // No deltas arrived (error / empty stream) — render whatever we got as a normal message.
     removeThinking();
     appendMsg('assistant', reply);
   } else {
@@ -380,7 +539,7 @@ async function streamReply(): Promise<string> {
 async function startSession(): Promise<void> {
   document.getElementById('startScreen')?.remove();
   el('inputRow').style.display = 'flex';
-  el('resetBtn').style.display = 'inline-block';
+  el('resetBtn').style.display = 'inline-flex';
   setSendingState(true);
 
   const lang = getLanguage(activeLang);
@@ -424,14 +583,13 @@ async function runActiveCode(): Promise<void> {
     if (activeLang === langAtStart) outputPre.textContent = msg;
   });
 
-  // Bail if user switched language while we were running
   if (activeLang !== langAtStart) {
     runBtn.disabled = false;
     el('runLabel').textContent = 'Run';
     return;
   }
 
-  outputPre.style.color = result.ok ? '' : 'var(--color-danger)';
+  outputPre.style.color = result.ok ? '' : 'var(--danger)';
   outputPre.textContent = result.output;
   runBtn.disabled = false;
   el('runLabel').textContent = 'Run';
@@ -441,7 +599,7 @@ async function evaluateCode(): Promise<void> {
   const lang = getLanguage(activeLang);
   const code = editor.getContent().trim();
   const out = el<HTMLPreElement>('outputPre').textContent ?? '';
-  const hasOut = out && !out.includes('Run your code') && out !== 'Compiling…' && out !== 'Running…';
+  const hasOut = out && !out.includes('Run the program') && out !== 'Compiling…' && out !== 'Running…';
   const msg = `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\`\n\n[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\``;
   await sendMessage(msg);
   void extractProgress();
@@ -451,8 +609,8 @@ async function evaluateCode(): Promise<void> {
 function switchTab(tab: 'chat' | 'progress'): void {
   el('chatView').style.display = tab === 'chat' ? 'flex' : 'none';
   el('progressView').style.display = tab === 'progress' ? 'flex' : 'none';
-  el('tabChatBtn').classList.toggle('active', tab === 'chat');
-  el('tabProgBtn').classList.toggle('active', tab === 'progress');
+  el('tabChatBtn').classList.toggle('is-active', tab === 'chat');
+  el('tabProgBtn').classList.toggle('is-active', tab === 'progress');
 }
 
 async function resetCurrentLanguage(): Promise<void> {
@@ -468,14 +626,15 @@ async function resetCurrentLanguage(): Promise<void> {
 function loadLanguageState(id: LanguageId): void {
   activeLang = id;
   storageSet(ACTIVE_LANG_KEY, activeLang);
+  document.documentElement.setAttribute('data-lang', activeLang);
+
   history = storageGet<Message[]>(historyKey(activeLang)) ?? [];
   progress = storageGet<Progress>(progressKey(activeLang));
   const lang = getLanguage(activeLang);
   currentSystemPrompt = buildSystem(progress, lang);
 
   el('fileLabel').textContent = lang.fileName;
-  const select = el<HTMLSelectElement>('langSelect');
-  if (select.value !== activeLang) select.value = activeLang;
+  renderFileSpec();
 
   const storedCode = storageGet<string>(codeKey(activeLang));
   editor.setContent(storedCode ?? lang.starterCode);
@@ -484,12 +643,13 @@ function loadLanguageState(id: LanguageId): void {
   clearOutput();
   renderChatView();
   renderProgressTab();
+  renderChapterStrip();
+  renderLanguageRail();
   updateProgCount();
 }
 
 function setLanguage(newLang: LanguageId): void {
   if (newLang === activeLang) return;
-  // Save current language's editor content
   storageSet(codeKey(activeLang), editor.getContent());
   loadLanguageState(newLang);
 }
@@ -549,7 +709,6 @@ function loadInitialActiveLang(): LanguageId {
   return DEFAULT_LANGUAGE;
 }
 
-// ── Editor persistence: debounced save to localStorage on edit ────────────
 function makeDebouncedCodeSaver(): (doc: string) => void {
   let saveTimer: number | null = null;
   return (doc: string) => {
@@ -573,14 +732,19 @@ el<HTMLTextAreaElement>('chatInput').addEventListener('keydown', (e: KeyboardEve
 el('runBtn').addEventListener('click', () => void runActiveCode());
 el('evalBtn').addEventListener('click', () => void evaluateCode());
 el('resetBtn').addEventListener('click', () => void resetCurrentLanguage());
-el<HTMLSelectElement>('langSelect').addEventListener('change', (e) => {
-  const target = e.target as HTMLSelectElement;
-  setLanguage(target.value as LanguageId);
-});
+el('themeToggle').addEventListener('click', toggleTheme);
+
+for (const tab of document.querySelectorAll<HTMLButtonElement>('.lang-tab')) {
+  tab.addEventListener('click', () => {
+    const id = tab.getAttribute('data-lang') as LanguageId | null;
+    if (id !== null) setLanguage(id);
+  });
+}
 
 initResize();
 
 // ── Init ──────────────────────────────────────────────────────────────────
+applyStoredTheme();
 migrateOldStorage();
 const initialLang = loadInitialActiveLang();
 const initialLangObj = getLanguage(initialLang);
