@@ -281,11 +281,24 @@ function destroyWorkspace(workspaceDir) {
 // ── Session lifecycle ───────────────────────────────────────────────────────
 
 /**
+ * Compute a `file:///` URI for an absolute on-disk path. Windows paths need
+ * forward-slash normalization and a leading slash before the drive letter
+ * (`file:///X:/foo/bar` not `file://X:\foo\bar`).
+ *
+ * @param {string} absPath
+ * @returns {string}
+ */
+function pathToFileUri(absPath) {
+  const normalized = absPath.replaceAll('\\', '/');
+  return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`;
+}
+
+/**
  * Spawn an LSP child for the given language and return a sessionId. The child
  * is alive but has no WS attached yet — call attachWebSocket() to wire it up.
  *
  * @param {string} lang
- * @returns {Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>}
+ * @returns {Promise<{ ok: true; sessionId: string; mainFileUri: string; rootUri: string } | { ok: false; error: string }>}
  */
 async function startSession(lang) {
   const config = LSP_CONFIG[lang];
@@ -378,7 +391,12 @@ async function startSession(lang) {
     return { ok: false, error: `lsp exited immediately with code ${proc.exitCode}` };
   }
 
-  return { ok: true, sessionId };
+  return {
+    ok: true,
+    sessionId,
+    mainFileUri: pathToFileUri(join(workspaceDir, config.mainFile)),
+    rootUri: pathToFileUri(workspaceDir),
+  };
 }
 
 /**

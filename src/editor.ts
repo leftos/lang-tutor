@@ -30,6 +30,8 @@ import { tags as t } from '@lezer/highlight';
 import { csharp } from '@replit/codemirror-lang-csharp';
 
 import { fetchDiagnostics, fetchFormatted } from './lint';
+import { connectLsp, type LspClient } from './lspClient';
+import { applyLspDiagnostics, lspCompletionExtension, lspDocSyncExtension, lspHoverExtension, lspPositionToOffset } from './lspEditor';
 import type { SingleBufferLanguageId } from './types';
 
 const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
@@ -129,14 +131,51 @@ export interface TutorEditor {
   setLanguage(lang: SingleBufferLanguageId): void;
   format(): Promise<void>;
   destroy(): void;
+  /** Return the active LSP client, or null if LSP isn't connected for the current language. */
+  getLspClient(): LspClient | null;
 }
 
 export function createEditor(opts: EditorOptions): TutorEditor {
   const langCompartment = new Compartment();
   const linterCompartment = new Compartment();
+  const lspExtCompartment = new Compartment();
   let currentLang: SingleBufferLanguageId = opts.lang;
 
+  // The LSP client lifecycle runs in parallel to the editor's lifecycle.
+  // `lspClient` is mutated as we connect / disconnect; closures captured in
+  // CodeMirror extensions read it via `getLspClient`.
+  let lspClient: LspClient | null = null;
+  let lspGeneration = 0;
+  const getLspClient = (): LspClient | null => lspClient;
+
+  const lspExtensionsActive = [lspCompletionExtension(getLspClient), lspHoverExtension(getLspClient), lspDocSyncExtension(getLspClient)];
+
+  /**
+   * Try to apply an LSP TextEdit to the current view. Returns true if any edit
+   * was applied. Edits are applied in document order (LSP guarantees no overlap
+   * but doesn't guarantee ordering on the wire).
+   */
+  const applyLspTextEdits = (edits: ReturnType<NonNullable<LspClient['formatting']>> extends Promise<infer R> ? R : never): boolean => {
+    if (edits === null || edits.length === 0) return false;
+    const sorted = [...edits].sort((a, b) => {
+      if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
+      return a.range.start.character - b.range.start.character;
+    });
+    const changes = sorted.map((e) => ({
+      from: lspPositionToOffset(view.state, e.range.start),
+      to: lspPositionToOffset(view.state, e.range.end),
+      insert: e.newText,
+    }));
+    view.dispatch({ changes });
+    return true;
+  };
+
   const formatNow = async (): Promise<void> => {
+    // Prefer the LSP formatter (clangd, rust-analyzer, etc.) when available.
+    if (lspClient !== null && lspClient.isOpen()) {
+      const edits = await lspClient.formatting();
+      if (applyLspTextEdits(edits)) return;
+    }
     const code = view.state.doc.toString();
     const formatted = await fetchFormatted(currentLang, code);
     if (formatted === null) return;
@@ -163,7 +202,6 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
-    autocompletion(),
     rectangularSelection(),
     highlightActiveLine(),
     highlightSelectionMatches(),
@@ -192,6 +230,10 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     tutorTheme,
     langCompartment.of(langExtension[opts.lang]()),
     linterCompartment.of(lintSource),
+    // LSP-aware extensions live in their own compartment so we can swap between
+    // the default `autocompletion()` and the LSP-overridden version when a
+    // language server connects / disconnects.
+    lspExtCompartment.of(autocompletion()),
   ];
 
   const view = new EditorView({
@@ -199,22 +241,93 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     state: EditorState.create({ doc: opts.initialDoc, extensions: baseExtensions }),
   });
 
+  /**
+   * (Re)connect the LSP for the given language. Dispose any previously
+   * connected client. Mid-flight language switches are guarded by `generation`.
+   */
+  const startLspForLang = async (lang: SingleBufferLanguageId): Promise<void> => {
+    const generation = ++lspGeneration;
+
+    // Tear down the previous client. Reconfigure compartments back to defaults
+    // so we don't leak diagnostics from the old language while we (maybe) wait
+    // for the new one to connect.
+    if (lspClient !== null) {
+      const old = lspClient;
+      lspClient = null;
+      void old.dispose();
+    }
+    view.dispatch({
+      effects: [linterCompartment.reconfigure(lintSource), lspExtCompartment.reconfigure(autocompletion())],
+    });
+
+    let client: LspClient | null = null;
+    try {
+      client = await connectLsp(lang);
+    } catch (e) {
+      console.warn(`[lsp:${lang}] connect threw:`, e);
+    }
+    if (client === null) return;
+
+    // The user may have switched away while we were connecting. Drop this
+    // client without wiring it up.
+    if (generation !== lspGeneration || lang !== currentLang) {
+      void client.dispose();
+      return;
+    }
+
+    lspClient = client;
+
+    // Push the current doc as the initial open.
+    client.didOpen(view.state.doc.toString());
+
+    // Diagnostics: replace the polling linter with LSP-pushed setDiagnostics.
+    client.onDiagnostics((diags) => {
+      if (lspClient !== client) return; // stale
+      applyLspDiagnostics(view, diags);
+    });
+
+    view.dispatch({
+      effects: [
+        // Disable the polling linter — LSP pushes diagnostics directly.
+        linterCompartment.reconfigure([]),
+        lspExtCompartment.reconfigure(lspExtensionsActive),
+      ],
+    });
+  };
+
+  // Kick off LSP connect for the initial language. Fire-and-forget; the editor
+  // is fully usable in fall-soft (poll-based) mode while we connect.
+  void startLspForLang(opts.lang);
+
   return {
     getContent(): string {
       return view.state.doc.toString();
     },
     setContent(text: string): void {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+      // Sync to LSP so diagnostics reflect the new doc immediately (e.g., when
+      // resetting starter code or pasting).
+      if (lspClient !== null && lspClient.isOpen()) {
+        lspClient.didChange(text);
+      }
     },
     setLanguage(lang: SingleBufferLanguageId): void {
       if (lang === currentLang) return;
       currentLang = lang;
       view.dispatch({ effects: langCompartment.reconfigure(langExtension[lang]()) });
-      view.dispatch({ effects: linterCompartment.reconfigure(lintSource) });
+      void startLspForLang(lang);
     },
     format: formatNow,
     destroy(): void {
+      const generation = ++lspGeneration;
+      if (lspClient !== null) {
+        const old = lspClient;
+        lspClient = null;
+        void old.dispose();
+      }
+      void generation; // silence unused-var lint when destroy isn't followed by reuse
       view.destroy();
     },
+    getLspClient: getLspClient,
   };
 }

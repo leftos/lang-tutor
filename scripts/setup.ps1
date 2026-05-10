@@ -11,8 +11,8 @@
     Node 20 LTS  (OpenJS.NodeJS.LTS)
     pnpm         (pnpm.pnpm)
     Rust         (Rustlang.Rustup) — gives rustc, cargo, rustfmt
-    Python 3.12  (Python.Python.3.12)
-    LLVM         (LLVM.LLVM) — gives clang, clang-format
+    Python 3.13  (Python.Python.3.13)
+    LLVM         (LLVM.LLVM) — gives clang, clang-format, clangd
     black        (pip install --user)
 
 .PARAMETER NoBrowser
@@ -210,14 +210,14 @@ if (-not $SkipInstall) {
         Write-Warn-Local "rustc still not on PATH — live Rust checking will be disabled."
     }
 
-    Write-Step "Python 3.12"
+    Write-Step "Python 3.13"
     if (Test-Tool 'python') {
         $pyVer = (& python --version) 2>&1
         Write-Skip "$pyVer already installed"
     } elseif (Test-Tool 'py') {
         Write-Skip "py launcher already installed: $((& py --version) 2>&1)"
     } else {
-        Install-WingetPackage -Id 'Python.Python.3.12' -DisplayName 'Python 3.12'
+        Install-WingetPackage -Id 'Python.Python.3.13' -DisplayName 'Python 3.13'
     }
 
     Write-Step "LLVM (clang + clang-format)"
@@ -246,6 +246,11 @@ if (-not $SkipInstall) {
         Write-Ok "clang $((& clang --version | Select-Object -First 1))"
     } else {
         Write-Warn-Local "clang still not on PATH — live C++ checking will be disabled."
+    }
+    if (Test-Tool 'clangd') {
+        Write-Ok "clangd $((& clangd --version | Select-Object -First 1))"
+    } else {
+        Write-Warn-Local "clangd still not on PATH — LSP-based C++ tutoring will be disabled (fall-soft to clang -fsyntax-only)."
     }
 
     Write-Step "black (Python formatter)"

@@ -202,7 +202,7 @@ function renderFileSpec(): void {
   const map: Record<LanguageId, string> = {
     rust: 'edition 2021 · stable',
     cpp: 'gcc · c++23',
-    python: 'pyodide · 3.12',
+    python: 'pyodide · 3.13',
     csharp: 'c# 12 · run in vs/rider',
     web: `vite · http://${window.location.hostname || 'localhost'}:5180`,
   };
@@ -1085,9 +1085,43 @@ async function evaluateCode(): Promise<void> {
   const code = editor.getContent().trim();
   const out = el<HTMLPreElement>('outputPre').textContent ?? '';
   const hasOut = out && !out.includes('Run the program') && out !== 'Compiling…' && out !== 'Running…';
-  const msg = `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\`\n\n[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\``;
+  const lspBlock = buildLspBlock();
+  const msg =
+    `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\`\n\n` +
+    `[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\`` +
+    (lspBlock !== null ? `\n\n${lspBlock}` : '');
   await sendMessage(msg);
   void extractProgress();
+}
+
+/**
+ * Build an `[LSP]` block from the active language's LSP diagnostics, or null
+ * if no client is connected or there are no diagnostics. Errors come first,
+ * then warnings, then info — capped at 30 lines so a flood of info-level hints
+ * can't drown out the [CODE] block in Claude's context.
+ */
+function buildLspBlock(): string | null {
+  const client = editor.getLspClient();
+  if (client === null) return null;
+  const diagnostics = client.getDiagnostics();
+  if (diagnostics.length === 0) return null;
+  const severityRank = (s: number | undefined): number => (s === 1 ? 0 : s === 2 ? 1 : s === 3 ? 2 : 3);
+  const sorted = [...diagnostics].sort((a, b) => {
+    const r = severityRank(a.severity) - severityRank(b.severity);
+    if (r !== 0) return r;
+    if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
+    return a.range.start.character - b.range.start.character;
+  });
+  const labelFor = (s: number | undefined): string => (s === 1 ? 'error' : s === 2 ? 'warning' : s === 3 ? 'info' : 'hint');
+  const lines = sorted.slice(0, 30).map((d) => {
+    const line = d.range.start.line + 1;
+    const col = d.range.start.character + 1;
+    const code = d.code !== undefined ? ` [${d.code}]` : '';
+    const source = d.source !== undefined && d.source.length > 0 ? `${d.source}: ` : '';
+    return `  main:${line}:${col} ${labelFor(d.severity)}${code} — ${source}${d.message}`;
+  });
+  const overflow = sorted.length > lines.length ? `\n  …${sorted.length - lines.length} more diagnostics` : '';
+  return `[LSP]\ndiagnostics:\n${lines.join('\n')}${overflow}`;
 }
 
 function fenceLangFromPath(path: string): string {
