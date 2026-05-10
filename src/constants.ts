@@ -122,12 +122,11 @@ const PYTHON: Language = {
 };
 
 const CSHARP: Language = {
-  kind: 'single',
+  kind: 'project',
   id: 'csharp',
   name: 'C#',
-  fileName: 'Program.cs',
-  fenceLang: 'csharp',
-  starterCode: `Console.WriteLine("Hello, world!");`,
+  scaffoldDir: 'csharp',
+  runtime: { kind: 'desktop-process' },
   topics: [
     { id: 'modern-syntax', title: 'Top-level statements & primary constructors' },
     { id: 'nullable', title: 'Nullable reference types & null-handling' },

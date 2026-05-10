@@ -566,13 +566,33 @@ function setWorkshopMode(mode: 'single' | 'project'): void {
   el('projectWorkspace').style.display = isProject ? 'flex' : 'none';
 }
 
-// ── Lazy project UI (created on first web activation, kept across switches) ─
+// ── Lazy project UI (rebuilt when the active project language changes) ────
 let projectEditorInstance: ProjectEditor | null = null;
 let projectFileTree: FileTreeHandle | null = null;
-// Held so M5 can query the iframe for DOM snapshots; not used yet.
 let projectPreviewInstance: ProjectPreview | null = null;
+let projectFsUnsub: (() => void) | null = null;
+let currentProjectUILang: LanguageId | null = null;
 export function _getProjectPreview(): ProjectPreview | null {
   return projectPreviewInstance;
+}
+
+function destroyProjectUI(): void {
+  projectFsUnsub?.();
+  projectFsUnsub = null;
+  projectEditorInstance?.destroy();
+  projectPreviewInstance?.destroy();
+  projectEditorInstance = null;
+  projectPreviewInstance = null;
+  projectFileTree = null;
+  // Clear DOM hosts so the next createX() builds into clean containers.
+  el('projTree').textContent = '';
+  el('projTabs').textContent = '';
+  el('projEditor').textContent = '';
+  el('projStatus').textContent = '';
+  el('projPreviewBody').textContent = '';
+  el('projPreviewTabs').textContent = '';
+  el('projPreviewStatus').textContent = 'stopped';
+  currentProjectUILang = null;
 }
 
 async function refreshTree(id: LanguageId): Promise<void> {
@@ -658,13 +678,15 @@ function handleFsEvent(id: LanguageId, event: FsWatchEvent): void {
 
 function ensureProjectUI(id: LanguageId, lang: Language): void {
   if (lang.kind !== 'project') return;
-  if (projectEditorInstance !== null && projectFileTree !== null) return;
+  if (currentProjectUILang === id) return;
+  if (currentProjectUILang !== null) destroyProjectUI();
 
   const state = projectStates.get(id) ?? loadProjectStateFromStorage(id);
   projectStates.set(id, state);
 
   projectFileTree = createFileTree(el('projTree'), {
     activePath: state.activeTab,
+    headerLabel: `projects/${lang.scaffoldDir}/`,
     onOpenFile: (path) => {
       void projectEditorInstance?.openFile(path);
       projectFileTree?.setActive(path);
@@ -699,12 +721,19 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
     },
   });
 
-  // Subscribe to filesystem events from the backend chokidar watcher.
-  // The EventSource auto-reconnects on disconnect; we never tear this down
-  // for the life of the page (the workspace is the only owner).
-  subscribeFsEvents(id, (event) => handleFsEvent(id, event));
+  // Subscribe to filesystem events for this lang's chokidar watcher.
+  // EventSource auto-reconnects; the unsub is held so we close it cleanly
+  // when the user switches to a different project language.
+  projectFsUnsub = subscribeFsEvents(id, (event) => handleFsEvent(id, event));
 
-  if (lang.kind === 'project') {
+  // The preview pane is iframe-shaped (web-vite) for now. Desktop-process
+  // languages get a hidden-pane stub in M2; M3 wires their Output / Build
+  // errors UI.
+  const previewHost = el('projPreview');
+  const previewResize = el('projPreviewResize');
+  if (lang.runtime.kind === 'web-vite') {
+    previewHost.style.display = '';
+    previewResize.style.display = '';
     projectPreviewInstance = createProjectPreview({
       lang,
       tabsHost: el('projPreviewTabs'),
@@ -715,8 +744,12 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
       reloadBtn: el<HTMLButtonElement>('projReloadBtn'),
       externalBtn: el<HTMLButtonElement>('projOpenExternalBtn'),
     });
-    initProjectPreviewResize();
+  } else {
+    previewHost.style.display = 'none';
+    previewResize.style.display = 'none';
   }
+
+  currentProjectUILang = id;
 }
 
 const PROJ_PREVIEW_HEIGHT_KEY = 'lang-tutor:proj-preview-height';
@@ -1292,6 +1325,7 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>('.lang-tab')) {
 
 initResize();
 initAsideResize();
+initProjectPreviewResize();
 
 // ── Init ──────────────────────────────────────────────────────────────────
 applyStoredTheme();

@@ -210,11 +210,11 @@ Foundation. Web should keep working identically; C# stays single-buffer.
 
 Backend can spawn `dotnet run` for the C# project workspace. Frontend not yet wired.
 
-- [ ] Switch `CSHARP.kind` from `'single'` to `'project'` in [src/constants.ts](src/constants.ts). Add `runtime: { kind: 'desktop-process' }`. Add `scaffoldDir: 'csharp'`.
-- [ ] Bake the WPF scaffold (csproj + App.xaml + MainWindow.xaml + .cs files + README) into [tools/projects.mjs](tools/projects.mjs) as a constant template, parallel to `SCAFFOLD_WEB`.
-- [ ] Add `csharp` to `PROJECT_CONFIG` (install: `dotnet restore`, dev: `dotnet run`, readiness: `process-alive`, ignore: `bin / obj / .vs`, bootstrap: `null`).
-- [ ] Detect missing `dotnet` CLI: if `spawn` returns ENOENT, push a friendly system log line ("dotnet SDK not found — install from https://aka.ms/dotnet/download and restart the dev server") and mark phase = `error`.
-- [ ] Manual test: `curl -X POST /proj/start -d '{"lang":"csharp"}'` opens the WPF MainWindow on the desktop. `/proj/stop` kills it. `/proj/logs?lang=csharp` streams stdout/stderr. `/fs/list?lang=csharp` returns the tree without `bin/`/`obj/`.
+- [x] Switch `CSHARP.kind` from `'single'` to `'project'` in [src/constants.ts](src/constants.ts). Add `runtime: { kind: 'desktop-process' }`. Add `scaffoldDir: 'csharp'`.
+- [x] Bake the WPF scaffold (csproj + App.xaml + MainWindow.xaml + .cs files + README) into [tools/projects.mjs](tools/projects.mjs) as a constant template, parallel to `SCAFFOLD_WEB`.
+- [x] Add `csharp` to `PROJECT_CONFIG` (install: `dotnet restore`, dev: `dotnet run`, readiness: `process-alive`, ignore: `bin / obj / .vs`, bootstrap: `null`).
+- [x] Detect missing `dotnet` CLI: if `spawn` returns ENOENT, push a friendly system log line ("dotnet SDK not found — install from https://aka.ms/dotnet/download and restart the dev server") and mark phase = `error`.
+- [x] Manual test: `curl -X POST /proj/start -d '{"lang":"csharp"}'` opens the WPF MainWindow on the desktop. `/proj/stop` kills it. `/proj/logs?lang=csharp` streams stdout/stderr. `/fs/list?lang=csharp` returns the tree without `bin/`/`obj/`.
 
 ### M3 — C# preview pane
 

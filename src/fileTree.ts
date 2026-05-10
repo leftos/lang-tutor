@@ -22,6 +22,8 @@ export interface FileTreeOptions {
   onDelete: (path: string, isDir: boolean) => void;
   /** Currently focused file path — gets a highlight class. */
   activePath: string | null;
+  /** Header label shown above the tree, e.g. "projects/web/". */
+  headerLabel: string;
 }
 
 export interface FileTreeHandle {
@@ -137,7 +139,7 @@ export function createFileTree(host: HTMLElement, options: FileTreeOptions): Fil
 
   function renderHeader(): HTMLElement {
     const header = div('tree-header');
-    const title = span('projects/web/', 'tree-header-title');
+    const title = span(options.headerLabel, 'tree-header-title');
     header.appendChild(title);
 
     const newFileBtn = document.createElement('button');

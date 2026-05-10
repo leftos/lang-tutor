@@ -20,7 +20,7 @@
  * (written via stdin to the file) and file paths (validated against project root).
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -66,7 +66,48 @@ const PROJECT_CONFIG = Object.freeze({
     treeIgnore: new Set(['node_modules', '.git', 'dist', '.vite']),
     bootstrap: 'web-iframe',
   },
+  csharp: {
+    scaffoldDir: 'csharp',
+    install: { cmd: 'dotnet', args: ['restore'], marker: 'obj' },
+    dev: { cmd: 'dotnet', args: ['run'] },
+    readiness: { kind: 'process-alive', minAliveMs: PROCESS_ALIVE_DEFAULT_MS },
+    treeIgnore: new Set(['bin', 'obj', '.vs']),
+    bootstrap: null,
+  },
 });
+
+/**
+ * Friendly install-hint per command. Looked up by the command's base name
+ * (after stripping any .cmd / .exe / .bat suffix) so Windows variants work too.
+ */
+const MISSING_CMD_HINTS = Object.freeze({
+  dotnet: '.NET SDK not found on PATH. Install .NET 8 (or newer) from https://aka.ms/dotnet/download and restart the dev server.',
+  pnpm: 'pnpm not found on PATH. Install with `npm install -g pnpm` and restart the dev server.',
+});
+
+function missingCmdHint(cmd) {
+  const baseName = cmd.replace(/\.(cmd|exe|bat)$/i, '');
+  return MISSING_CMD_HINTS[baseName] ?? `${cmd} not found on PATH. Install it and restart the dev server.`;
+}
+
+/**
+ * Best-effort check for whether a command can be spawned. Uses spawnSync with
+ * `--version` since both `pnpm` and `dotnet` (the only commands we care about
+ * today) respond to it cheaply. ENOENT means the executable isn't on PATH.
+ *
+ * On Windows with `shell: true`, a missing command exits non-zero through
+ * cmd.exe rather than emitting the ENOENT error event — so we treat any
+ * non-zero exit AND any error event as "missing" here.
+ */
+function commandExists(cmd) {
+  try {
+    const r = spawnSync(cmd, ['--version'], { shell: IS_WIN, stdio: 'ignore', timeout: 5_000 });
+    if (r.error !== undefined && r.error !== null) return false;
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
 
 const ALLOWED_LANGS = Object.freeze(new Set(Object.keys(PROJECT_CONFIG)));
 
@@ -281,7 +322,105 @@ through any other editor — lang-tutor reads and writes them on disk.
 `,
 };
 
-const SCAFFOLDS = Object.freeze({ web: SCAFFOLD_WEB });
+const SCAFFOLD_CSHARP = {
+  'csharp.csproj': `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LangTutorWpf</RootNamespace>
+  </PropertyGroup>
+</Project>
+`,
+
+  'App.xaml': `<Application x:Class="LangTutorWpf.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+    </Application.Resources>
+</Application>
+`,
+
+  'App.xaml.cs': `using System.Windows;
+
+namespace LangTutorWpf;
+
+public partial class App : Application
+{
+}
+`,
+
+  'MainWindow.xaml': `<Window x:Class="LangTutorWpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Lang Tutor · C# Workshop"
+        Height="320" Width="480">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="GreetingText"
+                   Text="Hello from your C# workshop."
+                   FontSize="18"
+                   VerticalAlignment="Center"
+                   HorizontalAlignment="Center"/>
+        <Button Grid.Row="1"
+                Content="Click me"
+                Padding="16,8"
+                HorizontalAlignment="Center"
+                Click="OnClickMe"/>
+    </Grid>
+</Window>
+`,
+
+  'MainWindow.xaml.cs': `using System.Windows;
+
+namespace LangTutorWpf;
+
+public partial class MainWindow : Window
+{
+    private int _clicks;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+    }
+
+    private void OnClickMe(object sender, RoutedEventArgs e)
+    {
+        _clicks++;
+        GreetingText.Text = $"Clicked {_clicks} time(s).";
+    }
+}
+`,
+
+  'README.md': `# Your C# workshop
+
+This folder is your sandbox for the C# course in lang-tutor.
+
+- \`csharp.csproj\` — project file: target framework, references, build settings
+- \`App.xaml\` / \`App.xaml.cs\` — application entry point, sets the startup window
+- \`MainWindow.xaml\` / \`MainWindow.xaml.cs\` — the window that opens when you run
+
+When you click Run in lang-tutor (or run \`dotnet run\` here), .NET will:
+
+1. Restore NuGet packages (one-time, cached after)
+2. Compile the C# + XAML
+3. Launch the WPF window on your desktop
+
+The window is a real Windows app, not an in-browser preview — it pops up on top
+of your other windows. Click the button to watch the click counter increment.
+
+You can also build and run from Visual Studio or JetBrains Rider by opening the
+\`.csproj\` file directly.
+`,
+};
+
+const SCAFFOLDS = Object.freeze({ web: SCAFFOLD_WEB, csharp: SCAFFOLD_CSHARP });
 
 export function ensureScaffold(lang) {
   const root = getProjectRoot(lang);
@@ -574,6 +713,22 @@ export async function startProject(lang) {
   const cwd = getProjectRoot(lang);
   state.error = null;
 
+  // Preflight: bail out with a friendly hint if any required command is missing.
+  // The install/dev commands are the only two that get spawned, and they almost
+  // always share a binary (pnpm for web, dotnet for csharp), so the dedupe is
+  // worth doing.
+  const requiredCmds = new Set([config.dev.cmd]);
+  if (config.install !== null) requiredCmds.add(config.install.cmd);
+  for (const cmd of requiredCmds) {
+    if (!commandExists(cmd)) {
+      const hint = missingCmdHint(cmd);
+      pushLog(state, 'system', `[error] ${hint}`);
+      state.phase = 'error';
+      state.error = `${cmd} not found on PATH`;
+      return { ok: false, error: state.error };
+    }
+  }
+
   if (config.install !== null && !existsSync(join(cwd, config.install.marker))) {
     const ok = await runInstall(state, cwd, config.install);
     if (!ok) return { ok: false, error: state.error ?? 'install failed' };
@@ -601,18 +756,44 @@ export async function startProject(lang) {
   return { ok: true, vitePort: state.vitePort, ready: false };
 }
 
+/**
+ * Kill the spawned process and any descendants.
+ *
+ * `proc.kill('SIGTERM')` only signals the immediate child, which leaves
+ * grandchildren orphaned in two real cases for this app:
+ *   1. `pnpm dev` (Windows) → `pnpm.cmd` is a shell wrapper that spawns
+ *      `node vite`. Killing the wrapper doesn't reach the node process.
+ *   2. `dotnet run` → spawns the actual app binary (e.g. csharp.exe). The
+ *      WPF window survives a SIGTERM to the dotnet host.
+ *
+ * On Windows we use `taskkill /T /F` to walk the process tree and force-kill
+ * everything beneath the supervised PID. On Unix we still rely on SIGTERM
+ * here — process-group kill needs `detached: true` at spawn time and isn't
+ * worth the complexity until cross-platform desktop projects exist.
+ */
+function killProcessTree(proc) {
+  if (proc === null || proc.pid === undefined) return;
+  if (IS_WIN) {
+    spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    proc.kill('SIGTERM');
+  }
+}
+
 export async function stopProject(lang) {
   assertLang(lang);
   const state = procs.get(lang);
   if (!state?.proc) return { ok: true };
   const proc = state.proc;
-  proc.kill('SIGTERM');
+  killProcessTree(proc);
   await new Promise((res) => {
     const timer = setTimeout(() => {
-      try {
-        proc.kill('SIGKILL');
-      } catch {
-        // already dead
+      if (!IS_WIN) {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          // already dead
+        }
       }
       res();
     }, STOP_GRACE_MS);
