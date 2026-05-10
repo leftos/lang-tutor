@@ -55,48 +55,50 @@ Per-lang quick-launch into external editors / file managers. csharp menu = VS Co
 
 Frontend gets a working Output pane for desktop projects.
 
-- [ ] Re-show `#projPreview` and `#projPreviewResize` for desktop runtime in `ensureProjectUI` (M2 hid them via `display: none`).
-- [ ] Implement the desktop-mode branch in [src/projectPreview.ts](src/projectPreview.ts) (currently throws "not implemented yet"):
-  - Tabs: `Output` (primary) | `Build errors`
-  - `Output` tab = SSE log stream (same source as web's "Server logs"), with stderr lines styled red and `system` lines styled italic-muted
-  - `Build errors` tab: lines matching `error CS\d+:` (C# compiler) or `error MSB\d+:` (MSBuild); count badge when populated
-  - Status pill: `stopped` / `starting` / `running (PID N)` / `exited (code N)`
-  - Hide Reload + Open-in-tab buttons (no URL)
-  - `requestSnapshot()` returns `null`
-- [ ] Wire Run/Stop to `/proj/start` and `/proj/stop` (no new endpoints — supervisor already handles both shapes).
-- [ ] When `dotnet run` exits on its own (user closed the WPF window), status auto-updates via the existing exit handler. Confirm without the existing polling loop's HTTP-probe assumption.
-- [ ] Visual check: switch to C#, click Run, WPF window appears on desktop, output streams into the Output tab, click Stop or close the window → status flips to `exited`.
+- [x] Re-show `#projPreview` and `#projPreviewResize` for desktop runtime in `ensureProjectUI` (M2 hid them via `display: none`).
+- [x] Implement the desktop-mode branch in [src/projectPreview.ts](src/projectPreview.ts) (`createDesktopPreview`):
+  - [x] Tabs: `Output` (primary) | `Build errors`
+  - [x] `Output` tab = SSE log stream (same source as web's "Server logs"), with stderr lines styled red and `system` lines styled italic-muted
+  - [x] `Build errors` tab: lines matching `error CS\d+:` (C# compiler) or `error MSB\d+:` (MSBuild); count badge when populated. (No automatic stderr promotion — `dotnet` writes telemetry / NuGet noise to stderr that isn't a build error.)
+  - [x] Status pill: `stopped` / `starting` / `running (PID N)` / `exited (code N)`. Distinguishes user-stop from self-exit via `userStoppedAt` timestamp on the supervisor; `getStatus` now returns `pid` + `lastExitCode` + `phase: 'exited'`.
+  - [x] Hide Reload + Open-in-tab buttons (no URL); restored on destroy in case the next ensureProjectUI swaps to a web-vite project (shared DOM nodes).
+  - [x] `requestSnapshot()` returns `null`
+- [x] Wire Run/Stop to `/proj/start` and `/proj/stop` (no new endpoints — supervisor already handles both shapes).
+- [x] When `dotnet run` exits on its own (user closed the WPF window), the 2 s status reconciliation loop catches it: phase flips to `exited`, pill shows `exited (code N)`. The plan's "without HTTP-probe assumption" note is satisfied because the desktop loop calls `getStatus` and reacts to `running` regardless of `ready`.
+- [x] **Bonus fix**: hardened both web and desktop previews against zombie click-handlers via `AbortController`. Previously `addEventListener` on shared `#projRunBtn`/`#projReloadBtn`/`#projOpenExternalBtn` was never removed, so language switches accumulated handlers — Run on csharp would also re-trigger web's startProject, race its `pollUntilReady`, and overwrite tabs. Caught during M3 visual verification.
+- [x] Visual check: switch to C#, click Run → status pill `running (PID 80056)`, WPF window opens, output streams, click Stop → pill `stopped`. Self-exit path (force-killed `csharp.exe`) flips pill to `exited (code 4294967295)` within 2 s.
+
+Also gated the `Send to tutor` button (`#projEvalBtn`) behind `runtime.kind !== 'desktop-process'` until M5 lands the desktop-shaped payload.
 
 ### M4 — XAML editor support
 
 Multi-file editor handles `.xaml` and `.csproj`.
 
-- [ ] Add `@codemirror/lang-xml` to dependencies (may already be transitive via `lang-html`).
-- [ ] In the per-file extension lookup in [src/projectEditor.ts](src/projectEditor.ts) (search for the `html` case in `langExtensionForPath`), add `xaml` → `xml()`, `cs` → `csharp()`, `csproj` → `xml()`.
-- [ ] In [src/main.ts](src/main.ts) `fenceLangFromPath`, add `xaml` → `xml`, `cs` → `csharp`, `csproj` → `xml` so Send-to-tutor uses correct fence labels.
+- [x] Added `@codemirror/lang-xml@6.1.0` (not transitive via `lang-html`).
+- [x] [src/projectEditor.ts](src/projectEditor.ts) `langExtensionForPath`: `xml` / `xaml` / `csproj` → `xml()`, `cs` → `csharp()` (reusing `@replit/codemirror-lang-csharp` already in deps from Phase 1).
+- [x] [src/main.ts](src/main.ts) `fenceLangFromPath`: `xml` / `xaml` / `csproj` → `xml`, `cs` → `csharp`.
+- [x] Visual: opened `MainWindow.xaml`, `MainWindow.xaml.cs`, `csharp.csproj` — each gets distinct token classes (`<Project>` / attribute / value for XML; `using` / type / `.` for C#). All three tabs co-existed in the multi-file editor.
 
 ### M5 — Send-to-tutor for desktop projects
 
 Project-mode `evaluateProjectCode()` works for both project shapes; tutor prompt updated.
 
-- [ ] Branch on `lang.runtime.kind` in `evaluateProjectCode()`. For `desktop-process`:
-  - Build `[FILES]` block as today (open tabs, dirty marked)
-  - Skip `[DOM]` and `[CONSOLE]` blocks
-  - Build `[SERVER]` block as today (recent log lines from `/proj/logs/recent`)
-  - Concatenate `[FILES] + [SERVER]`
-- [ ] Rewrite C# `systemPromptIntro`: student is in a project workspace at `projects/csharp/`, file tree + tabs available, Run launches a real WPF window, Send-to-tutor bundles `[FILES] + [SERVER]` (no DOM / iframe), ask for screenshots if you need UI behavior. Mention the "Open in" launchers (VS Code / Visual Studio / File Explorer) so the tutor knows to suggest them.
-- [ ] Update C# `firstSessionPrompt` accordingly.
-- [ ] Data migration: Phase 1 users will have a `lang-tutor:csharp:code` localStorage entry from the single-buffer era. Delete it in `migrateOldStorage()` — single-buffer artifact, no longer relevant.
+- [x] Branched [src/main.ts](src/main.ts) `evaluateProjectCode()` on `lang.runtime.kind`. Desktop path skips snapshot + DOM/CONSOLE entirely and labels its log block `[OUTPUT]` (not `[SERVER]` — accurate for `dotnet run` stdout/stderr). Empty-output placeholder distinguishes "running but silent" (typical for a fresh WPF launch) from "stopped".
+- [x] Removed the M3 desktop gate on `#projEvalBtn` in `ensureProjectUI` — Send-to-tutor now lights up for csharp.
+- [x] Rewrote CSHARP `systemPromptIntro`: workspace shape (file tree, multi-tab editor, Output / Build errors pane), Run executes real `dotnet run` opening a WPF window on the desktop, "Open in" launcher hint for VS Code / Visual Studio / Explorer, exact `[FILES]` + `[OUTPUT]` block contract, no `[DOM]`/`[CONSOLE]`, ask for screenshots for UI behaviour, regex hints for `error CS\d+:` / `error MSB\d+:` / `Unhandled exception:` so the tutor can quote the right line. Dropped the stale "this app does NOT execute C#" and "XAML pasted will look unstyled" lines.
+- [x] Updated CSHARP `firstSessionPrompt` to mention the workspace shape and Send-to-tutor's bundle contract; dropped the "this app does not execute C#" disclaimer.
+- [x] Added `storageDelete(codeKey('csharp'))` to `migrateOldStorage()` — Phase 1 single-buffer `lang-tutor:csharp:code` is now dead weight.
+- [x] Visual: opened `MainWindow.xaml`, `MainWindow.xaml.cs`, `csharp.csproj`; clicked Send-to-tutor with `/v1/messages` stubbed. Captured payload contains `[FILES]` (xml + csharp + xml fences) + `[OUTPUT]` (supervisor log lines), no DOM/CONSOLE block. System prompt tail confirms the new text is live.
 
 ### M6 — Polish
 
-- [ ] **First-`dotnet restore` UX**: cold restore can take 30+s. Show "restoring NuGet packages (one-time, can take a minute)…" → "ready" in the Output tab.
-- [ ] **Build-phase awareness**: process-alive declares ready at 500 ms but the WPF window doesn't show until `dotnet run` finishes building (5–15s cold). Parse the log stream for `Build succeeded.` and flip "starting…" → "ready" then.
-- [ ] **HMR-orphan mitigation**: register a process-exit / module-unload handler in `tools/projects.mjs` that calls `killProcessTree` for every live `procs` entry when the module is replaced. The current `taskkill` only fires on explicit `/proj/stop`; Vite HMR replacing the module silently abandons all spawned children.
-- [ ] **Build error linkification** (stretch): clickable line-number jumps from the `Build errors` tab into the editor. Needs a parser for the `Foo.cs(12,5): error CS0103: …` format. Can defer.
-- [ ] **Reset for csharp**: confirm ("This will delete projects/csharp/ and re-scaffold. Continue?"), stop the process, delete the folder, re-scaffold.
-- [ ] **Friendly errors**: target-framework mismatch (e.g. user edits csproj to `net6.0`), missing `.csproj`.
-- [ ] Update [CLAUDE.md](CLAUDE.md) and [README.md](README.md) to describe the C# project workspace alongside the web one.
+- [x] **First-`dotnet restore` UX**: `runInstall` in [tools/projects.mjs](tools/projects.mjs) now prints "Running dotnet restore (one-time, downloads NuGet packages — can take a minute on a cold cache)…" instead of the opaque "Running dotnet restore (one-time)…".
+- [x] **Build-phase awareness**: switched csharp dev cmd to `dotnet run --verbosity minimal` (default `quiet` under non-TTY emits *no* output until exit). Frontend [createDesktopPreview](src/projectPreview.ts) regex-matches `Determining projects to restore` / `All projects are up-to-date` / `^\s+\S.* -> .+\.dll` and advances a `DesktopBuildPhase` (`starting → restoring → building → ready`). Status pill shows `spawning… (PID N)` → `restoring NuGet… (PID N)` → `building… (PID N)` → `running (PID N)`. Phase only ever advances forward within a Run cycle; system-stream lines (the supervisor's own banners) are skipped so a stray "Restored" can't flip phases. Verified live: `0ms starting → 700ms spawning… → 900ms restoring NuGet… → 1100ms building… → 1400ms running` on a warm cache.
+- [x] **HMR-orphan mitigation**: `procs` Map stashed on `globalThis['__langTutorProcs']` so a module reload (Vite restarts on every `tools/projects.mjs` edit) preserves child PIDs and log buffers. Subscribers (`state.subs`) are deliberately reset because they're DOM observers from a dead request lifetime. `process.on('SIGINT'/'SIGTERM'/'exit')` registered once via a global-flag guard so duplicate listeners don't pile up across reloads — calls `killProcessTree` for every supervised PID so Ctrl+C cleans up children.
+- [x] **Reset for csharp**: new `POST /proj/reset` endpoint in [tools/projects.mjs](tools/projects.mjs) → [tools/project-routes.mjs](tools/project-routes.mjs) atomically stops the process, deletes `projects/<lang>/`, and re-scaffolds. Frontend [resetCurrentLanguage](src/main.ts) calls it via `resetProject` ([src/projectApi.ts](src/projectApi.ts)) and shows a runtime-aware confirmation prompt ("Reset all C# progress, delete projects/csharp/, and re-scaffold from the template?"). Verified end-to-end with a marker file: scaffold rebuilt, marker gone.
+- [x] **Friendly errors**: `preflightCsharp` runs after the `commandExists` check, before `dotnet restore` / `dotnet run`. Catches missing `.csproj` ("No .csproj found in projects/csharp/. The project scaffold is incomplete — click Reset to re-scaffold.") and TargetFramework / SDK mismatch ("Project targets .NET 99+ but only these SDK majors are installed: 8, 10. Install .NET 99 SDK from https://aka.ms/dotnet/download (or edit csharp.csproj's <TargetFramework> to match)."). Verified live by editing csproj to `net99.0-windows`.
+- [x] [CLAUDE.md](CLAUDE.md) and [README.md](README.md) updated: workspace shapes (single-buffer vs project), per-language run / live-error / format-on-save table now includes csharp + web, project-supervisor architecture (`PROJECT_CONFIG`, readiness, build-phase pill, globalThis stash), evaluate-flow contract per runtime kind, full route table for `/fs/*` + `/proj/*` (incl. `/proj/reset`), Reset semantics call out the destructive on-disk delete, AbortController gotcha around shared header DOM, csharp `--verbosity minimal` rationale.
+- [x] **Build error linkification**: parsed `<path>(<line>,<col>):` prefix in each [Build errors row](src/projectPreview.ts) renders as a `proj-preview-error-link` button — click to open the file in the editor, jump the cursor to (line, col), scroll into view, focus. Detector + parser cover CS / MC (XAML markup compiler) / MSB error codes. Absolute paths from dotnet are stripped to project-relative via the `projects/<scaffoldDir>/` segment so the editor can open them without the supervisor exposing a project root. dotnet emits each error twice (compile + Build FAILED summary), so a per-Run-cycle `Set<string>` keyed by `path:line:col:code` dedupes to a single row. New [ProjectEditor.revealAt(path, line, col)](src/projectEditor.ts) hosts the open + jump logic; `main.ts` wires it via the new `onJumpTo` callback on `createProjectPreview`. Verified live with both an MC3072 (XAML attribute) and a pair of CS errors (CS0103 + CS0029): badge shows the deduped count, click jumps cursor to the exact (line, col) and focuses the editor.
 
 ## Out of scope (deferred)
 

@@ -16,13 +16,26 @@ It's idempotent — checks each tool first and only installs what's missing. Fir
 
 ## Languages
 
-| Language | Lesson focus | Run target | Live errors | Format on save |
-|----------|--------------|------------|-------------|----------------|
-| **Rust** | Beginner-to-intermediate fundamentals | [Rust Playground](https://play.rust-lang.org) | local `rustc` | local `rustfmt` |
-| **C++** | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | [Wandbox](https://wandbox.org) (`gcc-head`, `c++23`) | local `clang -fsyntax-only` | local `clang-format` |
-| **Python** | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | [Pyodide](https://pyodide.org) — in-browser WebAssembly | local `python ast.parse` | local `black` |
+Two workspace shapes:
 
-Live error checking and format-on-save are optional — if a toolchain isn't installed, those features silently fall back. The `scripts/setup.ps1` quickstart installs everything for you.
+- **Single-buffer** (Rust / C++ / Python): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted via a remote sandbox or in-browser runtime.
+- **Project workspace** (C# / Web): on-disk project under `projects/<lang>/` with a sidebar file tree, multi-tab editor, integrated supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Edits autosave; the supervisor streams stdout/stderr into the Output tab.
+
+| Language | Workspace | Lesson focus | Run target | Live errors | Format on save |
+|----------|-----------|--------------|------------|-------------|----------------|
+| **Rust** | single-buffer | Beginner-to-intermediate fundamentals | [Rust Playground](https://play.rust-lang.org) | local `rustc` | local `rustfmt` |
+| **C++** | single-buffer | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | [Wandbox](https://wandbox.org) (`gcc-head`, `c++23`) | local `clang -fsyntax-only` | local `clang-format` |
+| **Python** | single-buffer | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | [Pyodide](https://pyodide.org) — in-browser WebAssembly | local `python ast.parse` | local `black` |
+| **C#** | project workspace | Modern C# 12 → WPF fundamentals → MVVM patterns | local `dotnet run` (real WPF window opens on the desktop) | dotnet build (streamed into the Build errors tab) | — |
+| **Web** | project workspace | Vanilla HTML/CSS/JS → TS → React → Hono → SQLite | local `pnpm dev` Vite server, iframe preview at `:5180` | TS compile via Vite | — |
+
+Live error checking and format-on-save are optional for the single-buffer languages — if a toolchain isn't installed, those features silently fall back. The `scripts/setup.ps1` quickstart installs everything for you.
+
+The C# workspace requires the .NET 8+ SDK on PATH (the supervisor preflights and prints an install hint if it's missing or the project's `<TargetFramework>` is newer than any installed SDK). The Web workspace requires `pnpm` on PATH.
+
+Each project workspace has an "Open in ▾" launcher in the file-tree header (VS Code · Visual Studio (csharp only) · File Explorer) that delegates to the user's installed editor — handy when the visual XAML designer or a debugger is wanted.
+
+Reset wipes the active language's progress + chat history. For project workspaces it also deletes the on-disk `projects/<lang>/` folder and re-scaffolds it from the template — so a confirmation dialog calls that out explicitly.
 
 The lesson plan for each language is in `src/constants.ts`. Edit it freely.
 
@@ -123,10 +136,11 @@ pnpm preview    # vite preview (preview the production build via Vite)
 
 Each language has its own `localStorage` namespace:
 
-- `lang-tutor:active` — currently selected language (`rust` | `cpp` | `python`)
+- `lang-tutor:active` — currently selected language (`rust` | `cpp` | `python` | `csharp` | `web`)
 - `lang-tutor:{lang}:history` — last 30 messages
 - `lang-tutor:{lang}:progress` — structured progress blob (topic statuses, strengths, struggles, notes)
-- `lang-tutor:{lang}:code` — saved editor content
+- `lang-tutor:{lang}:code` — saved editor content (single-buffer languages only)
+- `lang-tutor:{lang}:openTabs` / `:activeTab` — multi-tab UI state (project workspaces only; the files themselves live on disk under `projects/<lang>/`)
 
 Switching language saves the current editor content, then loads everything for the new language. Conversations are non-destructive — switching back restores exactly where you were.
 
@@ -142,10 +156,17 @@ Both POST to the local `/v1/messages` proxy:
 - **Rust** → direct browser `fetch` to `https://play.rust-lang.org/execute`
 - **C++** → direct browser `fetch` to `https://wandbox.org/api/compile.json` (gcc-head, `-std=c++23`)
 - **Python** → Pyodide. Lazy-loaded on first Run click (~15 MB initial download from CDN, cached aggressively after). Subsequent runs are fast.
+- **C#** → local `dotnet run --verbosity minimal` supervised by `tools/projects.mjs`. The Run button starts it; status pill shows `restoring NuGet…` → `building…` → `running (PID …)` derived from dotnet's stdout. The WPF window opens on the user's desktop. Stop or close the window → status flips to `stopped` or `exited (code N)`.
+- **Web** → local `pnpm dev` Vite server supervised by `tools/projects.mjs`, rendered into a sandboxed iframe at `http://127.0.0.1:5180/`.
 
 ### Evaluate flow
 
-`evaluateCode()` formats the editor contents and last output as a `[CODE]…[OUTPUT]…` user message in a code fence appropriate to the active language (`rust` / `cpp` / `python`), sends it through the normal chat path, then triggers progress extraction.
+`evaluateCode()` (single-buffer) formats the editor contents and last output as a `[CODE]…[OUTPUT]…` user message in a fence appropriate to the active language (`rust` / `cpp` / `python`), sends it through the normal chat path, then triggers progress extraction.
+
+`evaluateProjectCode()` (project workspaces) bundles richer context:
+
+- **Web**: `[FILES]` (open tabs) + `[DOM]` (rendered HTML snapshot) + `[CONSOLE]` (recent iframe console / errors) + `[SERVER]` (recent Vite stdout/stderr).
+- **C#**: `[FILES]` (open tabs) + `[OUTPUT]` (recent dotnet stdout/stderr including build errors). No DOM/CONSOLE — the tutor system prompt instructs the model to ask for screenshots when UI behaviour matters.
 
 ## Notes
 

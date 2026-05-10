@@ -234,10 +234,18 @@ Foundation. Nothing user-visible yet beyond the new dropdown option showing a "s
 
 ### M6 — Polish
 
-- [ ] First-start UX: scaffolding shows a friendly "creating workspace at projects/web…" → "installing dependencies (one-time, ~30s)…" → "ready" sequence in the Server logs tab.
-- [ ] Reset button for `web` confirms ("This will delete projects/web/ and re-scaffold. Your chat history and progress are kept unless you reset those too. Continue?"), stops the process, deletes the folder, re-scaffolds, restarts.
-- [ ] Friendly error states: pnpm not found, port 5180 in use, vite crashed (with a "Restart" button).
-- [ ] Update `CLAUDE.md` and `README.md` with the new architecture section.
+- [x] First-start UX: scaffold-creation logs `Creating projects/web/ workspace from template (5 files)…` → `Workspace ready.` from `startProject` whenever ensureScaffold actually creates files (non-zero `created` array). Then `runInstall` pushes the friendlier `Running pnpm install (one-time, downloads npm dependencies — can take ~30 s on a cold cache)…` (symmetric with the dotnet-restore wording from the C# course).
+- [x] Reset button for `web` confirms ("Reset all Web progress, delete projects/web/, and re-scaffold from the template?"), stops the process, deletes the folder, re-scaffolds via the new `POST /proj/reset` endpoint introduced in the C# course's M6.
+- [x] Friendly error states for pnpm not found (existing `commandExists` preflight catches this with the install-from-`npm install -g pnpm` hint); for port 5180 in use, the supervisor's readiness probe is now aborted on `proc.close` so the frontend pill doesn't hang for 30 s. `createWebVitePreview` regex-matches the EADDRINUSE / "Port N is already in use" log line and surfaces a `port :5180 in use` pill in red, plus an actionable placeholder ("Free the port… or change the port in projects/web/package.json"). Run button relabels to `Restart`.
+- [x] Generic vite-crashed state: status poll detects an unexpected `phase: 'exited'`, sets `failureKind = 'crashed'`, pill shows `crashed`, placeholder reads "The dev server stopped unexpectedly. Check Server logs for the error, then click Restart." Run button relabels to `Restart`.
+- [x] `failureKind` resets to `'none'` on every Run click so retries don't carry stale state.
+- [x] Bonus refactor: dropped the `!important` from `.cm-editor.is-hidden` (introduced during markdown-preview work) by wrapping CodeMirror's view in a `.cm-editor-wrap` container we own — toggling the wrapper's display avoids the specificity battle with CodeMirror's injected `display: flex`.
+- [x] [CLAUDE.md](CLAUDE.md) and [README.md](README.md) already updated alongside the C# course's M6 — covers both project workspaces' supervisor architecture and route table.
+
+**Verified live**:
+- All four pill states cycle correctly: `running` → `port :5180 in use` (within 1.3 s) → `crashed` (after killing vite externally) → `stopped` (user click) → back to `running` after a Restart.
+- Scaffold + install logs print in expected order on a cold first-Run.
+- Markdown preview pane's hide/show still works after the wrapper refactor.
 
 ## Out of scope (deferred)
 

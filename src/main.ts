@@ -29,6 +29,7 @@ import {
   type OpenAvailability,
   type OpenTarget,
   openProjectExternal,
+  resetProject,
   subscribeFsEvents,
 } from './projectApi';
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
@@ -801,28 +802,27 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
   // when the user switches to a different project language.
   projectFsUnsub = subscribeFsEvents(id, (event) => handleFsEvent(id, event));
 
-  // The preview pane is iframe-shaped (web-vite) for now. Desktop-process
-  // languages get a hidden-pane stub in M2; M3 wires their Output / Build
-  // errors UI.
-  const previewHost = el('projPreview');
-  const previewResize = el('projPreviewResize');
-  if (lang.runtime.kind === 'web-vite') {
-    previewHost.style.display = '';
-    previewResize.style.display = '';
-    projectPreviewInstance = createProjectPreview({
-      lang,
-      tabsHost: el('projPreviewTabs'),
-      bodyHost: el('projPreviewBody'),
-      statusEl: el('projPreviewStatus'),
-      runBtn: el<HTMLButtonElement>('projRunBtn'),
-      runLabelEl: el('projRunLabel'),
-      reloadBtn: el<HTMLButtonElement>('projReloadBtn'),
-      externalBtn: el<HTMLButtonElement>('projOpenExternalBtn'),
-    });
-  } else {
-    previewHost.style.display = 'none';
-    previewResize.style.display = 'none';
-  }
+  // Both runtime flavours own the preview pane; createProjectPreview
+  // dispatches on lang.runtime.kind to pick the iframe (web-vite) or
+  // Output/Build-errors (desktop-process) variant.
+  el('projPreview').style.display = '';
+  el('projPreviewResize').style.display = '';
+  el('projEvalBtn').style.display = '';
+  projectPreviewInstance = createProjectPreview({
+    lang,
+    tabsHost: el('projPreviewTabs'),
+    bodyHost: el('projPreviewBody'),
+    statusEl: el('projPreviewStatus'),
+    runBtn: el<HTMLButtonElement>('projRunBtn'),
+    runLabelEl: el('projRunLabel'),
+    reloadBtn: el<HTMLButtonElement>('projReloadBtn'),
+    externalBtn: el<HTMLButtonElement>('projOpenExternalBtn'),
+    onJumpTo: (path, line, col) => {
+      void projectEditorInstance?.revealAt(path, line, col);
+      projectFileTree?.expandPath(path);
+      projectFileTree?.setActive(path);
+    },
+  });
 
   currentProjectUILang = id;
 }
@@ -1115,6 +1115,12 @@ function fenceLangFromPath(path: string): string {
     case 'md':
     case 'markdown':
       return 'md';
+    case 'xml':
+    case 'xaml':
+    case 'csproj':
+      return 'xml';
+    case 'cs':
+      return 'csharp';
     default:
       return '';
   }
@@ -1123,11 +1129,16 @@ function fenceLangFromPath(path: string): string {
 async function evaluateProjectCode(): Promise<void> {
   if (projectEditorInstance === null) return;
   const langWhenStarted = activeLang;
+  const lang = getLanguage(langWhenStarted);
+  if (lang.kind !== 'project') return;
 
   const files = projectEditorInstance.getOpenFiles();
   const preview = projectPreviewInstance;
+  const isWeb = lang.runtime.kind === 'web-vite';
 
-  const snapshotPromise = preview?.isRunning() ? preview.requestSnapshot() : Promise.resolve(null);
+  // The DOM/console snapshot only exists for web-vite (iframe-based). Desktop
+  // projects skip it — there is no rendered page to capture.
+  const snapshotPromise = isWeb && preview?.isRunning() ? preview.requestSnapshot() : Promise.resolve(null);
   const logsPromise = fetchRecentLogs(langWhenStarted, 60).catch(() => ({ lines: [] as { stream: string; line: string; ts: number }[] }));
 
   const [snapshot, logs] = await Promise.all([snapshotPromise, logsPromise]);
@@ -1144,21 +1155,36 @@ async function evaluateProjectCode(): Promise<void> {
     blocks.push('[FILES]\n(no files open — open a file in the tree first so the tutor can see what you are working on)');
   }
 
-  if (snapshot !== null) {
-    blocks.push(`[DOM] (rendered at ${snapshot.url})\n\`\`\`html\n${snapshot.dom}\n\`\`\``);
-    if (snapshot.consoleBuffer.length > 0) {
-      const consoleBlock = snapshot.consoleBuffer.map((c) => `${c.level}: ${c.line}`).join('\n');
-      blocks.push(`[CONSOLE]\n\`\`\`\n${consoleBlock}\n\`\`\``);
-    } else {
-      blocks.push('[CONSOLE]\n(empty)');
+  if (isWeb) {
+    if (snapshot !== null) {
+      blocks.push(`[DOM] (rendered at ${snapshot.url})\n\`\`\`html\n${snapshot.dom}\n\`\`\``);
+      if (snapshot.consoleBuffer.length > 0) {
+        const consoleBlock = snapshot.consoleBuffer.map((c) => `${c.level}: ${c.line}`).join('\n');
+        blocks.push(`[CONSOLE]\n\`\`\`\n${consoleBlock}\n\`\`\``);
+      } else {
+        blocks.push('[CONSOLE]\n(empty)');
+      }
+    } else if (preview !== null && !preview.isRunning()) {
+      blocks.push('[DOM]\n(dev server is stopped — Run to capture)');
     }
-  } else if (preview !== null && !preview.isRunning()) {
-    blocks.push('[DOM]\n(dev server is stopped — Run to capture)');
-  }
-
-  if (logs.lines.length > 0) {
-    const serverBlock = logs.lines.map((l) => l.line).join('\n');
-    blocks.push(`[SERVER]\n\`\`\`\n${serverBlock}\n\`\`\``);
+    if (logs.lines.length > 0) {
+      const serverBlock = logs.lines.map((l) => l.line).join('\n');
+      blocks.push(`[SERVER]\n\`\`\`\n${serverBlock}\n\`\`\``);
+    }
+  } else {
+    // Desktop projects: no iframe, no DOM, no console — just process output.
+    // Label as [OUTPUT] (not [SERVER]) so the tutor prompt can talk about
+    // dotnet stdout/stderr without "server" being misleading.
+    if (logs.lines.length > 0) {
+      const outputBlock = logs.lines.map((l) => l.line).join('\n');
+      blocks.push(`[OUTPUT]\n\`\`\`\n${outputBlock}\n\`\`\``);
+    } else {
+      blocks.push(
+        preview?.isRunning() === true
+          ? '[OUTPUT]\n(process running but has produced no output yet — typical for a fresh WPF launch where the build is silent and the window is up)'
+          : '[OUTPUT]\n(process is stopped — Run to capture build output and runtime logs; for UI behaviour paste a screenshot)'
+      );
+    }
   }
 
   await sendMessage(blocks.join('\n\n'));
@@ -1175,7 +1201,14 @@ function switchTab(tab: 'chat' | 'progress'): void {
 
 async function resetCurrentLanguage(): Promise<void> {
   const lang = getLanguage(activeLang);
-  if (!confirm(`Reset all ${lang.name} progress and start fresh?`)) return;
+  // Project-kind languages also have on-disk files we need to wipe — call out
+  // the destructive step so the user knows their edited XAML / cs / config is
+  // about to vanish, not just chat history and progress.
+  const prompt = isSingleBufferLanguage(lang)
+    ? `Reset all ${lang.name} progress and start fresh?`
+    : `Reset all ${lang.name} progress, delete projects/${lang.scaffoldDir}/, and re-scaffold from the template?`;
+  if (!confirm(prompt)) return;
+
   storageDelete(progressKey(activeLang));
   storageDelete(historyKey(activeLang));
   if (isSingleBufferLanguage(lang)) {
@@ -1184,6 +1217,14 @@ async function resetCurrentLanguage(): Promise<void> {
     storageDelete(openTabsKey(activeLang));
     storageDelete(activeTabKey(activeLang));
     projectStates.delete(activeLang);
+    try {
+      await resetProject(activeLang);
+    } catch (e) {
+      alert(
+        `Failed to reset project files: ${(e as Error).message}\n\nLocal storage was cleared, but the on-disk project may be in a half-deleted state.`
+      );
+      return;
+    }
   }
   location.reload();
 }
@@ -1351,6 +1392,11 @@ function migrateOldStorage(): void {
     storageSet(progressKey('rust'), oldProgress);
   }
   storageDelete('rust-progress');
+
+  // Phase 1 of the C# course shipped a single-buffer editor that persisted to
+  // lang-tutor:csharp:code. The course is now a project workspace with files
+  // on disk, so the legacy key is dead weight.
+  storageDelete(codeKey('csharp'));
 }
 
 function loadInitialActiveLang(): LanguageId {

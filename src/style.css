@@ -1293,12 +1293,180 @@
   color: var(--ink-mute);
   letter-spacing: 0.04em;
   min-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .proj-status-line {
-  display: inline-block;
+  flex: 1;
+  min-width: 0;
 }
 .proj-status-error {
   color: var(--danger);
+}
+
+/* ── Markdown raw / preview toggle ───────────────────────────────── */
+.md-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.md-mode-btn {
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--ink-mute);
+  border: 0;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+.md-mode-btn + .md-mode-btn {
+  border-left: 1px solid var(--rule);
+}
+.md-mode-btn:hover:not(.is-active) {
+  background: var(--paper);
+  color: var(--ink);
+}
+.md-mode-btn.is-active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* ── Markdown preview pane (rendered .md inside the editor host) ── */
+.proj-editor {
+  position: relative;
+}
+/* CodeMirror's `.cm-editor` injects `display: flex` from its own theme
+   classes (the `ͼ*` ones), which outranks an inline `display: none` set on
+   the same element. Wrap the editor in this container so we toggle the
+   wrapper's display instead — no specificity battle. */
+.cm-editor-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cm-editor-wrap.is-hidden {
+  display: none;
+}
+.cm-editor-wrap > .cm-editor {
+  flex: 1;
+  min-height: 0;
+}
+.proj-md-preview {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 18px 28px 32px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.proj-md-preview h1,
+.proj-md-preview h2,
+.proj-md-preview h3,
+.proj-md-preview h4 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.4em 0 0.4em;
+  color: var(--ink);
+}
+.proj-md-preview h1 {
+  font-size: 1.7em;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.3em;
+}
+.proj-md-preview h2 {
+  font-size: 1.35em;
+  border-bottom: 1px solid var(--rule-2);
+  padding-bottom: 0.25em;
+}
+.proj-md-preview h3 {
+  font-size: 1.15em;
+}
+.proj-md-preview h4 {
+  font-size: 1em;
+}
+.proj-md-preview p {
+  margin: 0.6em 0;
+}
+.proj-md-preview ul,
+.proj-md-preview ol {
+  margin: 0.6em 0;
+  padding-left: 1.6em;
+}
+.proj-md-preview li {
+  margin: 0.2em 0;
+}
+.proj-md-preview a {
+  color: var(--accent, #4b8fff);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.proj-md-preview a:hover {
+  text-decoration-thickness: 2px;
+}
+.proj-md-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--paper-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.proj-md-preview pre {
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin: 0.8em 0;
+}
+.proj-md-preview pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+.proj-md-preview blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 0.9em;
+  border-left: 3px solid var(--rule-2);
+  color: var(--ink-mute);
+}
+.proj-md-preview hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 1.5em 0;
+}
+.proj-md-preview table {
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  font-size: 0.95em;
+}
+.proj-md-preview th,
+.proj-md-preview td {
+  border: 1px solid var(--rule);
+  padding: 5px 10px;
+  text-align: left;
+}
+.proj-md-preview th {
+  background: var(--paper-2);
+  font-weight: 600;
+}
+.proj-md-preview img {
+  max-width: 100%;
+  height: auto;
 }
 
 /* ── Preview pane (Run/Stop, iframe, logs, errors) ───────────────── */
@@ -1431,6 +1599,15 @@
   font-style: italic;
   font-size: 12px;
   color: var(--ink-mute);
+  padding: 0 24px;
+  text-align: center;
+}
+.proj-preview-error-msg {
+  color: var(--danger);
+  font-style: normal;
+  font-weight: 500;
+  max-width: 32em;
+  line-height: 1.5;
 }
 .proj-preview-iframe {
   position: absolute;
@@ -1465,6 +1642,29 @@
 }
 .proj-preview-error-line {
   white-space: pre-wrap;
+  color: var(--danger);
+}
+.proj-preview-error-link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--syn-number);
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 77, 140, 0.4);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.proj-preview-error-link:hover,
+.proj-preview-error-link:focus-visible {
+  text-decoration-color: var(--syn-number);
+  outline: none;
+}
+.proj-preview-error-prefix {
+  color: var(--danger);
+}
+.proj-preview-error-msg {
   color: var(--danger);
 }
 .proj-preview-errors .muted {

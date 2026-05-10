@@ -15,6 +15,7 @@
  *   POST /fs/mkdir     { lang, path }                     → { ok }
  *   POST /proj/start          { lang }                    → { ok, vitePort, ready }
  *   POST /proj/stop           { lang }                    → { ok }
+ *   POST /proj/reset          { lang }                    → { root, created } (stop + wipe folder + rescaffold)
  *   POST /proj/open           { lang, target }            → { ok, error? }   target = vscode|vs|explorer
  *   GET  /proj/open/targets                               → { vscode, vs, explorer }   bool availability
  *   GET  /proj/status?lang=…                              → { running, ready, … }
@@ -32,6 +33,7 @@ import {
   openProject,
   readFile,
   renameFile,
+  resetProject,
   startProject,
   stopProject,
   subscribeFsEvents,
@@ -172,6 +174,19 @@ function handleProjScaffold(query, res) {
   sendJson(res, 200, ensureScaffold(query.lang));
 }
 
+async function handleProjReset(req, res) {
+  const body = await readJsonBody(req);
+  if (!body.lang) {
+    sendJson(res, 400, { error: 'missing lang' });
+    return;
+  }
+  try {
+    sendJson(res, 200, await resetProject(body.lang));
+  } catch (e) {
+    sendJson(res, 500, { error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 function handleProjLogsRecent(query, res) {
   if (!query.lang) {
     sendJson(res, 400, { error: 'missing lang' });
@@ -281,6 +296,7 @@ async function handleProj(method, urlPath, req, res) {
   if (method === 'POST' && urlPath === '/proj/start') return handleProjStart(req, res);
   if (method === 'POST' && urlPath === '/proj/stop') return handleProjStop(req, res);
   if (method === 'POST' && urlPath === '/proj/scaffold') return handleProjScaffold(query, res);
+  if (method === 'POST' && urlPath === '/proj/reset') return handleProjReset(req, res);
   if (method === 'POST' && urlPath === '/proj/open') return handleProjOpen(req, res);
   if (method === 'GET' && urlPath === '/proj/open/targets') return handleProjOpenTargets(res);
   if (method === 'GET' && urlPath === '/proj/status') return handleProjStatus(query, res);

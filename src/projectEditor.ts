@@ -17,6 +17,7 @@ import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
 import { markdown } from '@codemirror/lang-markdown';
+import { xml } from '@codemirror/lang-xml';
 import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { lintKeymap } from '@codemirror/lint';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
@@ -32,10 +33,38 @@ import {
   lineNumbers,
   rectangularSelection,
 } from '@codemirror/view';
+import { csharp } from '@replit/codemirror-lang-csharp';
+
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 
 import { tutorHighlight, tutorTheme } from './editor';
 import { fetchFile, writeFile } from './projectApi';
 import type { LanguageId } from './types';
+
+// GitHub-flavoured markdown defaults: tables, strikethrough, autolinks,
+// task lists. Newlines inside paragraphs become <br/>.
+marked.setOptions({ gfm: true, breaks: false });
+
+function isMarkdownPath(path: string): boolean {
+  const dot = path.lastIndexOf('.');
+  if (dot === -1) return false;
+  const ext = path.slice(dot + 1).toLowerCase();
+  return ext === 'md' || ext === 'markdown';
+}
+
+function renderMarkdownToSafeHTML(source: string): string {
+  // marked.parse can be async with custom extensions; force sync for our
+  // simple use-case so we can synchronously swap the preview content.
+  const rawHtml = marked.parse(source, { async: false }) as string;
+  // DOMPurify strips <script>, on*= handlers, javascript: URLs, and any other
+  // HTML/attribute that could execute. Markdown can embed raw HTML; the user
+  // is the author here, but defence-in-depth — and a future `git pull` could
+  // bring in scaffold content from elsewhere.
+  return DOMPurify.sanitize(rawHtml, {
+    USE_PROFILES: { html: true },
+  });
+}
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -66,6 +95,12 @@ export interface ProjectEditor {
   getOpenPaths(): string[];
   /** Currently open files with their in-memory contents (includes unsaved edits). */
   getOpenFiles(): Array<{ path: string; content: string; dirty: boolean }>;
+  /**
+   * Open `path` (if not already open), focus the tab, place the cursor at
+   * 1-based (line, col), and scroll it into view. Out-of-range coordinates
+   * clamp to the document end. No-op if the file fails to open.
+   */
+  revealAt(path: string, line: number, col: number): Promise<void>;
   destroy(): void;
 }
 
@@ -76,6 +111,8 @@ interface TabState {
   savedContent: string;
   /** Pending debounced-save timer. */
   saveTimer: number | null;
+  /** Per-tab markdown view mode. Only meaningful when isMarkdownPath(path). */
+  mdMode: 'raw' | 'preview';
 }
 
 function langExtensionForPath(path: string): Extension | null {
@@ -103,6 +140,12 @@ function langExtensionForPath(path: string): Extension | null {
     case 'md':
     case 'markdown':
       return markdown();
+    case 'xml':
+    case 'xaml':
+    case 'csproj':
+      return xml();
+    case 'cs':
+      return csharp();
     default:
       return null;
   }
@@ -175,17 +218,87 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     renderTabs();
   });
 
+  // Wrap CodeMirror's root so we can toggle the WRAPPER's display when the
+  // user flips to Markdown preview. Setting display:none on .cm-editor itself
+  // loses to CM's own injected display:flex and would need !important.
+  const editorWrap = div('cm-editor-wrap');
+  opts.editorHost.appendChild(editorWrap);
   const view = new EditorView({
-    parent: opts.editorHost,
+    parent: editorWrap,
     state: EditorState.create({ doc: '', extensions: [...baseExtensions(), updateListener] }),
   });
 
-  view.dom.style.height = '100%';
+  // Markdown preview pane lives in the same editorHost; we toggle visibility
+  // instead of unmounting so the editor's compartments / history aren't
+  // rebuilt every time the user flips the mode.
+  const mdPreview = div('proj-md-preview');
+  mdPreview.style.display = 'none';
+  opts.editorHost.appendChild(mdPreview);
+
+  function renderMarkdownInto(host: HTMLElement, source: string): void {
+    // Two-stage safety: marked → DOMPurify (in renderMarkdownToSafeHTML) →
+    // parsed into a DocumentFragment and appended. Using
+    // createContextualFragment instead of innerHTML so the assignment isn't
+    // textual `innerHTML =`; the parser still runs but on already-sanitised
+    // markup. textContent first to clear any prior render.
+    host.textContent = '';
+    const safeHtml = renderMarkdownToSafeHTML(source);
+    const fragment = document.createRange().createContextualFragment(safeHtml);
+    host.appendChild(fragment);
+  }
 
   function setStatus(text: string, kind: 'info' | 'error' = 'info'): void {
     opts.statusHost.textContent = '';
     const cls = kind === 'error' ? 'proj-status-line proj-status-error' : 'proj-status-line';
     opts.statusHost.appendChild(span(text, cls));
+    // For markdown files, append the Raw / Preview segmented control to the
+    // status line. Switching tabs calls setStatus again so the toggle
+    // re-renders for the new tab's mode.
+    if (active !== null) {
+      const tab = tabs.get(active);
+      if (tab !== undefined && isMarkdownPath(tab.path)) {
+        opts.statusHost.appendChild(buildMdToggle(tab));
+      }
+    }
+  }
+
+  function buildMdToggle(tab: TabState): HTMLElement {
+    const group = div('md-mode-toggle');
+    for (const mode of ['raw', 'preview'] as const) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `md-mode-btn${tab.mdMode === mode ? ' is-active' : ''}`;
+      btn.textContent = mode === 'raw' ? 'Raw' : 'Preview';
+      btn.addEventListener('click', () => setMdMode(tab, mode));
+      group.appendChild(btn);
+    }
+    return group;
+  }
+
+  function setMdMode(tab: TabState, mode: 'raw' | 'preview'): void {
+    if (tab.mdMode === mode) return;
+    tab.mdMode = mode;
+    if (active === tab.path) applyMdView(tab);
+    setStatus(tab.path); // re-render the toggle's active state
+  }
+
+  function applyMdView(tab: TabState): void {
+    if (!isMarkdownPath(tab.path)) {
+      editorWrap.classList.remove('is-hidden');
+      mdPreview.style.display = 'none';
+      return;
+    }
+    if (tab.mdMode === 'preview') {
+      // Pull content from the live editor state when this tab is active so
+      // unsaved edits are reflected when the student flips to Preview.
+      const content = tab.path === active ? view.state.doc.toString() : tab.state.doc.toString();
+      renderMarkdownInto(mdPreview, content);
+      mdPreview.style.display = '';
+      editorWrap.classList.add('is-hidden');
+    } else {
+      editorWrap.classList.remove('is-hidden');
+      mdPreview.style.display = 'none';
+    }
   }
 
   function isDirty(tab: TabState): boolean {
@@ -239,6 +352,11 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
       suppressUpdate = true;
       view.setState(EditorState.create({ doc: '', extensions: [...baseExtensions(), updateListener] }));
       suppressUpdate = false;
+      // Reset the markdown preview pane so a stale render isn't visible after
+      // the last tab is closed.
+      mdPreview.style.display = 'none';
+      mdPreview.textContent = '';
+      editorWrap.classList.remove('is-hidden');
       setStatus('No file open.');
       return;
     }
@@ -247,6 +365,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     suppressUpdate = true;
     view.setState(tab.state);
     suppressUpdate = false;
+    applyMdView(tab);
     setStatus(path);
     renderTabs();
   }
@@ -265,7 +384,10 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
       return;
     }
     const state = buildState(content, path);
-    tabs.set(path, { path, state, savedContent: content, saveTimer: null });
+    // Default markdown files to Preview on first open — students typically
+    // want to *read* a README, not edit it. Toggling to Raw flips into the
+    // editor view. Non-markdown files ignore this field.
+    tabs.set(path, { path, state, savedContent: content, saveTimer: null, mdMode: 'preview' });
     openOrder.push(path);
     switchTo(path);
     notifyTabs();
@@ -352,7 +474,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
       try {
         const content = await fetchFile(opts.lang, path);
         const state = buildState(content, path);
-        tabs.set(path, { path, state, savedContent: content, saveTimer: null });
+        tabs.set(path, { path, state, savedContent: content, saveTimer: null, mdMode: 'preview' });
         openOrder.push(path);
       } catch {
         // skip files that no longer exist
@@ -392,6 +514,9 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
       suppressUpdate = true;
       view.setState(newState);
       suppressUpdate = false;
+      // Re-render the markdown preview if currently in preview mode — the
+      // file just changed on disk, the rendered output needs to reflect that.
+      applyMdView(tab);
     }
     renderTabs();
   }
@@ -412,6 +537,10 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
       state: newState,
       savedContent: dirty ? '' : content, // preserve dirty status
       saveTimer: null,
+      // Carry mdMode across so a rename within markdown preserves view state;
+      // a rename that changes the extension to a non-md type just ignores it
+      // (applyMdView's first guard returns the editor view).
+      mdMode: tab.mdMode,
     };
     tabs.delete(oldPath);
     tabs.set(newPath, newTab);
@@ -421,6 +550,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
       suppressUpdate = true;
       view.setState(newState);
       suppressUpdate = false;
+      applyMdView(newTab);
       setStatus(newPath);
     }
     renderTabs();
@@ -445,6 +575,32 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     notifyTabs();
   }
 
+  async function revealAt(path: string, line: number, col: number): Promise<void> {
+    // openFile is idempotent: already-open tabs short-circuit through switchTo.
+    // For a fresh file it awaits the /fs/read fetch and only then switches the
+    // view. Either way, after this returns the tab is the active one.
+    await openFile(path);
+    if (active !== path) return; // openFile failed (unreadable, deleted)
+    const tab = tabs.get(path);
+    if (tab === undefined) return;
+    // If the file is markdown and the user landed in Preview mode, flip to Raw
+    // so the cursor placement is actually visible. Build errors don't really
+    // hit markdown, but the same revealAt API may serve other callers later.
+    if (isMarkdownPath(path) && tab.mdMode === 'preview') {
+      setMdMode(tab, 'raw');
+    }
+    const doc = view.state.doc;
+    const safeLine = Math.max(1, Math.min(line, doc.lines));
+    const lineObj = doc.line(safeLine);
+    const safeCol = Math.max(0, Math.min(col - 1, lineObj.length));
+    const offset = lineObj.from + safeCol;
+    view.dispatch({
+      selection: { anchor: offset },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
+
   return {
     openFile,
     switchTo,
@@ -454,6 +610,7 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     refreshFile,
     renameTab,
     forgetTab,
+    revealAt,
     getOpenPaths(): string[] {
       return [...openOrder];
     },

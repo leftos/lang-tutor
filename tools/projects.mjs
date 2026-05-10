@@ -69,7 +69,11 @@ const PROJECT_CONFIG = Object.freeze({
   csharp: {
     scaffoldDir: 'csharp',
     install: { cmd: 'dotnet', args: ['restore'], marker: 'obj' },
-    dev: { cmd: 'dotnet', args: ['run'] },
+    // --verbosity minimal: default would be 'quiet' under non-TTY, which prints
+    // nothing until the build fails. 'minimal' streams the restore + build
+    // milestones we need for the frontend's build-phase pill, plus
+    // `Foo.cs(L,C): error CSnnnn:` lines for the Build errors tab.
+    dev: { cmd: 'dotnet', args: ['run', '--verbosity', 'minimal'] },
     readiness: { kind: 'process-alive', minAliveMs: PROCESS_ALIVE_DEFAULT_MS },
     treeIgnore: new Set(['bin', 'obj', '.vs']),
     bootstrap: null,
@@ -107,6 +111,64 @@ function commandExists(cmd) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Csharp preflight: catch the two failure modes that produce inscrutable
+ * `dotnet run` errors otherwise:
+ *  - No .csproj in projects/csharp/ (user deleted the scaffold; dotnet
+ *    reports "Couldn't find a project to run" which means nothing to a
+ *    student).
+ *  - .csproj `<TargetFramework>` is newer than any installed SDK (`net8.0`
+ *    on a machine with only .NET 6 SDK; dotnet emits a wall of NETSDK1045
+ *    babble).
+ *
+ * Returns `null` on pass; a friendly hint string on fail.
+ */
+function preflightCsharp(cwd) {
+  let csprojPath = null;
+  try {
+    const entries = readdirSync(cwd, { withFileTypes: true });
+    const csproj = entries.find((e) => e.isFile() && e.name.toLowerCase().endsWith('.csproj'));
+    if (csproj === undefined) {
+      return 'No .csproj file found in projects/csharp/. The project scaffold is incomplete — click Reset to re-scaffold.';
+    }
+    csprojPath = join(cwd, csproj.name);
+  } catch (e) {
+    return `Could not list projects/csharp/: ${e.message}`;
+  }
+
+  let csprojContent;
+  try {
+    csprojContent = readFileSync(csprojPath, 'utf8');
+  } catch (e) {
+    return `Could not read ${csprojPath}: ${e.message}`;
+  }
+
+  const tfMatch = csprojContent.match(/<TargetFramework>\s*net(\d+)\.\d+(?:-[\w]+)?\s*<\/TargetFramework>/i);
+  if (tfMatch === null) return null; // unrecognised TFM — let dotnet itself complain
+  const requiredMajor = Number.parseInt(tfMatch[1], 10);
+  if (!Number.isFinite(requiredMajor)) return null;
+
+  let sdkOutput;
+  try {
+    const r = spawnSync('dotnet', ['--list-sdks'], { shell: IS_WIN, encoding: 'utf8', timeout: 5_000 });
+    if (r.status !== 0) return null;
+    sdkOutput = r.stdout ?? '';
+  } catch {
+    return null;
+  }
+  const installedMajors = new Set();
+  for (const line of sdkOutput.split('\n')) {
+    const m = line.match(/^(\d+)\.\d+\.\d+/);
+    if (m !== null) installedMajors.add(Number.parseInt(m[1], 10));
+  }
+  const hasMatch = [...installedMajors].some((v) => v >= requiredMajor);
+  if (!hasMatch) {
+    const installed = [...installedMajors].sort((a, b) => a - b).join(', ') || 'none';
+    return `Project targets .NET ${requiredMajor}+ but only these SDK majors are installed: ${installed}. Install .NET ${requiredMajor} SDK from https://aka.ms/dotnet/download (or edit csharp.csproj's <TargetFramework> to match).`;
+  }
+  return null;
 }
 
 /** PATH lookup using the platform's `where` / `which` — for tools that don't have a sane --version. */
@@ -543,13 +605,61 @@ export function mkdir(lang, relPath) {
 
 // ── Process supervision ────────────────────────────────────────────────────
 
+// Persist the `procs` Map across module reloads. Vite restarts its dev server
+// (and re-evaluates this module) every time tools/projects.mjs is edited; a
+// fresh module instance with an empty procs Map silently abandons every
+// running child the previous instance was supervising. Stashing on globalThis
+// preserves both PIDs and log-buffer state, so /proj/stop on the next request
+// kills the right process tree and the SSE log subscription resumes cleanly.
+//
+// SSE subscribers (`state.subs`) are deliberately NOT preserved — they're DOM
+// observers in the previous request's lifetime, useless after a reload.
+const PROCS_GLOBAL_KEY = '__langTutorProcs';
+const EXIT_HOOK_KEY = '__langTutorExitHookInstalled';
 /** @type {Map<string, ProcState>} */
-const procs = new Map();
+const procs = (() => {
+  const existing = /** @type {Map<string, ProcState> | undefined} */ (globalThis[PROCS_GLOBAL_KEY]);
+  if (existing instanceof Map) {
+    for (const state of existing.values()) state.subs = new Set();
+    return existing;
+  }
+  const fresh = new Map();
+  globalThis[PROCS_GLOBAL_KEY] = fresh;
+  return fresh;
+})();
+
+// Best-effort cleanup when the dev server itself is killed (Ctrl+C). Without
+// this every csharp.exe / vite-spawned node sticks around as an orphan. Guard
+// with a global flag so HMR-induced module reloads don't pile up duplicate
+// listeners (which would emit-warn after ~10).
+if (globalThis[EXIT_HOOK_KEY] !== true) {
+  globalThis[EXIT_HOOK_KEY] = true;
+  const cleanup = () => {
+    for (const state of procs.values()) {
+      if (state.proc !== null) killProcessTree(state.proc);
+    }
+  };
+  process.on('SIGINT', () => {
+    cleanup();
+    process.exit(130);
+  });
+  process.on('SIGTERM', () => {
+    cleanup();
+    process.exit(143);
+  });
+  process.on('exit', cleanup);
+}
 
 /**
  * @typedef {object} ProcState
  * @property {import('node:child_process').ChildProcess | null} proc
- * @property {string} phase  'install' | 'starting' | 'ready' | 'stopped' | 'error'
+ * @property {number | null} pid          PID of the supervised child while running.
+ * @property {string} phase  'install' | 'starting' | 'ready' | 'stopped' | 'exited' | 'error'
+ *   - 'stopped' means the user clicked Stop (or initial state).
+ *   - 'exited' means the child closed on its own (e.g. WPF window closed).
+ * @property {number | null} lastExitCode Exit code of the most recent self-exit. Reset on next start.
+ * @property {number | null} userStoppedAt  Timestamp of the most recent stopProject() call; used
+ *   in the 'close' handler to distinguish user-stop from self-exit.
  * @property {number | null} vitePort  Null for desktop projects with no HTTP server.
  * @property {Array<{stream: string, line: string, ts: number}>} logs
  * @property {Set<(entry: {stream: string, line: string, ts: number}) => void>} subs
@@ -561,7 +671,10 @@ function getOrInitState(lang) {
   if (!s) {
     s = {
       proc: null,
+      pid: null,
       phase: 'stopped',
+      lastExitCode: null,
+      userStoppedAt: null,
       vitePort: getReadinessPort(lang),
       logs: [],
       subs: new Set(),
@@ -684,7 +797,21 @@ function runInstall(state, cwd, install) {
   return new Promise((resolveInstall) => {
     state.phase = 'install';
     const label = `${install.cmd} ${install.args.join(' ')}`;
-    pushLog(state, 'system', `Running ${label} (one-time)…`);
+    // Cold restores / installs can fetch hundreds of MB of packages and easily
+    // run 30+ seconds the first time; the 'install' phase pill is opaque, so
+    // call out the wait in plain English so the student doesn't think the app
+    // hung.
+    const isDotnetRestore = install.cmd === 'dotnet' && install.args[0] === 'restore';
+    const isPnpmInstall = (install.cmd === 'pnpm' || install.cmd === 'pnpm.cmd') && install.args[0] === 'install';
+    let friendlyHint;
+    if (isDotnetRestore) {
+      friendlyHint = 'Running dotnet restore (one-time, downloads NuGet packages — can take a minute on a cold cache)…';
+    } else if (isPnpmInstall) {
+      friendlyHint = 'Running pnpm install (one-time, downloads npm dependencies — can take ~30 s on a cold cache)…';
+    } else {
+      friendlyHint = `Running ${label} (one-time)…`;
+    }
+    pushLog(state, 'system', friendlyHint);
     const proc = spawnLogged(state, install.cmd, install.args, cwd, 'install');
     if (!proc) {
       resolveInstall(false);
@@ -719,7 +846,14 @@ export async function startProject(lang) {
     return { ok: true, vitePort: state.vitePort, ready: state.phase === 'ready' };
   }
 
-  ensureScaffold(lang);
+  // Scaffold returns the list of newly-created paths (empty if nothing changed).
+  // First-time start gets a friendly "creating workspace" line so the student
+  // sees what's happening rather than a 30-second blank Output tab.
+  const scaffold = ensureScaffold(lang);
+  if (scaffold.created.length > 0) {
+    pushLog(state, 'system', `Creating projects/${PROJECT_CONFIG[lang].scaffoldDir}/ workspace from template (${scaffold.created.length} files)…`);
+    pushLog(state, 'system', 'Workspace ready.');
+  }
   injectBootstrap(lang);
   const cwd = getProjectRoot(lang);
   state.error = null;
@@ -740,24 +874,47 @@ export async function startProject(lang) {
     }
   }
 
+  // Per-language preflight: catches misconfigurations that produce inscrutable
+  // tool-output otherwise. Currently only csharp (missing .csproj, SDK / TFM
+  // mismatch). Web has nothing equivalent; pnpm errors are usually clear.
+  if (lang === 'csharp') {
+    const csharpHint = preflightCsharp(cwd);
+    if (csharpHint !== null) {
+      pushLog(state, 'system', `[error] ${csharpHint}`);
+      state.phase = 'error';
+      state.error = csharpHint;
+      return { ok: false, error: state.error };
+    }
+  }
+
   if (config.install !== null && !existsSync(join(cwd, config.install.marker))) {
     const ok = await runInstall(state, cwd, config.install);
     if (!ok) return { ok: false, error: state.error ?? 'install failed' };
   }
 
   state.phase = 'starting';
+  state.lastExitCode = null;
+  state.userStoppedAt = null;
   pushLog(state, 'system', `Starting ${describeStartTarget(config)} …`);
   const proc = spawnLogged(state, config.dev.cmd, config.dev.args, cwd, 'dev');
   if (!proc) return { ok: false, error: state.error ?? 'spawn failed' };
 
   state.proc = proc;
+  state.pid = proc.pid ?? null;
+  // Abort the readiness probe the moment the proc exits — otherwise probeHttp
+  // would keep polling for up to 30 s after Vite dies on EADDRINUSE (or any
+  // other startup failure), leaving the frontend pill stuck on "starting".
+  const probe = new AbortController();
   proc.on('close', (code) => {
     pushLog(state, 'system', `Dev process exited (code ${code}).`);
+    const wasUserStop = state.userStoppedAt !== null && Date.now() - state.userStoppedAt < 5000;
     state.proc = null;
-    state.phase = 'stopped';
+    state.pid = null;
+    state.lastExitCode = code;
+    state.phase = wasUserStop ? 'stopped' : 'exited';
+    probe.abort();
   });
 
-  const probe = new AbortController();
   const ready = await probeReady(state, config.readiness, probe.signal);
   if (ready) {
     state.phase = 'ready';
@@ -796,6 +953,7 @@ export async function stopProject(lang) {
   const state = procs.get(lang);
   if (!state?.proc) return { ok: true };
   const proc = state.proc;
+  state.userStoppedAt = Date.now();
   killProcessTree(proc);
   await new Promise((res) => {
     const timer = setTimeout(() => {
@@ -814,20 +972,62 @@ export async function stopProject(lang) {
     });
   });
   state.proc = null;
+  state.pid = null;
   state.phase = 'stopped';
   return { ok: true };
+}
+
+/**
+ * Wipe the on-disk project folder and re-scaffold it from the template.
+ * Stops the dev process first (best-effort — succeeds even if nothing is
+ * running). Returns the same shape as ensureScaffold so the frontend can
+ * trust the rebuild succeeded before reloading the tree / tabs.
+ *
+ * Throws on filesystem failure (caller should surface as a 500 error).
+ */
+export async function resetProject(lang) {
+  assertLang(lang);
+  await stopProject(lang);
+
+  const state = procs.get(lang);
+  if (state !== undefined) {
+    // Clear log buffer, exit-code memory, and any latched 'error' phase so
+    // the next /proj/start starts from a clean slate.
+    state.logs = [];
+    state.lastExitCode = null;
+    state.userStoppedAt = null;
+    state.error = null;
+    state.phase = 'stopped';
+  }
+
+  const root = getProjectRoot(lang);
+  if (existsSync(root)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  return ensureScaffold(lang);
 }
 
 export function getStatus(lang) {
   assertLang(lang);
   const state = procs.get(lang);
   if (!state) {
-    return { running: false, ready: false, phase: 'stopped', vitePort: getReadinessPort(lang), error: null };
+    return {
+      running: false,
+      ready: false,
+      phase: 'stopped',
+      pid: null,
+      lastExitCode: null,
+      vitePort: getReadinessPort(lang),
+      error: null,
+    };
   }
   return {
     running: state.proc !== null,
     ready: state.phase === 'ready',
     phase: state.phase,
+    pid: state.pid,
+    lastExitCode: state.lastExitCode,
     vitePort: state.vitePort,
     error: state.error,
   };

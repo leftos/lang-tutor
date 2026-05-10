@@ -13,11 +13,15 @@ interface ScaffoldResponse {
   readonly created: readonly string[];
 }
 
-interface ProjectStatus {
+export type ProjectPhase = 'install' | 'starting' | 'ready' | 'stopped' | 'exited' | 'error';
+
+export interface ProjectStatus {
   readonly running: boolean;
   readonly ready: boolean;
-  readonly phase: string;
-  readonly vitePort: number;
+  readonly phase: ProjectPhase;
+  readonly pid: number | null;
+  readonly lastExitCode: number | null;
+  readonly vitePort: number | null;
   readonly error: string | null;
 }
 
@@ -89,6 +93,10 @@ export async function stopProject(lang: LanguageId): Promise<StopResponse> {
 
 export async function getStatus(lang: LanguageId): Promise<ProjectStatus> {
   return getJson(`/proj/status?lang=${encodeURIComponent(lang)}`);
+}
+
+export async function resetProject(lang: LanguageId): Promise<{ root: string; created: readonly string[] }> {
+  return postJson('/proj/reset', { lang });
 }
 
 /** Walk the tree depth-first and return all file paths (no directories). */
