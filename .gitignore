@@ -18,6 +18,10 @@ projects/
 npm-debug.log*
 pnpm-debug.log*
 
+# Playwright MCP server artifacts (snapshots, console logs from browser
+# automation). Generated under the project root by the playwright tool.
+.playwright-mcp/
+
 # Editor / OS
 .vscode/
 .idea/
