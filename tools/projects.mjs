@@ -1,15 +1,19 @@
 /**
- * Project workspace manager for the web-course "language".
+ * Project workspace manager for project-kind languages (currently `web`,
+ * with `csharp` arriving in Phase 2).
  *
  * Owns:
  *  - Scaffolding the on-disk workspace under projects/<scaffoldDir>/.
  *  - File CRUD (tree / read / write / rename / delete / mkdir) with strict
  *    path-traversal rejection — every path is resolved against the project root
  *    and rejected if it escapes.
- *  - Process supervision: lazy `pnpm install`, then `pnpm dev` on a fixed port.
+ *  - Process supervision per the per-language `PROJECT_CONFIG` table: a one-time
+ *    install command (gated by a marker file), then a long-running dev command.
  *    Stdout/stderr are streamed into a per-language ring buffer and broadcast
  *    to SSE subscribers.
- *  - Readiness probe: poll the dev port until it responds 2xx, then mark ready.
+ *  - Readiness probe per the language's `readiness` declaration: `http-probe`
+ *    polls a port until it responds; `process-alive` waits for the spawned
+ *    child to stay alive past a warm-up window (used by desktop processes).
  *
  * SECURITY: Like tools/checker.mjs, every spawn uses array-form `spawn(cmd, args[])`.
  * No shell, no string concatenation. The only user-controlled input is file content
@@ -26,20 +30,55 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const PROJECTS_DIR = join(REPO_ROOT, 'projects');
 
-const SCAFFOLD_DIRS = Object.freeze({ web: 'web' });
-const ALLOWED_LANGS = Object.freeze(new Set(['web']));
-
-const PORTS = Object.freeze({ web: { vite: 5180 } });
-
 const LOG_RING_SIZE = 500;
 const READY_PROBE_INTERVAL_MS = 250;
 const READY_PROBE_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 3_000;
+const PROCESS_ALIVE_DEFAULT_MS = 500;
 
 const IS_WIN = process.platform === 'win32';
 const PNPM = IS_WIN ? 'pnpm.cmd' : 'pnpm';
 
-const TREE_IGNORE = new Set(['node_modules', '.git', 'dist', '.vite']);
+/**
+ * Per-language project configuration. Single source of truth for
+ * scaffold directory, install/dev commands, readiness model, watcher
+ * ignore set, and which (if any) iframe bootstrap to inject.
+ *
+ * @typedef {{
+ *   scaffoldDir: string,
+ *   install: { cmd: string, args: string[], marker: string } | null,
+ *   dev: { cmd: string, args: string[] },
+ *   readiness:
+ *     | { kind: 'http-probe', port: number }
+ *     | { kind: 'process-alive', minAliveMs: number },
+ *   treeIgnore: Set<string>,
+ *   bootstrap: 'web-iframe' | null,
+ * }} ProjectConfig
+ *
+ * @type {Readonly<Record<string, ProjectConfig>>}
+ */
+const PROJECT_CONFIG = Object.freeze({
+  web: {
+    scaffoldDir: 'web',
+    install: { cmd: PNPM, args: ['install'], marker: 'node_modules' },
+    dev: { cmd: PNPM, args: ['dev'] },
+    readiness: { kind: 'http-probe', port: 5180 },
+    treeIgnore: new Set(['node_modules', '.git', 'dist', '.vite']),
+    bootstrap: 'web-iframe',
+  },
+});
+
+const ALLOWED_LANGS = Object.freeze(new Set(Object.keys(PROJECT_CONFIG)));
+
+function getTreeIgnore(lang) {
+  return PROJECT_CONFIG[lang].treeIgnore;
+}
+
+/** Port reported back to the frontend. Null for desktop projects (no HTTP server). */
+function getReadinessPort(lang) {
+  const r = PROJECT_CONFIG[lang].readiness;
+  return r.kind === 'http-probe' ? r.port : null;
+}
 
 // ── Iframe bootstrap (DOM snapshot + console capture for evaluate) ──
 //
@@ -95,6 +134,7 @@ const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
 ${BOOTSTRAP_END}`;
 
 function injectBootstrap(lang) {
+  if (PROJECT_CONFIG[lang].bootstrap !== 'web-iframe') return;
   const root = getProjectRoot(lang);
   const indexPath = join(root, 'index.html');
   if (!existsSync(indexPath)) return;
@@ -155,7 +195,7 @@ function assertLang(lang) {
 
 export function getProjectRoot(lang) {
   assertLang(lang);
-  return join(PROJECTS_DIR, SCAFFOLD_DIRS[lang]);
+  return join(PROJECTS_DIR, PROJECT_CONFIG[lang].scaffoldDir);
 }
 
 function safeResolve(projectRoot, relPath) {
@@ -263,7 +303,7 @@ export function ensureScaffold(lang) {
 
 // ── FS CRUD ─────────────────────────────────────────────────────────────────
 
-function buildTree(absDir, projectRoot) {
+function buildTree(absDir, projectRoot, ignoreSet) {
   const name = absDir === projectRoot ? '' : (relative(projectRoot, absDir).split(sep).pop() ?? '');
   const node = { name, path: relative(projectRoot, absDir).split(sep).join('/'), type: 'dir', children: [] };
 
@@ -280,10 +320,10 @@ function buildTree(absDir, projectRoot) {
   });
 
   for (const entry of entries) {
-    if (TREE_IGNORE.has(entry.name)) continue;
+    if (ignoreSet.has(entry.name)) continue;
     const child = join(absDir, entry.name);
     if (entry.isDirectory()) {
-      node.children.push(buildTree(child, projectRoot));
+      node.children.push(buildTree(child, projectRoot, ignoreSet));
     } else if (entry.isFile()) {
       node.children.push({
         name: entry.name,
@@ -298,7 +338,7 @@ function buildTree(absDir, projectRoot) {
 export function getTree(lang) {
   const root = getProjectRoot(lang);
   if (!existsSync(root)) return { tree: null, scaffolded: false };
-  return { tree: buildTree(root, root), scaffolded: true };
+  return { tree: buildTree(root, root, getTreeIgnore(lang)), scaffolded: true };
 }
 
 export function readFile(lang, relPath) {
@@ -360,7 +400,7 @@ const procs = new Map();
  * @typedef {object} ProcState
  * @property {import('node:child_process').ChildProcess | null} proc
  * @property {string} phase  'install' | 'starting' | 'ready' | 'stopped' | 'error'
- * @property {number} vitePort
+ * @property {number | null} vitePort  Null for desktop projects with no HTTP server.
  * @property {Array<{stream: string, line: string, ts: number}>} logs
  * @property {Set<(entry: {stream: string, line: string, ts: number}) => void>} subs
  * @property {string | null} error
@@ -372,7 +412,7 @@ function getOrInitState(lang) {
     s = {
       proc: null,
       phase: 'stopped',
-      vitePort: PORTS[lang].vite,
+      vitePort: getReadinessPort(lang),
       logs: [],
       subs: new Set(),
       error: null,
@@ -413,7 +453,7 @@ function streamLines(state, streamName, readable) {
   });
 }
 
-async function probeReady(port, signal) {
+async function probeHttp(port, signal) {
   const url = `http://127.0.0.1:${port}/`;
   const deadline = Date.now() + READY_PROBE_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -427,6 +467,44 @@ async function probeReady(port, signal) {
     await new Promise((res) => setTimeout(res, READY_PROBE_INTERVAL_MS));
   }
   return false;
+}
+
+/**
+ * Resolve once the spawned child has stayed alive for `minAliveMs` without
+ * exiting. Used for desktop processes that don't expose an HTTP port — once
+ * the child is still running after the warm-up window, we declare it ready.
+ */
+async function probeProcessAlive(state, minAliveMs, signal) {
+  const proc = state.proc;
+  if (proc === null) return false;
+  return new Promise((resolveAlive) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      proc.removeListener('close', onClose);
+      resolveAlive(value);
+    };
+    const onClose = () => finish(false);
+    proc.once('close', onClose);
+    if (signal.aborted) {
+      finish(false);
+      return;
+    }
+    signal.addEventListener?.('abort', () => finish(false));
+    setTimeout(() => finish(state.proc !== null), minAliveMs);
+  });
+}
+
+function probeReady(state, readiness, signal) {
+  switch (readiness.kind) {
+    case 'http-probe':
+      return probeHttp(readiness.port, signal);
+    case 'process-alive':
+      return probeProcessAlive(state, readiness.minAliveMs ?? PROCESS_ALIVE_DEFAULT_MS, signal);
+    default:
+      throw new Error(`unknown readiness kind: ${readiness.kind}`);
+  }
 }
 
 function spawnLogged(state, cmd, args, cwd, phaseTag) {
@@ -452,31 +530,39 @@ function spawnLogged(state, cmd, args, cwd, phaseTag) {
   return proc;
 }
 
-function runInstall(state, cwd) {
+function runInstall(state, cwd, install) {
   return new Promise((resolveInstall) => {
     state.phase = 'install';
-    pushLog(state, 'system', 'Running pnpm install (one-time)…');
-    const proc = spawnLogged(state, PNPM, ['install'], cwd, 'install');
+    const label = `${install.cmd} ${install.args.join(' ')}`;
+    pushLog(state, 'system', `Running ${label} (one-time)…`);
+    const proc = spawnLogged(state, install.cmd, install.args, cwd, 'install');
     if (!proc) {
       resolveInstall(false);
       return;
     }
     proc.on('close', (code) => {
       if (code === 0) {
-        pushLog(state, 'system', 'pnpm install complete.');
+        pushLog(state, 'system', `${label} complete.`);
         resolveInstall(true);
       } else {
-        pushLog(state, 'system', `pnpm install exited with code ${code}.`);
+        pushLog(state, 'system', `${label} exited with code ${code}.`);
         state.phase = 'error';
-        state.error = `pnpm install exited ${code}`;
+        state.error = `${label} exited ${code}`;
         resolveInstall(false);
       }
     });
   });
 }
 
+function describeStartTarget(config) {
+  const { readiness } = config;
+  if (readiness.kind === 'http-probe') return `http://127.0.0.1:${readiness.port}`;
+  return `${config.dev.cmd} ${config.dev.args.join(' ')}`;
+}
+
 export async function startProject(lang) {
   assertLang(lang);
+  const config = PROJECT_CONFIG[lang];
   const state = getOrInitState(lang);
 
   if (state.proc !== null && (state.phase === 'starting' || state.phase === 'ready')) {
@@ -488,28 +574,28 @@ export async function startProject(lang) {
   const cwd = getProjectRoot(lang);
   state.error = null;
 
-  if (!existsSync(join(cwd, 'node_modules'))) {
-    const ok = await runInstall(state, cwd);
+  if (config.install !== null && !existsSync(join(cwd, config.install.marker))) {
+    const ok = await runInstall(state, cwd, config.install);
     if (!ok) return { ok: false, error: state.error ?? 'install failed' };
   }
 
   state.phase = 'starting';
-  pushLog(state, 'system', `Starting Vite on http://127.0.0.1:${state.vitePort} …`);
-  const proc = spawnLogged(state, PNPM, ['dev'], cwd, 'dev');
+  pushLog(state, 'system', `Starting ${describeStartTarget(config)} …`);
+  const proc = spawnLogged(state, config.dev.cmd, config.dev.args, cwd, 'dev');
   if (!proc) return { ok: false, error: state.error ?? 'spawn failed' };
 
   state.proc = proc;
   proc.on('close', (code) => {
-    pushLog(state, 'system', `Dev server exited (code ${code}).`);
+    pushLog(state, 'system', `Dev process exited (code ${code}).`);
     state.proc = null;
     state.phase = 'stopped';
   });
 
   const probe = new AbortController();
-  const ready = await probeReady(state.vitePort, probe.signal);
+  const ready = await probeReady(state, config.readiness, probe.signal);
   if (ready) {
     state.phase = 'ready';
-    pushLog(state, 'system', 'Dev server ready.');
+    pushLog(state, 'system', 'Dev process ready.');
     return { ok: true, vitePort: state.vitePort, ready: true };
   }
   return { ok: true, vitePort: state.vitePort, ready: false };
@@ -544,7 +630,7 @@ export function getStatus(lang) {
   assertLang(lang);
   const state = procs.get(lang);
   if (!state) {
-    return { running: false, ready: false, phase: 'stopped', vitePort: PORTS[lang].vite, error: null };
+    return { running: false, ready: false, phase: 'stopped', vitePort: getReadinessPort(lang), error: null };
   }
   return {
     running: state.proc !== null,
@@ -579,14 +665,14 @@ function relPathFromAbs(abs, root) {
   return relative(root, abs).split(sep).join('/');
 }
 
-function fanoutFsEvent(state, type, abs, root) {
+function fanoutFsEvent(state, type, abs, root, ignoreSet) {
   if (isRecentSelfWrite(abs)) return;
   const path = relPathFromAbs(abs, root);
   // Drop events for ignored top-level dirs (defense in depth — chokidar's
   // `ignored` option covers it, but watch events for nested paths inside an
   // ignored tree shouldn't propagate either).
   const top = path.split('/')[0];
-  if (top !== undefined && TREE_IGNORE.has(top)) return;
+  if (top !== undefined && ignoreSet.has(top)) return;
   for (const sub of state.subs) {
     try {
       sub({ type, path });
@@ -601,26 +687,27 @@ function ensureWatcher(lang) {
   if (cached !== undefined) return cached;
 
   const root = getProjectRoot(lang);
+  const ignoreSet = getTreeIgnore(lang);
   // chokidar's `ignored` accepts patterns or absolute paths; we use a
-  // function that matches any path containing one of the TREE_IGNORE
-  // segments. This catches both top-level and nested matches.
+  // function that matches any path containing one of the per-language
+  // ignore segments. This catches both top-level and nested matches.
   const watcher = chokidar.watch(root, {
     ignoreInitial: true,
     persistent: true,
     ignored: (p) => {
       const segments = p.split(/[/\\]/);
-      return segments.some((s) => TREE_IGNORE.has(s));
+      return segments.some((s) => ignoreSet.has(s));
     },
   });
 
   const state = { watcher, subs: new Set() };
   watchers.set(lang, state);
 
-  watcher.on('add', (p) => fanoutFsEvent(state, 'add', p, root));
-  watcher.on('change', (p) => fanoutFsEvent(state, 'change', p, root));
-  watcher.on('unlink', (p) => fanoutFsEvent(state, 'unlink', p, root));
-  watcher.on('addDir', (p) => fanoutFsEvent(state, 'addDir', p, root));
-  watcher.on('unlinkDir', (p) => fanoutFsEvent(state, 'unlinkDir', p, root));
+  watcher.on('add', (p) => fanoutFsEvent(state, 'add', p, root, ignoreSet));
+  watcher.on('change', (p) => fanoutFsEvent(state, 'change', p, root, ignoreSet));
+  watcher.on('unlink', (p) => fanoutFsEvent(state, 'unlink', p, root, ignoreSet));
+  watcher.on('addDir', (p) => fanoutFsEvent(state, 'addDir', p, root, ignoreSet));
+  watcher.on('unlinkDir', (p) => fanoutFsEvent(state, 'unlinkDir', p, root, ignoreSet));
   watcher.on('error', (e) => {
     console.error(`[fs-watch:${lang}]`, e);
   });

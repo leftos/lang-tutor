@@ -14,7 +14,7 @@
  */
 
 import { getStatus, type ProjectLogEntry, startProject, stopProject, subscribeProjectLogs } from './projectApi';
-import type { LanguageId } from './types';
+import type { ProjectLanguage, WebProjectRuntime } from './types';
 
 const MAX_LOG_LINES = 1000;
 const STATUS_POLL_INTERVAL_MS = 2000;
@@ -24,9 +24,7 @@ const ERROR_PATTERNS = [/\bERROR\b/i, /^✘/, /\bFAILED\b/, /Error:/];
 type PreviewTab = 'preview' | 'logs' | 'errors';
 
 export interface ProjectPreviewOptions {
-  lang: LanguageId;
-  /** Default Vite port from the language record's PORTS map. */
-  defaultPort: number;
+  lang: ProjectLanguage;
   tabsHost: HTMLElement;
   bodyHost: HTMLElement;
   statusEl: HTMLElement;
@@ -75,10 +73,21 @@ function isErrorLine(entry: ProjectLogEntry): boolean {
 }
 
 export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPreview {
+  const runtime = opts.lang.runtime;
+  switch (runtime.kind) {
+    case 'web-vite':
+      return createWebVitePreview(opts, runtime);
+    case 'desktop-process':
+      throw new Error('desktop-process preview not implemented yet (planned for M3)');
+  }
+}
+
+function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRuntime): ProjectPreview {
+  const langId = opts.lang.id;
   let activeTab: PreviewTab = 'preview';
   let running = false;
   let starting = false;
-  let vitePort = opts.defaultPort;
+  let vitePort = runtime.port;
   let statusPoll: number | null = null;
 
   // Tab body containers — created once, swapped via display: none.
@@ -202,7 +211,7 @@ export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPrevie
     const start = Date.now();
     while (Date.now() - start < 30_000) {
       try {
-        const status = await getStatus(opts.lang);
+        const status = await getStatus(langId);
         if (status.ready) {
           vitePort = status.vitePort;
           setRunningState(true);
@@ -226,7 +235,7 @@ export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPrevie
       setRunButton('Stopping…', 'busy');
       setStatusPill('stopping', 'stopped');
       try {
-        await stopProject(opts.lang);
+        await stopProject(langId);
       } finally {
         setRunningState(false);
       }
@@ -241,7 +250,7 @@ export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPrevie
     renderTabs();
     syncBodyVisibility();
     try {
-      const result = await startProject(opts.lang);
+      const result = await startProject(langId);
       if (!result.ok) {
         setStatusPill(`error: ${result.error ?? 'start failed'}`, 'error');
         setRunButton('Run', 'run');
@@ -279,12 +288,12 @@ export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPrevie
 
   // Subscribe to logs immediately — backend buffers recent lines so we don't
   // miss anything even when a previous run already started.
-  const unsubLogs = subscribeProjectLogs(opts.lang, appendLog);
+  const unsubLogs = subscribeProjectLogs(langId, appendLog);
 
   // Hydrate from current backend status — handles refresh-while-running.
   void (async (): Promise<void> => {
     try {
-      const status = await getStatus(opts.lang);
+      const status = await getStatus(langId);
       if (status.running && status.ready) {
         vitePort = status.vitePort;
         setRunningState(true);
@@ -303,7 +312,7 @@ export function createProjectPreview(opts: ProjectPreviewOptions): ProjectPrevie
   statusPoll = window.setInterval(async () => {
     if (!running) return;
     try {
-      const status = await getStatus(opts.lang);
+      const status = await getStatus(langId);
       if (!status.running) setRunningState(false);
     } catch {
       // ignore transient errors

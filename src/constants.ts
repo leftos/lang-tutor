@@ -170,7 +170,7 @@ const WEB: Language = {
   id: 'web',
   name: 'Web',
   scaffoldDir: 'web',
-  defaultVitePort: 5180,
+  runtime: { kind: 'web-vite', port: 5180 },
   topics: [
     { id: 'html-structure', title: 'HTML structure & semantic elements' },
     { id: 'css-box', title: 'CSS: selectors, specificity, the box model' },

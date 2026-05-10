@@ -198,13 +198,13 @@ The Phase 1 → Phase 2 transition for an existing user means: their localStorag
 
 Foundation. Web should keep working identically; C# stays single-buffer.
 
-- [ ] Add `ProjectRuntime` discriminated union to [src/types.ts](src/types.ts); `WEB.runtime = { kind: 'web-vite', port: 5180 }`.
-- [ ] Refactor [tools/projects.mjs](tools/projects.mjs) to read from a `PROJECT_CONFIG` table: `install`, `dev`, `readiness`, `treeIgnore`, `bootstrap` per language. Keep the web entry's behavior byte-identical.
-- [ ] Generalize `injectBootstrap()` so it's a no-op when `bootstrap` is `null`.
-- [ ] Generalize the chokidar `ignored` callback + `buildTree` to take a per-language ignore set.
-- [ ] Generalize the readiness probe: `http-probe` (existing) and `process-alive` (new — resolves once the spawned child has been alive for ~500 ms without exiting).
-- [ ] Refactor [src/projectPreview.ts](src/projectPreview.ts) to branch on `runtime.kind`: web path stays as-is; desktop path is a stub that throws "not implemented" for now.
-- [ ] `pnpm typecheck` + `pnpm lint` + manual smoke-test of the web course end-to-end (start Vite, open files, edit + save, send-to-tutor with [DOM]).
+- [x] Add `ProjectRuntime` discriminated union to [src/types.ts](src/types.ts); `WEB.runtime = { kind: 'web-vite', port: 5180 }`.
+- [x] Refactor [tools/projects.mjs](tools/projects.mjs) to read from a `PROJECT_CONFIG` table: `install`, `dev`, `readiness`, `treeIgnore`, `bootstrap` per language. Keep the web entry's behavior byte-identical.
+- [x] Generalize `injectBootstrap()` so it's a no-op when `bootstrap` is `null`.
+- [x] Generalize the chokidar `ignored` callback + `buildTree` to take a per-language ignore set.
+- [x] Generalize the readiness probe: `http-probe` (existing) and `process-alive` (new — resolves once the spawned child has been alive for ~500 ms without exiting).
+- [x] Refactor [src/projectPreview.ts](src/projectPreview.ts) to branch on `runtime.kind`: web path stays as-is; desktop path is a stub that throws "not implemented" for now.
+- [x] `pnpm typecheck` + `pnpm lint` + manual smoke-test of the web course end-to-end (start Vite, open files, edit + save, send-to-tutor with [DOM]).
 
 ### M2 — C# scaffold + supervisor
 

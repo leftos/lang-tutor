@@ -51,13 +51,26 @@ export interface SingleBufferLanguage {
   readonly firstSessionPrompt: string;
 }
 
+/** Long-running HTTP server (Vite, Hono dev, etc.) hosted in an iframe. */
+export interface WebProjectRuntime {
+  readonly kind: 'web-vite';
+  /** Port the dev server binds to. Mirrors PROJECT_CONFIG[lang].readiness.port in tools/projects.mjs. */
+  readonly port: number;
+}
+
+/** Native desktop process (e.g. `dotnet run` opening a WPF window). No HTTP server, no iframe. */
+export interface DesktopProjectRuntime {
+  readonly kind: 'desktop-process';
+}
+
+export type ProjectRuntime = WebProjectRuntime | DesktopProjectRuntime;
+
 export interface ProjectLanguage {
   readonly kind: 'project';
   readonly id: LanguageId;
   readonly name: string;
   readonly scaffoldDir: string;
-  /** Port the dev server binds to. Mirrors PORTS in tools/projects.mjs. */
-  readonly defaultVitePort: number;
+  readonly runtime: ProjectRuntime;
   readonly topics: readonly Topic[];
   readonly systemPromptIntro: string;
   readonly firstSessionPrompt: string;

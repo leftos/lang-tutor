@@ -706,8 +706,7 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
 
   if (lang.kind === 'project') {
     projectPreviewInstance = createProjectPreview({
-      lang: id,
-      defaultPort: lang.defaultVitePort,
+      lang,
       tabsHost: el('projPreviewTabs'),
       bodyHost: el('projPreviewBody'),
       statusEl: el('projPreviewStatus'),
