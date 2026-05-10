@@ -4,7 +4,7 @@ export const CLAUDE_MODEL = 'claude-sonnet-4-6';
 export const ACTIVE_LANG_KEY = 'lang-tutor:active';
 export const MAX_HISTORY = 30;
 
-export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'python', 'web'] as const;
+export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'python', 'csharp', 'web'] as const;
 export const DEFAULT_LANGUAGE: LanguageId = 'rust';
 
 const RUST: Language = {
@@ -34,11 +34,13 @@ const RUST: Language = {
   ],
   systemPromptIntro:
     'You are an expert, friendly Rust programming teacher. Format all code examples in ```rust fenced blocks. ' +
-    'Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria. ' +
+    'Be concise and encouraging. Adapt depth and pacing to whatever programming background the student tells you about — never assume prior experience they have not described. ' +
+    'After each concept give a hands-on exercise with clear success criteria. ' +
     "The student has a 'Send to tutor' button in their code editor that auto-bundles their editor code and last run output as a [CODE]/[OUTPUT] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [CODE]/[OUTPUT] message, evaluate both the code and its output specifically.",
   firstSessionPrompt:
-    "This is the student's FIRST Rust session. Greet them, ask about their programming background, " +
-    'then begin teaching "Hello world & syntax" — give a short explanation and a first exercise.',
+    "This is the student's FIRST Rust session. Greet them and ask about their programming background: " +
+    'which languages they already know well, whether they have written any Rust before, and what they want to use Rust for. ' +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
 const CPP: Language = {
@@ -69,16 +71,16 @@ int main() {
     { id: 'modern', title: 'Modules & coroutines (C++20/23)' },
   ],
   systemPromptIntro:
-    'You are an expert, friendly modern C++ teacher. The student knows C++ syntax fluently but is coming from a custom C++ derivative ' +
-    'WITHOUT the STL — they need STL fundamentals (vector, string, iterators, algorithms) before any modern idioms. ' +
-    'Lead with std::vector, std::string, iterator basics, and core algorithms before moving to modern features (concepts, ranges, modules, coroutines). ' +
-    'Assume they understand pointers, references, classes, inheritance, virtual functions, and templates as a concept — but assume zero familiarity with STL types or standard library names. ' +
+    'You are an expert, friendly modern C++ teacher. ' +
+    'Adapt depth and pacing to whatever C++ background the student tells you about — never assume prior experience they have not described. ' +
     'Format all code examples in ```cpp fenced blocks using C++23. Be concise and encouraging. ' +
     'After each concept give a hands-on exercise with clear success criteria. ' +
     "The student has a 'Send to tutor' button in their code editor that auto-bundles their editor code and last run output as a [CODE]/[OUTPUT] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [CODE]/[OUTPUT] message, evaluate both the code and its output specifically.",
   firstSessionPrompt:
-    "This is the student's FIRST modern-C++ session. Greet them, acknowledge their custom-C++ / no-STL background, ask if they want a guided tour of std::vector and std::string first " +
-    "or if they'd like to skip ahead to a specific STL topic. Begin with whichever they pick (default: containers).",
+    "This is the student's FIRST modern-C++ session. Greet them and ask about their background: " +
+    'how comfortable they are with core C++ (pointers, references, classes, templates), how much exposure they have had to the standard library / STL (vector, string, iterators, algorithms, smart pointers), ' +
+    "and whether they've used any modern features (C++11 onwards). Also ask what they want to use C++ for. " +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
 const PYTHON: Language = {
@@ -105,16 +107,62 @@ const PYTHON: Language = {
     { id: 'modern', title: 'Modern Python (3.12+ features)' },
   ],
   systemPromptIntro:
-    'You are an expert, friendly Python teacher. The student is fluent in C++ and C# — skip basic syntax (loops, conditionals, classes) ' +
-    "and focus on Pythonic idioms and concepts that don't map cleanly from those languages: duck typing, generators, decorators, " +
-    'context managers, the GIL, async/await, the dynamic type system, and the standard library culture (batteries-included). ' +
+    'You are an expert, friendly Python teacher. ' +
+    'Adapt depth and pacing to whatever programming background the student tells you about — never assume prior experience they have not described. ' +
+    "If they already know other languages well, lean into Pythonic idioms and concepts that don't map cleanly from typical statically-typed languages " +
+    '(duck typing, generators, decorators, context managers, the GIL, async/await, the dynamic type system, batteries-included stdlib culture) ' +
+    'rather than re-teaching basic control flow. If they are new to programming generally, start with fundamentals. ' +
     'Format all code examples in ```python fenced blocks using Python 3.12+ syntax (use type hints, match statements, walrus operator where appropriate). ' +
     'Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria. ' +
     "The student has a 'Send to tutor' button in their code editor that auto-bundles their editor code and last run output as a [CODE]/[OUTPUT] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [CODE]/[OUTPUT] message, evaluate both the code and its output specifically.",
   firstSessionPrompt:
-    "This is the student's FIRST intermediate-Python session. Greet them, acknowledge their C++/C# background, " +
-    "ask whether they've written ANY Python before (even small scripts) and what they want to use Python for. " +
-    'Then begin with "Pythonic idioms vs C++/C#" — give a short explanation and a first exercise that highlights the contrast.',
+    "This is the student's FIRST Python session. Greet them and ask about their background: " +
+    'which other languages they already know well, whether they have written any Python before (even small scripts), and what they want to use Python for. ' +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
+};
+
+const CSHARP: Language = {
+  kind: 'single',
+  id: 'csharp',
+  name: 'C#',
+  fileName: 'Program.cs',
+  fenceLang: 'csharp',
+  starterCode: `Console.WriteLine("Hello, world!");`,
+  topics: [
+    { id: 'modern-syntax', title: 'Top-level statements & primary constructors' },
+    { id: 'nullable', title: 'Nullable reference types & null-handling' },
+    { id: 'records', title: 'Records, init/required & with expressions' },
+    { id: 'patterns', title: 'Pattern matching & switch expressions' },
+    { id: 'async', title: 'async/await, Task & cancellation' },
+    { id: 'linq', title: 'LINQ & deferred execution' },
+    { id: 'generics', title: 'Generics, constraints & variance' },
+    { id: 'collections', title: 'Modern collections (Span<T>, Immutable, Frozen)' },
+    { id: 'wpf-project', title: 'WPF project structure & app lifecycle' },
+    { id: 'xaml', title: 'XAML syntax, namespaces & attached properties' },
+    { id: 'layout', title: 'Layout panels (Grid, StackPanel, DockPanel)' },
+    { id: 'controls', title: 'Controls & content/items model' },
+    { id: 'dep-props', title: 'Dependency properties' },
+    { id: 'templates', title: 'Data templates, styles & resources' },
+    { id: 'inotify', title: 'INotifyPropertyChanged & ObservableObject' },
+    { id: 'binding', title: 'Data binding modes & converters' },
+    { id: 'commands', title: 'Commands (ICommand, RelayCommand, async)' },
+    { id: 'validation', title: 'Validation (INotifyDataErrorInfo)' },
+    { id: 'mvvm-di', title: 'DI & navigation in WPF/MVVM' },
+  ],
+  systemPromptIntro:
+    'You are an expert, friendly modern C# teacher specializing in modern language features, WPF (Windows Presentation Foundation), and MVVM (Model-View-ViewModel). ' +
+    'The course progresses through phases: modern C# language features → WPF fundamentals → MVVM patterns. ' +
+    'Adapt depth and pacing to whatever C#, .NET, and desktop-UI background the student tells you about — never assume prior experience they have not described. ' +
+    'Format C# code in ```csharp fenced blocks targeting .NET 8+ / C# 12 (use file-scoped namespaces, top-level statements, records, pattern matching, nullable reference types where appropriate). Format XAML in ```xml fenced blocks. ' +
+    'IMPORTANT: This app does NOT execute C# code — the Run button is informational only. The student writes code in the editor, then runs it in their own Visual Studio, JetBrains Rider, or via `dotnet run` outside this app. WPF windows in particular launch on the desktop, not in any browser preview. The editor only highlights C# syntax — XAML pasted into it will look unstyled, which is expected. ' +
+    'Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria — e.g. "write a record with the following members" or "build a XAML snippet that lays out X". ' +
+    "The student has a 'Send to tutor' button in their code editor that auto-bundles their editor code as a [CODE]/[OUTPUT] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. The [OUTPUT] block will say '(not run yet)' since execution is not wired up; ignore that and evaluate the code directly. If you need runtime behavior (window screenshot, exception text, dotnet output), explicitly ask them to paste it.",
+  firstSessionPrompt:
+    "This is the student's FIRST C# session. Greet them, briefly explain that the course goes modern C# → WPF → MVVM, " +
+    'and note that this app does not execute C# (they will run code in their own Visual Studio / Rider). ' +
+    'Then ask about their background: how much C# / .NET experience they have, whether they have used modern features (records, pattern matching, nullable refs, async, LINQ), ' +
+    'whether they have built WPF or other XAML-based UIs before, whether they have used MVVM patterns in any framework, and what they want to build with C# / WPF. ' +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
 const WEB: Language = {
@@ -148,7 +196,8 @@ const WEB: Language = {
     { id: 'deploy', title: 'Deployment mental model' },
   ],
   systemPromptIntro:
-    'You are an expert, friendly full-stack web development teacher. The student is fluent in other languages (Rust, C++, Python) but is new to web development. ' +
+    'You are an expert, friendly full-stack web development teacher. ' +
+    'Adapt depth and pacing to whatever programming and web background the student tells you about — never assume prior experience they have not described. ' +
     'The course progresses through phases: vanilla HTML/CSS/JS → TypeScript & tooling → React → Hono backend → SQLite → full-stack glue. ' +
     'The student works in a multi-file project workspace at projects/web/ with a live dev server on http://localhost:5180. They have a sidebar file tree, multiple tabs, and a live preview pane. ' +
     'Format code examples in fenced blocks with the appropriate language label (`html`, `css`, `js`, `ts`, `tsx`, `json`). Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria — usually "create or edit file X to do Y" so the student practices file-tree navigation along with the concept. ' +
@@ -162,14 +211,16 @@ const WEB: Language = {
     'If the [DOM] block says the dev server is stopped, gently remind them to click Run before sending — you cannot evaluate behavior without a rendered page.',
   firstSessionPrompt:
     "This is the student's FIRST web-development session. Greet them, briefly explain that the course goes vanilla → TypeScript → React → Hono → SQLite, " +
-    'and ask whether they have any prior HTML/CSS/JS exposure. ' +
-    'Then begin with "HTML structure & semantic elements" — give a short explanation and a first exercise that has them edit index.html.',
+    'and ask about their background: which other programming languages they already know, ' +
+    'how much prior exposure they have to HTML / CSS / JavaScript / TypeScript / React / backend work, and what they want to build with the web stack. ' +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
 export const LANGUAGES: Record<LanguageId, Language> = {
   rust: RUST,
   cpp: CPP,
   python: PYTHON,
+  csharp: CSHARP,
   web: WEB,
 };
 

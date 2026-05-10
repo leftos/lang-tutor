@@ -1,4 +1,4 @@
-export type LanguageId = 'rust' | 'cpp' | 'python' | 'web';
+export type LanguageId = 'rust' | 'cpp' | 'python' | 'csharp' | 'web';
 
 export interface Topic {
   readonly id: string;

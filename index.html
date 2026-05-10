@@ -37,8 +37,13 @@
         <span class="lang-name">Python</span>
         <span class="lang-meta" data-lang-meta="python">— · —</span>
       </button>
-      <button type="button" class="lang-tab" data-lang="web">
+      <button type="button" class="lang-tab" data-lang="csharp">
         <span class="lang-num">iv.</span>
+        <span class="lang-name">C#</span>
+        <span class="lang-meta" data-lang-meta="csharp">— · —</span>
+      </button>
+      <button type="button" class="lang-tab" data-lang="web">
+        <span class="lang-num">v.</span>
         <span class="lang-name">Web</span>
         <span class="lang-meta" data-lang-meta="web">— · —</span>
       </button>
@@ -90,7 +95,7 @@
       </div>
     </aside>
 
-    <div id="asideResize" class="aside-resize" role="separator" aria-orientation="vertical" aria-label="Resize chat panel"></div>
+    <div id="asideResize" class="aside-resize" role="separator" aria-orientation="vertical" aria-label="Resize chat panel" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100"></div>
 
     <main class="main">
       <div class="main-toolbar">
@@ -124,7 +129,7 @@
           <div class="proj-tabs" id="projTabs" role="tablist"></div>
           <div class="proj-editor" id="projEditor"></div>
           <div class="proj-status" id="projStatus"></div>
-          <div id="projPreviewResize" class="proj-preview-resize" role="separator" aria-orientation="horizontal" aria-label="Resize preview pane"></div>
+          <div id="projPreviewResize" class="proj-preview-resize" role="separator" aria-orientation="horizontal" aria-label="Resize preview pane" aria-valuenow="30" aria-valuemin="0" aria-valuemax="100"></div>
           <div class="proj-preview" id="projPreview" style="flex: 0 0 280px">
             <div class="proj-preview-header">
               <div class="proj-preview-tabs" id="projPreviewTabs" role="tablist"></div>

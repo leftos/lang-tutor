@@ -101,6 +101,15 @@ async function runPython(code: string, onProgress?: (msg: string) => void): Prom
   }
 }
 
+// ── C#: not executed in-app (run in Visual Studio / Rider / `dotnet run`) ─
+async function runCSharp(): Promise<RunResult> {
+  return {
+    ok: true,
+    output:
+      'C# is not executed in this app.\nCopy your code into Visual Studio, JetBrains Rider, or run it with `dotnet run` to see output.\nSend to tutor still works — it shares your code with the tutor for review.',
+  };
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────
 export async function runCode(lang: SingleBufferLanguageId, code: string, onProgress?: (msg: string) => void): Promise<RunResult> {
   switch (lang) {
@@ -111,5 +120,7 @@ export async function runCode(lang: SingleBufferLanguageId, code: string, onProg
       return runCpp(code);
     case 'python':
       return runPython(code, onProgress);
+    case 'csharp':
+      return runCSharp();
   }
 }

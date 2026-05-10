@@ -27,6 +27,7 @@ import {
   rectangularSelection,
 } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
+import { csharp } from '@replit/codemirror-lang-csharp';
 
 import { fetchDiagnostics, fetchFormatted } from './lint';
 import type { SingleBufferLanguageId } from './types';
@@ -35,6 +36,7 @@ const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
   rust: () => rust(),
   cpp: () => cpp(),
   python: () => python(),
+  csharp: () => csharp(),
 };
 
 export const tutorHighlight = HighlightStyle.define([
