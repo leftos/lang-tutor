@@ -29,7 +29,8 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -45,6 +46,42 @@ const TMP_LSP_ROOT = join(REPO_ROOT, '.tmp', 'lsp');
 const IS_WIN = process.platform === 'win32';
 
 // ── Per-language config ─────────────────────────────────────────────────────
+
+// Discover Microsoft.CodeAnalysis.LanguageServer (the Roslyn LSP) at the
+// C# Dev Kit's install path. Returns the absolute path to the binary or
+// null if not found. The C# Dev Kit ships Roslyn LSP under the user's VS
+// Code extensions directory at:
+//   ~/.vscode/extensions/ms-dotnettools.csdevkit-<version>/.roslyn/Microsoft.CodeAnalysis.LanguageServer(.exe)
+// The base C# extension (ms-dotnettools.csharp-<version>) sometimes carries
+// the same binary as a fallback. Both paths are undocumented and may move
+// per Dev Kit release; we sort candidate dirs newest-first and try a couple
+// of layouts for resilience.
+function resolveCsharpRoslynBin() {
+  const home = homedir();
+  if (typeof home !== 'string' || home.length === 0) return null;
+  const extDir = join(home, '.vscode', 'extensions');
+  if (!existsSync(extDir)) return null;
+  let entries;
+  try {
+    entries = readdirSync(extDir);
+  } catch {
+    return null;
+  }
+  const exeName = IS_WIN ? 'Microsoft.CodeAnalysis.LanguageServer.exe' : 'Microsoft.CodeAnalysis.LanguageServer';
+  // Prefer csdevkit (the proper home of Roslyn LSP) but accept csharp-* as a
+  // fallback for users who only have the base C# extension installed.
+  const csdevkit = entries.filter((e) => e.startsWith('ms-dotnettools.csdevkit-')).sort();
+  const csharp = entries.filter((e) => e.startsWith('ms-dotnettools.csharp-')).sort();
+  // Newest first within each group.
+  const ordered = [...csdevkit.reverse(), ...csharp.reverse()];
+  for (const dirName of ordered) {
+    for (const sub of ['.roslyn', '']) {
+      const candidate = sub === '' ? join(extDir, dirName, exeName) : join(extDir, dirName, sub, exeName);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
 
 /**
  * @typedef {object} LspConfig
@@ -67,6 +104,10 @@ const IS_WIN = process.platform === 'win32';
  * @property {string[]} [acceptsLanguageIds] - LSP languageIds this server handles. The frontend
  *           dispatches per-file didOpen / didChange to every server whose set covers the file's
  *           languageId. Omit for single-server languages (the frontend treats those as universal).
+ * @property {() => string | null} [resolveBinPath] - dynamic resolver for the binary's absolute path.
+ *           Used when the binary isn't on PATH but lives at a discoverable location
+ *           (e.g. C# Dev Kit's .vscode-extensions install of the Roslyn LSP). When this returns
+ *           a string the bridge spawns that absolute path instead of `bin`; null means unavailable.
  */
 
 /**
@@ -129,12 +170,25 @@ const LSP_CONFIG = {
     versionArgs: ['--version'],
   },
 
+  // Roslyn LSP — preferred over OmniSharp when the C# Dev Kit is installed.
+  // `resolveBinPath` returns the .exe path under the VS Code extensions
+  // dir; if it returns null the bridge skips this server and the csharp
+  // fallback group falls through to OmniSharp. Args mirror the minimal
+  // invocation C# Dev Kit uses: --logLevel + --extensionLogDirectory.
+  // The log dir is created lazily under .tmp/lsp-logs/.
+  'csharp-roslyn': {
+    bin: 'Microsoft.CodeAnalysis.LanguageServer',
+    args: ['--logLevel', 'Warning', '--extensionLogDirectory', join(REPO_ROOT, '.tmp', 'lsp-logs', 'csharp-roslyn')],
+    resolveBinPath: resolveCsharpRoslynBin,
+    workspaceMode: 'project',
+    projectDir: 'csharp',
+    versionArgs: [],
+  },
+
   csharp: {
     // OmniSharp's modern LSP entry point. `omnisharp -lsp` speaks LSP over
-    // stdin/stdout and reads the .csproj/.sln in cwd. Microsoft's Roslyn LSP
-    // (`Microsoft.CodeAnalysis.LanguageServer`) is preferable when available
-    // but its install path is undocumented and version-coupled to the C# Dev
-    // Kit extension; OmniSharp is the more reliable single-binary install.
+    // stdin/stdout and reads the .csproj/.sln in cwd. Used as the fallback
+    // when csharp-roslyn (preferred) isn't installed.
     //
     // versionArgs is empty: `omnisharp --version` actually starts the full
     // server (no quick exit), which would block our availability probe past
@@ -200,17 +254,26 @@ const LSP_CONFIG = {
 };
 
 /**
- * User-facing language → ordered list of serverKeys to spawn. The first entry
- * is the "primary" — its capabilities seed the frontend's `LspClient.capabilities`
- * snapshot, and its mainFileUri (if any) is exposed for single-buffer convenience.
+ * User-facing language → ordered list of server entries to spawn. Each entry
+ * is either:
+ *   - a `string` serverKey: spawn that server unconditionally (skipped silently
+ *     when its binary isn't installed; the bundle still starts on the others).
+ *   - a `string[]` fallback group: spawn the first available server in order.
+ *     Used for csharp where Roslyn LSP is preferred over OmniSharp but only
+ *     one of them runs.
  *
- * @type {Record<string, string[]>}
+ * The first entry overall is the "primary" — its capabilities seed the
+ * frontend's `LspClient.capabilities` snapshot, and its mainFileUri (if any)
+ * is exposed for single-buffer convenience.
+ *
+ * @type {Record<string, Array<string | string[]>>}
  */
 const LANG_SERVERS = {
   cpp: ['cpp'],
   rust: ['rust'],
   python: ['python'],
-  csharp: ['csharp'],
+  // Roslyn first, OmniSharp fallback. Whichever starts wins; the other never spawns.
+  csharp: [['csharp-roslyn', 'csharp']],
   web: ['web', 'web-html', 'web-css', 'web-biome'],
 };
 
@@ -507,13 +570,28 @@ async function probeAvailability(serverKey) {
     availabilityCache.set(serverKey, result);
     return result;
   }
+
+  // Dynamic resolver path wins when configured (e.g. Roslyn LSP at the C#
+  // Dev Kit's install location — no PATH entry, but a known on-disk file).
+  if (typeof config.resolveBinPath === 'function') {
+    const resolvedPath = config.resolveBinPath();
+    if (typeof resolvedPath !== 'string' || resolvedPath.length === 0 || !existsSync(resolvedPath)) {
+      const result = { available: false, error: `${serverKey}: resolveBinPath did not yield an existing file` };
+      availabilityCache.set(serverKey, result);
+      return result;
+    }
+    const result = { available: true, version: resolvedPath };
+    availabilityCache.set(serverKey, result);
+    return result;
+  }
+
   const probeBin = config.probeBin ?? config.bin;
 
   // Step 1: PATH lookup. Fast (≤ 3s), reliable, doesn't spawn the LSP server.
   const resolved = await whichBin(probeBin);
   if (resolved === null) {
     const result = { available: false, error: `${probeBin} not on PATH` };
-    availabilityCache.set(lang, result);
+    availabilityCache.set(serverKey, result);
     return result;
   }
 
@@ -660,12 +738,29 @@ async function startSession(serverKey) {
   const sessionId = randomUUID();
   const { dir: workspaceDir, ephemeral } = createWorkspace(serverKey, sessionId);
 
+  // When resolveBinPath produced an absolute path during probing, prefer it
+  // over `config.bin` for the spawn (the cached probe stored that path under
+  // `version`). Falls through to PATH-resolved `config.bin` otherwise.
+  const binToSpawn = typeof config.resolveBinPath === 'function' && typeof probe.version === 'string' ? probe.version : config.bin;
+  // The Roslyn LSP --extensionLogDirectory needs to exist before spawn.
+  for (let i = 0; i < config.args.length - 1; i += 1) {
+    if (config.args[i] === '--extensionLogDirectory') {
+      try {
+        mkdirSync(config.args[i + 1], { recursive: true });
+      } catch {
+        // best effort
+      }
+    }
+  }
+
   let proc;
   try {
-    proc = spawn(config.bin, config.args, {
+    proc = spawn(binToSpawn, config.args, {
       cwd: workspaceDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: IS_WIN,
+      // resolveBinPath returns an absolute exe path that node can spawn
+      // directly, no shell shim resolution needed.
+      shell: IS_WIN && typeof config.resolveBinPath !== 'function',
     });
   } catch (e) {
     if (ephemeral) destroyWorkspace(workspaceDir);
@@ -770,8 +865,8 @@ async function startSession(serverKey) {
  *   | { ok: false; error: string }>}
  */
 async function startBundle(lang) {
-  const serverKeys = LANG_SERVERS[lang];
-  if (serverKeys === undefined || serverKeys.length === 0) {
+  const entries = LANG_SERVERS[lang];
+  if (entries === undefined || entries.length === 0) {
     return { ok: false, error: `unknown lang: ${lang}` };
   }
 
@@ -780,19 +875,48 @@ async function startBundle(lang) {
   let rootUri;
   let mainFileUri;
 
-  for (const serverKey of serverKeys) {
-    const result = await startSession(serverKey);
-    if (!result.ok) {
-      unavailable.push({ serverKey, error: result.error });
+  for (const entry of entries) {
+    if (typeof entry === 'string') {
+      // Single server — spawn unconditionally; missing binary just falls soft.
+      const result = await startSession(entry);
+      if (!result.ok) {
+        unavailable.push({ serverKey: entry, error: result.error });
+        continue;
+      }
+      if (rootUri === undefined) rootUri = result.rootUri;
+      if (mainFileUri === undefined && result.mainFileUri !== undefined) mainFileUri = result.mainFileUri;
+      servers.push({
+        serverKey: entry,
+        sessionId: result.sessionId,
+        acceptsLanguageIds: LSP_CONFIG[entry]?.acceptsLanguageIds ?? [],
+      });
       continue;
     }
-    if (rootUri === undefined) rootUri = result.rootUri;
-    if (mainFileUri === undefined && result.mainFileUri !== undefined) mainFileUri = result.mainFileUri;
-    servers.push({
-      serverKey,
-      sessionId: result.sessionId,
-      acceptsLanguageIds: LSP_CONFIG[serverKey]?.acceptsLanguageIds ?? [],
-    });
+    // Fallback group — try each in order, take the first that starts. The
+    // others are recorded as unavailable so the caller can see why they
+    // weren't picked.
+    let groupChosen = false;
+    for (const serverKey of entry) {
+      const result = await startSession(serverKey);
+      if (!result.ok) {
+        unavailable.push({ serverKey, error: result.error });
+        continue;
+      }
+      if (rootUri === undefined) rootUri = result.rootUri;
+      if (mainFileUri === undefined && result.mainFileUri !== undefined) mainFileUri = result.mainFileUri;
+      servers.push({
+        serverKey,
+        sessionId: result.sessionId,
+        acceptsLanguageIds: LSP_CONFIG[serverKey]?.acceptsLanguageIds ?? [],
+      });
+      groupChosen = true;
+      break;
+    }
+    if (!groupChosen) {
+      // Whole group failed; the per-server failures are already in unavailable.
+      // Emit a marker so the frontend log is unambiguous about which group fell over.
+      unavailable.push({ serverKey: `${entry.join('|')}`, error: 'fallback group exhausted — none of the alternatives are available' });
+    }
   }
 
   if (servers.length === 0) {
