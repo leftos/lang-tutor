@@ -141,6 +141,8 @@ export interface TutorEditor {
   destroy(): void;
   /** Return the active LSP client, or null if LSP isn't connected for the current language. */
   getLspClient(): LspClient | null;
+  /** Current cursor position as 0-indexed (line, character) in LSP coordinates. */
+  getCursorPosition(): { line: number; character: number };
 }
 
 export function createEditor(opts: EditorOptions): TutorEditor {
@@ -343,5 +345,10 @@ export function createEditor(opts: EditorOptions): TutorEditor {
       view.destroy();
     },
     getLspClient: getLspClient,
+    getCursorPosition(): { line: number; character: number } {
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
+      return { line: line.number - 1, character: head - line.from };
+    },
   };
 }

@@ -125,6 +125,8 @@ export interface ProjectEditor {
   refreshTabs(): void;
   /** Active LSP client for the project workspace, or null if not connected / unavailable. */
   getLspClient(): LspClient | null;
+  /** Cursor position in the active tab as 0-indexed (line, character), with the file's URI. Null when no tab is active. */
+  getCursorPosition(): { uri: string; line: number; character: number } | null;
   /** Re-read the file from disk. If the tab is dirty, the in-memory content is preserved. */
   refreshFile(path: string): Promise<void>;
   /** Re-key an open tab after a rename and rebuild its state with the new file's language extension. */
@@ -787,6 +789,13 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
     },
     getLspClient(): LspClient | null {
       return lspClient;
+    },
+    getCursorPosition(): { uri: string; line: number; character: number } | null {
+      if (active === null || lspClient === null) return null;
+      const head = view.state.selection.main.head;
+      const line = view.state.doc.lineAt(head);
+      const uri = pathToFileUri(lspClient.rootUri, active);
+      return { uri, line: line.number - 1, character: head - line.from };
     },
     destroy(): void {
       // Flush any in-flight saves.

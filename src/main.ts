@@ -1159,7 +1159,7 @@ async function evaluateCode(): Promise<void> {
   const code = editor.getContent().trim();
   const out = el<HTMLPreElement>('outputPre').textContent ?? '';
   const hasOut = out && !out.includes('Run the program') && out !== 'Compiling…' && out !== 'Running…';
-  const lspBlock = buildLspBlock();
+  const lspBlock = await buildLspBlock();
   const msg =
     `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\`\n\n` +
     `[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\`` +
@@ -1168,34 +1168,136 @@ async function evaluateCode(): Promise<void> {
   void extractProgress();
 }
 
+const LSP_SEVERITY_RANK = (s: number | undefined): number => (s === 1 ? 0 : s === 2 ? 1 : s === 3 ? 2 : 3);
+const LSP_SEVERITY_LABEL = (s: number | undefined): string => (s === 1 ? 'error' : s === 2 ? 'warning' : s === 3 ? 'info' : 'hint');
+
+/** Truncate a multiline blob (e.g., LSP hover markdown) so it doesn't dominate the prompt. */
+function clipBlock(text: string, maxLines: number, maxLineLen: number): string {
+  const lines = text.split('\n');
+  const clipped = lines.slice(0, maxLines).map((l) => (l.length > maxLineLen ? `${l.slice(0, maxLineLen)}…` : l));
+  if (lines.length > maxLines) clipped.push(`…(+${lines.length - maxLines} more line${lines.length - maxLines === 1 ? '' : 's'})`);
+  return clipped.join('\n');
+}
+
+/** Render LSP MarkupContent / MarkedString[] to a plaintext string. Same shape as lspEditor's renderHoverContents but kept local to keep main.ts free of editor imports. */
+function renderHoverText(contents: unknown): string {
+  if (contents === undefined || contents === null) return '';
+  if (typeof contents === 'string') return contents;
+  if (Array.isArray(contents)) return contents.map((c) => (typeof c === 'string' ? c : ((c as { value?: string }).value ?? ''))).join('\n\n');
+  const obj = contents as { value?: string };
+  return obj.value ?? '';
+}
+
+/** Names of LSP SymbolKind values we surface — top-level structural shapes worth knowing about. */
+const SYMBOL_KIND_NAME: Record<number, string> = {
+  2: 'module',
+  3: 'namespace',
+  4: 'package',
+  5: 'class',
+  6: 'method',
+  7: 'property',
+  8: 'field',
+  9: 'constructor',
+  10: 'enum',
+  11: 'interface',
+  12: 'function',
+  13: 'variable',
+  14: 'constant',
+  22: 'struct',
+  23: 'event',
+};
+
+interface FlatSymbol {
+  name: string;
+  kindLabel: string;
+  line: number;
+}
+
+/** Flatten DocumentSymbol[] to a depth ≤ 1 list of named tutor-relevant kinds. */
+function flattenSymbols(
+  symbols: ReadonlyArray<{
+    name: string;
+    kind: number;
+    range: { start: { line: number } };
+    children?: ReadonlyArray<{ name: string; kind: number; range: { start: { line: number } } }>;
+  }>
+): FlatSymbol[] {
+  const out: FlatSymbol[] = [];
+  for (const s of symbols) {
+    const kindLabel = SYMBOL_KIND_NAME[s.kind];
+    if (kindLabel !== undefined) out.push({ name: s.name, kindLabel, line: s.range.start.line + 1 });
+    if (s.children !== undefined) {
+      for (const c of s.children) {
+        const ck = SYMBOL_KIND_NAME[c.kind];
+        if (ck !== undefined) out.push({ name: `${s.name}.${c.name}`, kindLabel: ck, line: c.range.start.line + 1 });
+      }
+    }
+  }
+  return out;
+}
+
 /**
- * Build an `[LSP]` block from the active language's LSP diagnostics, or null
- * if no client is connected or there are no diagnostics. Errors come first,
- * then warnings, then info — capped at 30 lines so a flood of info-level hints
- * can't drown out the [CODE] block in Claude's context.
+ * Build an `[LSP]` block from the active language's LSP diagnostics, plus
+ * (when meaningful) a short top-level symbol map and the hover text at the
+ * student's cursor. Returns null when there's nothing useful to surface.
+ *
+ * Sub-blocks are independently nullable — a clean file with informative
+ * symbols / hover still emits an [LSP] block; a noisy file with no symbols
+ * still emits diagnostics-only.
  */
-function buildLspBlock(): string | null {
+async function buildLspBlock(): Promise<string | null> {
   const client = editor.getLspClient();
   if (client === null) return null;
+
   const diagnostics = client.getDiagnostics();
-  if (diagnostics.length === 0) return null;
-  const severityRank = (s: number | undefined): number => (s === 1 ? 0 : s === 2 ? 1 : s === 3 ? 2 : 3);
-  const sorted = [...diagnostics].sort((a, b) => {
-    const r = severityRank(a.severity) - severityRank(b.severity);
+  const sortedDiags = [...diagnostics].sort((a, b) => {
+    const r = LSP_SEVERITY_RANK(a.severity) - LSP_SEVERITY_RANK(b.severity);
     if (r !== 0) return r;
     if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
     return a.range.start.character - b.range.start.character;
   });
-  const labelFor = (s: number | undefined): string => (s === 1 ? 'error' : s === 2 ? 'warning' : s === 3 ? 'info' : 'hint');
-  const lines = sorted.slice(0, 30).map((d) => {
-    const line = d.range.start.line + 1;
-    const col = d.range.start.character + 1;
-    const code = d.code !== undefined ? ` [${d.code}]` : '';
-    const source = d.source !== undefined && d.source.length > 0 ? `${d.source}: ` : '';
-    return `  main:${line}:${col} ${labelFor(d.severity)}${code} — ${source}${d.message}`;
-  });
-  const overflow = sorted.length > lines.length ? `\n  …${sorted.length - lines.length} more diagnostics` : '';
-  return `[LSP]\ndiagnostics:\n${lines.join('\n')}${overflow}`;
+
+  // Symbols + hover only fire requests when capabilities exist; both calls
+  // already short-circuit when not supported, so this is safe to fan out.
+  const code = editor.getContent();
+  const lineCount = code === '' ? 0 : code.split('\n').length;
+  const cursor = editor.getCursorPosition();
+  const symbolsPromise = lineCount >= 20 ? client.documentSymbol() : Promise.resolve(null);
+  const hoverPromise = client.hover(cursor.line, cursor.character);
+  const [symbols, hover] = await Promise.all([symbolsPromise, hoverPromise]);
+
+  const sections: string[] = [];
+
+  if (sortedDiags.length > 0) {
+    const lines = sortedDiags.slice(0, 30).map((d) => {
+      const line = d.range.start.line + 1;
+      const col = d.range.start.character + 1;
+      const code = d.code !== undefined ? ` [${d.code}]` : '';
+      const source = d.source !== undefined && d.source.length > 0 ? `${d.source}: ` : '';
+      return `  main:${line}:${col} ${LSP_SEVERITY_LABEL(d.severity)}${code} — ${source}${d.message}`;
+    });
+    const overflow = sortedDiags.length > lines.length ? `\n  …${sortedDiags.length - lines.length} more diagnostics` : '';
+    sections.push(`diagnostics:\n${lines.join('\n')}${overflow}`);
+  }
+
+  if (symbols !== null && symbols.length > 0) {
+    const flat = flattenSymbols(symbols).slice(0, 20);
+    if (flat.length > 0) {
+      const symLines = flat.map((s) => `  main:${s.line} ${s.kindLabel} ${s.name}`);
+      sections.push(`symbols:\n${symLines.join('\n')}`);
+    }
+  }
+
+  if (hover !== null) {
+    const text = renderHoverText(hover.contents).trim();
+    if (text.length > 0) {
+      const cursorLabel = `main:${cursor.line + 1}:${cursor.character + 1}`;
+      sections.push(`hover at ${cursorLabel}:\n${clipBlock(text, 6, 200)}`);
+    }
+  }
+
+  if (sections.length === 0) return null;
+  return `[LSP]\n${sections.join('\n\n')}`;
 }
 
 function fenceLangFromPath(path: string): string {
@@ -1304,7 +1406,7 @@ async function evaluateProjectCode(): Promise<void> {
   // [LSP] block for project workspaces — surfaces every LSP-published
   // diagnostic across the open tabs. Only included when the LSP is actually
   // connected and reporting something.
-  const projectLspBlock = buildProjectLspBlock();
+  const projectLspBlock = await buildProjectLspBlock();
   if (projectLspBlock !== null) blocks.push(projectLspBlock);
 
   await sendMessage(blocks.join('\n\n'));
@@ -1313,23 +1415,24 @@ async function evaluateProjectCode(): Promise<void> {
 
 /**
  * Build an `[LSP]` block from the project workspace's LSP diagnostics across
- * all currently-open files. Returns null if no client is connected or every
- * file is clean. URIs are stripped to file basenames so the tutor sees
+ * all currently-open files, plus (when available) symbols for the active tab
+ * and the hover text at the student's cursor. Returns null when nothing
+ * useful surfaces. URIs are stripped to file basenames so the tutor sees
  * `Program.cs:14:8` rather than the full session-temp path.
  */
-function buildProjectLspBlock(): string | null {
+async function buildProjectLspBlock(): Promise<string | null> {
   const client = projectEditorInstance?.getLspClient() ?? null;
   if (client === null) return null;
+  const editorRef = projectEditorInstance;
+
   const byUri = client.getDiagnosticsByUri();
-  const lines: string[] = [];
+  const diagLines: string[] = [];
   let totalDiagnostics = 0;
-  const severityRank = (s: number | undefined): number => (s === 1 ? 0 : s === 2 ? 1 : s === 3 ? 2 : 3);
-  const labelFor = (s: number | undefined): string => (s === 1 ? 'error' : s === 2 ? 'warning' : s === 3 ? 'info' : 'hint');
   for (const [uri, diagnostics] of byUri.entries()) {
     if (diagnostics.length === 0) continue;
     const fileName = uri.split('/').pop() ?? uri;
     const sorted = [...diagnostics].sort((a, b) => {
-      const r = severityRank(a.severity) - severityRank(b.severity);
+      const r = LSP_SEVERITY_RANK(a.severity) - LSP_SEVERITY_RANK(b.severity);
       if (r !== 0) return r;
       if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
       return a.range.start.character - b.range.start.character;
@@ -1340,13 +1443,39 @@ function buildProjectLspBlock(): string | null {
       const col = d.range.start.character + 1;
       const code = d.code !== undefined ? ` [${d.code}]` : '';
       const source = d.source !== undefined && d.source.length > 0 ? `${d.source}: ` : '';
-      lines.push(`  ${fileName}:${line}:${col} ${labelFor(d.severity)}${code} — ${source}${d.message}`);
+      diagLines.push(`  ${fileName}:${line}:${col} ${LSP_SEVERITY_LABEL(d.severity)}${code} — ${source}${d.message}`);
       totalDiagnostics += 1;
     }
     if (totalDiagnostics >= 30) break;
   }
-  if (lines.length === 0) return null;
-  return `[LSP]\ndiagnostics:\n${lines.join('\n')}`;
+
+  const cursor = editorRef?.getCursorPosition() ?? null;
+  const cursorFileName = cursor !== null ? (cursor.uri.split('/').pop() ?? cursor.uri) : null;
+  const symbolsPromise = cursor !== null ? client.documentSymbolUri(cursor.uri) : Promise.resolve(null);
+  const hoverPromise = cursor !== null ? client.hoverUri(cursor.uri, cursor.line, cursor.character) : Promise.resolve(null);
+  const [symbols, hover] = await Promise.all([symbolsPromise, hoverPromise]);
+
+  const sections: string[] = [];
+  if (diagLines.length > 0) sections.push(`diagnostics:\n${diagLines.join('\n')}`);
+
+  if (symbols !== null && symbols.length > 0 && cursorFileName !== null) {
+    const flat = flattenSymbols(symbols).slice(0, 20);
+    if (flat.length > 0) {
+      const symLines = flat.map((s) => `  ${cursorFileName}:${s.line} ${s.kindLabel} ${s.name}`);
+      sections.push(`symbols (active file):\n${symLines.join('\n')}`);
+    }
+  }
+
+  if (hover !== null && cursor !== null && cursorFileName !== null) {
+    const text = renderHoverText(hover.contents).trim();
+    if (text.length > 0) {
+      const cursorLabel = `${cursorFileName}:${cursor.line + 1}:${cursor.character + 1}`;
+      sections.push(`hover at ${cursorLabel}:\n${clipBlock(text, 6, 200)}`);
+    }
+  }
+
+  if (sections.length === 0) return null;
+  return `[LSP]\n${sections.join('\n\n')}`;
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────

@@ -81,6 +81,18 @@ export interface LspSignatureHelp {
   activeParameter?: number;
 }
 
+/** LSP SymbolKind subset (DocumentSymbol uses the full set; we mostly care about the names). */
+export type LspSymbolKind = number;
+
+export interface LspDocumentSymbol {
+  name: string;
+  detail?: string;
+  kind: LspSymbolKind;
+  range: LspRange;
+  selectionRange: LspRange;
+  children?: LspDocumentSymbol[];
+}
+
 /** LSP InlayHintKind: 1 = Type, 2 = Parameter. */
 export type LspInlayHintKind = 1 | 2;
 
@@ -105,6 +117,7 @@ export interface LspServerCapabilities {
   signatureHelpProvider?: { triggerCharacters?: string[]; retriggerCharacters?: string[] };
   documentFormattingProvider?: boolean | object;
   inlayHintProvider?: boolean | { resolveProvider?: boolean };
+  documentSymbolProvider?: boolean | object;
   [key: string]: unknown;
 }
 
@@ -178,6 +191,8 @@ export interface LspClient {
   signatureHelpUri(uri: string, line: number, character: number): Promise<LspSignatureHelp | null>;
   inlayHint(range: LspRange): Promise<LspInlayHint[] | null>;
   inlayHintUri(uri: string, range: LspRange): Promise<LspInlayHint[] | null>;
+  documentSymbol(): Promise<LspDocumentSymbol[] | null>;
+  documentSymbolUri(uri: string): Promise<LspDocumentSymbol[] | null>;
   formattingUri(uri: string): Promise<LspTextEdit[] | null>;
   getDiagnosticsByUri(): ReadonlyMap<string, LspDiagnostic[]>;
   onAnyDiagnostics(cb: AnyDiagnosticsListener): () => void;
@@ -477,6 +492,38 @@ class LspClientImpl implements LspClient {
     }
   }
 
+  documentSymbol(): Promise<LspDocumentSymbol[] | null> {
+    if (this.mainFileUri === null) return Promise.resolve(null);
+    return this.documentSymbolUri(this.mainFileUri);
+  }
+
+  async documentSymbolUri(uri: string): Promise<LspDocumentSymbol[] | null> {
+    if (!this.isOpen() || this.capabilities.documentSymbolProvider === undefined || this.capabilities.documentSymbolProvider === false) {
+      return null;
+    }
+    try {
+      const result = (await this.request('textDocument/documentSymbol', {
+        textDocument: { uri },
+      })) as LspDocumentSymbol[] | Array<{ name: string; kind: number; location: { range: LspRange } }> | null;
+      if (result === null) return null;
+      // Some servers return SymbolInformation[] (flat with location.range)
+      // instead of DocumentSymbol[] (hierarchical with range/selectionRange).
+      // Normalize SymbolInformation into a flat DocumentSymbol[] (no children).
+      const first = result[0];
+      if (first !== undefined && 'location' in first) {
+        return (result as Array<{ name: string; kind: number; location: { range: LspRange } }>).map((s) => ({
+          name: s.name,
+          kind: s.kind,
+          range: s.location.range,
+          selectionRange: s.location.range,
+        }));
+      }
+      return result as LspDocumentSymbol[];
+    } catch {
+      return null;
+    }
+  }
+
   async signatureHelpUri(uri: string, line: number, character: number): Promise<LspSignatureHelp | null> {
     if (!this.isOpen() || this.capabilities.signatureHelpProvider === undefined) return null;
     try {
@@ -654,6 +701,7 @@ function clientCapabilities() {
       },
       formatting: { dynamicRegistration: false },
       inlayHint: { dynamicRegistration: false, resolveSupport: { properties: [] } },
+      documentSymbol: { dynamicRegistration: false, hierarchicalDocumentSymbolSupport: true },
     },
     workspace: { workspaceFolders: true },
     general: { positionEncodings: ['utf-16'] },
