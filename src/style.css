@@ -1134,51 +1134,154 @@
   color: var(--sig-fg);
 }
 
-.project-placeholder {
+/* ── Project workspace (web course) ──────────────────────────────── */
+.project-workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  border-top: 1px solid var(--rule-2);
+}
+.proj-tree {
+  flex: 0 0 220px;
+  overflow-y: auto;
+  border-right: 1px solid var(--rule-2);
+  padding: 10px 0;
+  background: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.proj-editor-pane {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 48px 56px;
-  gap: 14px;
-  border-top: 1px solid var(--rule-2);
+  min-width: 0;
 }
-.project-placeholder h3 {
-  font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 24px;
-  letter-spacing: -0.01em;
-  margin: 0;
-}
-.project-placeholder-body {
-  font-family: var(--font-body);
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--ink-mute);
-  max-width: 56ch;
-}
-.project-placeholder-body code {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
-  padding: 0.1em 0.4em;
-  border-radius: 2px;
-}
-.project-placeholder-stats {
+.proj-tabs {
   display: flex;
-  gap: 10px;
-  align-items: baseline;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-  margin-top: 4px;
+  flex-wrap: wrap;
+  gap: 0;
+  border-bottom: 1px solid var(--rule-2);
+  background: var(--paper-2);
+  min-height: 32px;
 }
-.project-placeholder-stat {
+.proj-tabs-empty {
+  padding: 8px 14px;
+  font-size: 11.5px;
+  font-style: italic;
+}
+.proj-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 6px 12px;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--rule-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.proj-tab:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.proj-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--sig);
+  background: var(--paper);
+}
+.proj-tab-name {
+  letter-spacing: 0.02em;
+}
+.proj-tab-dirty {
+  color: var(--sig);
+  font-size: 9px;
+  line-height: 1;
+}
+.proj-tab-close {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink-mute);
+}
+.proj-tab-close:hover {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
   color: var(--ink);
 }
-.project-placeholder-sep {
-  color: var(--rule-2);
+.proj-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.proj-status {
+  border-top: 1px solid var(--rule-2);
+  padding: 5px 12px;
+  background: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-mute);
+  letter-spacing: 0.04em;
+  min-height: 22px;
+}
+.proj-status-line {
+  display: inline-block;
+}
+.proj-status-error {
+  color: var(--danger);
+}
+
+/* ── File tree ─────────────────────────────────────────────────── */
+.tree-empty {
+  padding: 10px 14px;
+  font-size: 11.5px;
+  font-style: italic;
+}
+.tree-node {
+  user-select: none;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.tree-row:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.tree-row.is-active {
+  background: var(--sig-soft);
+  border-left-color: var(--sig);
+  color: var(--ink);
+}
+.tree-chevron {
+  width: 10px;
+  font-size: 9px;
+  text-align: center;
+  color: var(--ink-mute);
+}
+.tree-chevron-spacer {
+  display: inline-block;
+  width: 10px;
+}
+.tree-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-label-dir {
+  font-weight: 500;
+  color: var(--ink);
+}
+.tree-label-file {
+  color: var(--ink-mute);
+}
+.tree-row.is-active .tree-label-file {
+  color: var(--ink);
 }

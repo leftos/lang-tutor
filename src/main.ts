@@ -14,7 +14,9 @@ import {
   progressKey,
 } from './constants';
 import { createEditor, type TutorEditor } from './editor';
+import { createFileTree, type FileTreeHandle } from './fileTree';
 import { ensureScaffold, fetchTree, flattenFiles } from './projectApi';
+import { createProjectEditor, type ProjectEditor } from './projectEditor';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { storageDelete, storageGet, storageSet } from './storage';
@@ -494,59 +496,6 @@ function clearOutput(): void {
 // ── Single-buffer vs project workshop layout ─────────────────────────────
 const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'codeArea', 'resizeBar', 'outputPre']);
 
-function ensurePlaceholderShell(): HTMLElement {
-  const existing = document.getElementById('projectPlaceholder');
-  if (existing !== null) return existing;
-
-  const placeholder = div('project-placeholder');
-  placeholder.id = 'projectPlaceholder';
-
-  const heading = document.createElement('h3');
-  heading.textContent = 'Web workshop';
-  placeholder.appendChild(heading);
-
-  const body = div('project-placeholder-body');
-  body.id = 'projectPlaceholderBody';
-  placeholder.appendChild(body);
-
-  const stats = div('project-placeholder-stats');
-  stats.id = 'projectPlaceholderStats';
-  placeholder.appendChild(stats);
-
-  const main = document.querySelector<HTMLElement>('.main');
-  if (main !== null) main.appendChild(placeholder);
-  return placeholder;
-}
-
-function renderProjectPlaceholder(lang: Language, state: ProjectState | null): void {
-  if (lang.kind !== 'project') return;
-  const body = el('projectPlaceholderBody');
-  const stats = el('projectPlaceholderStats');
-
-  body.textContent = '';
-  body.appendChild(document.createTextNode('Workspace lives on disk under '));
-  const codeEl = document.createElement('code');
-  codeEl.textContent = `projects/${lang.scaffoldDir}/`;
-  body.appendChild(codeEl);
-  body.appendChild(
-    document.createTextNode('. The chat tutor is wired up; the file tree, multi-tab editor, and live preview will land in upcoming milestones.')
-  );
-
-  stats.textContent = '';
-  if (state === null) {
-    stats.appendChild(span('Loading workspace…', 'muted'));
-    return;
-  }
-  if (!state.scaffolded) {
-    stats.appendChild(span('Workspace not scaffolded yet.', 'muted'));
-    return;
-  }
-  const fileCount = flattenFiles(state.tree).length;
-  stats.appendChild(span(`${pad2(fileCount)} files`, 'project-placeholder-stat'));
-  stats.appendChild(span('·', 'project-placeholder-sep'));
-  stats.appendChild(span(`${pad2(state.openTabs.length)} tabs open`, 'project-placeholder-stat'));
-}
-
 function setWorkshopMode(mode: 'single' | 'project'): void {
   const isProject = mode === 'project';
   for (const id of SINGLE_BUFFER_IDS) {
@@ -555,13 +504,51 @@ function setWorkshopMode(mode: 'single' | 'project'): void {
   const eyebrow = document.querySelector<HTMLElement>('.output-eyebrow');
   if (eyebrow !== null) eyebrow.style.display = isProject ? 'none' : '';
 
-  if (isProject) {
-    const placeholder = ensurePlaceholderShell();
-    placeholder.style.display = '';
-  } else {
-    const placeholder = document.getElementById('projectPlaceholder');
-    if (placeholder !== null) placeholder.style.display = 'none';
-  }
+  el('projectWorkspace').style.display = isProject ? 'flex' : 'none';
+}
+
+// ── Lazy project UI (created on first web activation, kept across switches) ─
+let projectEditorInstance: ProjectEditor | null = null;
+let projectFileTree: FileTreeHandle | null = null;
+
+function ensureProjectUI(id: LanguageId, lang: Language): void {
+  if (lang.kind !== 'project') return;
+  if (projectEditorInstance !== null && projectFileTree !== null) return;
+
+  const state = projectStates.get(id) ?? loadProjectStateFromStorage(id);
+  projectStates.set(id, state);
+
+  projectFileTree = createFileTree(el('projTree'), {
+    activePath: state.activeTab,
+    onOpenFile: (path) => {
+      void projectEditorInstance?.openFile(path);
+      projectFileTree?.setActive(path);
+    },
+  });
+  if (state.activeTab !== null) projectFileTree.expandPath(state.activeTab);
+
+  projectEditorInstance = createProjectEditor({
+    editorHost: el('projEditor'),
+    tabsHost: el('projTabs'),
+    statusHost: el('projStatus'),
+    lang: id,
+    initialOpenTabs: state.openTabs,
+    initialActiveTab: state.activeTab,
+    onTabsChanged: (openTabs, activeTab) => {
+      const cached = projectStates.get(id);
+      if (cached !== undefined) {
+        cached.openTabs = openTabs;
+        cached.activeTab = activeTab;
+      }
+      storageSet(openTabsKey(id), openTabs);
+      if (activeTab !== null) {
+        storageSet(activeTabKey(id), activeTab);
+      } else {
+        storageDelete(activeTabKey(id));
+      }
+      projectFileTree?.setActive(activeTab);
+    },
+  });
 }
 
 // ── Project state hydration ──────────────────────────────────────────────
@@ -607,14 +594,10 @@ async function hydrateProjectState(id: LanguageId, lang: Language): Promise<void
       storageDelete(activeTabKey(id));
     }
 
-    renderProjectPlaceholder(lang, state);
+    projectFileTree?.render(state.tree);
+    if (state.activeTab !== null) projectFileTree?.expandPath(state.activeTab);
   } catch (e) {
     console.error('[project] failed to hydrate', id, e);
-    if (activeLang === langWhenStarted) {
-      const placeholderStats = el('projectPlaceholderStats');
-      placeholderStats.textContent = '';
-      placeholderStats.appendChild(span(`Failed to load workspace: ${(e as Error).message}`, 'muted'));
-    }
   }
 }
 
@@ -800,9 +783,10 @@ function loadLanguageState(id: LanguageId): void {
     clearOutput();
   } else {
     setWorkshopMode('project');
+    ensureProjectUI(id, lang);
     const cached = projectStates.get(id) ?? loadProjectStateFromStorage(id);
     projectStates.set(id, cached);
-    renderProjectPlaceholder(lang, cached.scaffolded ? cached : null);
+    projectFileTree?.render(cached.tree);
     void hydrateProjectState(id, lang);
   }
 

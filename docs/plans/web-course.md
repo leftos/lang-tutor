@@ -205,12 +205,12 @@ Foundation. Nothing user-visible yet beyond the new dropdown option showing a "s
 
 ### M3 — Editor UI: tree + tabs
 
-- [ ] Sidebar tree component built with `document.createElement` (no innerHTML). Lazy-load tree on first open. Click to open file in a new tab; if already open, focus that tab.
-- [ ] Context menu (or simple +/− buttons) for new file, new folder, rename, delete.
-- [ ] Tab strip above editor: shows file name (with dirty dot), close button, click to focus.
-- [ ] CodeMirror language compartment swaps on tab focus, based on file extension (`.html` → html, `.css` → css, `.ts`/`.tsx` → ts/tsx, `.js`/`.jsx` → js/jsx, `.json` → json, `.md` → markdown). Add the corresponding `@codemirror/lang-*` deps.
-- [ ] Save flow: 600 ms debounced PUT per dirty buffer. On Ctrl+S, force flush all dirty buffers immediately.
-- [ ] Preserve scroll position and cursor per file (CodeMirror `EditorState` cached per file path while session is open).
+- [x] Sidebar tree component built with `document.createElement` (no innerHTML). Click to open file in a new tab; if already open, focus that tab.
+- [ ] Context menu (or simple +/− buttons) for new file, new folder, rename, delete. *(Deferred — folded into M4 polish.)*
+- [x] Tab strip above editor: shows file name (with dirty dot), close button, click to focus.
+- [x] CodeMirror language detection by file extension (`.html`, `.css`, `.js`/`.jsx`/`.ts`/`.tsx`, `.json`, `.md`). Added the corresponding `@codemirror/lang-*` deps.
+- [x] Save flow: 600 ms debounced PUT per dirty buffer. Ctrl+S flushes all dirty buffers immediately.
+- [x] Per-file `EditorState` cached in `tabs: Map<path, TabState>` — switching tabs preserves cursor, scroll, undo history. Update listener threaded through every per-file state since `view.setState()` replaces extensions wholesale.
 
 ### M4 — Preview pane & dev loop
 

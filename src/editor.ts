@@ -37,7 +37,7 @@ const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
   python: () => python(),
 };
 
-const tutorHighlight = HighlightStyle.define([
+export const tutorHighlight = HighlightStyle.define([
   { tag: [t.keyword, t.modifier, t.controlKeyword, t.operatorKeyword], color: 'var(--syn-keyword)' },
   { tag: [t.string, t.special(t.string), t.regexp], color: 'var(--syn-string)' },
   { tag: [t.number, t.bool, t.null, t.atom], color: 'var(--syn-number)' },
@@ -53,7 +53,7 @@ const tutorHighlight = HighlightStyle.define([
 ]);
 
 // Editor chrome consumes design tokens so light/dark + signature colour flow naturally.
-const tutorTheme = EditorView.theme({
+export const tutorTheme = EditorView.theme({
   '&': {
     height: '100%',
     fontSize: '13px',
