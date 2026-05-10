@@ -843,6 +843,80 @@ function updatePreviewAriaValue(bar: HTMLElement, pane: HTMLElement): void {
   bar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, pct))));
 }
 
+const PROJ_TREE_WIDTH_KEY = 'lang-tutor:proj-tree-width';
+const PROJ_TREE_MIN = 140;
+const PROJ_TREE_DEFAULT = 220;
+
+function clampTreeWidth(width: number, total: number): number {
+  // Tree takes ≥ PROJ_TREE_MIN px, ≤ 60% of the workspace width. The 60% cap
+  // keeps the editor usable even on narrow screens.
+  const max = Math.max(PROJ_TREE_MIN + 200, total * 0.6);
+  return Math.max(PROJ_TREE_MIN, Math.min(width, max));
+}
+
+function updateTreeAriaValue(bar: HTMLElement, tree: HTMLElement): void {
+  const workspace = tree.parentElement;
+  if (workspace === null) return;
+  const total = workspace.getBoundingClientRect().width;
+  if (total <= 0) return;
+  const pct = Math.round((tree.getBoundingClientRect().width / total) * 100);
+  bar.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, pct))));
+}
+
+function initProjectTreeResize(): void {
+  const bar = el('projTreeResize');
+  const tree = el('projTree');
+
+  const stored = storageGet<number>(PROJ_TREE_WIDTH_KEY);
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    const workspace = tree.parentElement;
+    const total = workspace?.getBoundingClientRect().width ?? Number.POSITIVE_INFINITY;
+    tree.style.flex = `0 0 ${clampTreeWidth(stored, total)}px`;
+  }
+  updateTreeAriaValue(bar, tree);
+
+  let startX = 0;
+  let startW = 0;
+
+  function onMove(e: MouseEvent): void {
+    const workspace = tree.parentElement;
+    if (workspace === null) return;
+    const total = workspace.getBoundingClientRect().width;
+    // Tree is on the RIGHT edge of the workspace, so dragging the handle to
+    // the left grows the tree (negative dx = wider tree).
+    const next = clampTreeWidth(startW - (e.clientX - startX), total);
+    tree.style.flex = `0 0 ${next}px`;
+    updateTreeAriaValue(bar, tree);
+  }
+
+  function onUp(): void {
+    bar.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    storageSet(PROJ_TREE_WIDTH_KEY, tree.getBoundingClientRect().width);
+    updateTreeAriaValue(bar, tree);
+  }
+
+  bar.addEventListener('mousedown', (e: MouseEvent) => {
+    startX = e.clientX;
+    startW = tree.getBoundingClientRect().width;
+    bar.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  });
+
+  bar.addEventListener('dblclick', () => {
+    tree.style.flex = `0 0 ${PROJ_TREE_DEFAULT}px`;
+    storageDelete(PROJ_TREE_WIDTH_KEY);
+    requestAnimationFrame(() => updateTreeAriaValue(bar, tree));
+  });
+}
+
 function initProjectPreviewResize(): void {
   const bar = el('projPreviewResize');
   const pane = el('projPreview');
@@ -1358,6 +1432,14 @@ function setLanguage(newLang: LanguageId): void {
 function initResize(): void {
   const bar = el('resizeBar');
   const out = el<HTMLPreElement>('outputPre');
+
+  // Restore persisted height. Single source of truth for the clamp range
+  // (60–500 px) is shared between init and the drag handler.
+  const stored = storageGet<number>(OUTPUT_HEIGHT_KEY);
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    out.style.flex = `0 0 ${Math.max(60, Math.min(stored, 500))}px`;
+  }
+
   let startY = 0;
   let startH = 0;
 
@@ -1372,6 +1454,7 @@ function initResize(): void {
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    storageSet(OUTPUT_HEIGHT_KEY, out.getBoundingClientRect().height);
   }
 
   bar.addEventListener('mousedown', (e: MouseEvent) => {
@@ -1384,7 +1467,14 @@ function initResize(): void {
     document.addEventListener('mouseup', onUp);
     e.preventDefault();
   });
+
+  bar.addEventListener('dblclick', () => {
+    out.style.flex = '0 0 120px';
+    storageDelete(OUTPUT_HEIGHT_KEY);
+  });
 }
+
+const OUTPUT_HEIGHT_KEY = 'lang-tutor:output-height';
 
 const ASIDE_WIDTH_KEY = 'lang-tutor:aside-width';
 const ASIDE_MIN_WIDTH = 320;
@@ -1525,6 +1615,7 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>('.lang-tab')) {
 initResize();
 initAsideResize();
 initProjectPreviewResize();
+initProjectTreeResize();
 
 // ── Init ──────────────────────────────────────────────────────────────────
 applyStoredTheme();

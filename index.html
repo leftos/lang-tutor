@@ -123,8 +123,12 @@
       <pre id="outputPre" class="output-pre" style="flex: 0 0 120px"><span class="muted">Run the program to capture its output here.</span></pre>
 
       <!-- ─── Project workspace (web course) ───────────────────── -->
+      <!--
+        File tree lives on the RIGHT side of the workspace so the chat (left)
+        sits closest to the editor (centre). DOM order: editor-pane → resize
+        → tree.
+      -->
       <div class="project-workspace" id="projectWorkspace" style="display:none">
-        <aside class="proj-tree" id="projTree" aria-label="Project files"></aside>
         <section class="proj-editor-pane">
           <div class="proj-tabs" id="projTabs" role="tablist"></div>
           <div class="proj-editor" id="projEditor"></div>
@@ -152,6 +156,8 @@
             <div class="proj-preview-body" id="projPreviewBody"></div>
           </div>
         </section>
+        <div id="projTreeResize" class="proj-tree-resize" role="separator" aria-orientation="vertical" aria-label="Resize file tree" aria-valuenow="20" aria-valuemin="0" aria-valuemax="100"></div>
+        <aside class="proj-tree" id="projTree" aria-label="Project files"></aside>
       </div>
     </main>
 

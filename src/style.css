@@ -1211,11 +1211,23 @@
 .proj-tree {
   flex: 0 0 220px;
   overflow-y: auto;
-  border-right: 1px solid var(--rule-2);
+  /* Tree now sits on the right of the workspace, so the rule lives on the
+     LEFT edge of the tree panel (where it adjoins the resize handle). */
+  border-left: 1px solid var(--rule-2);
   padding: 10px 0;
   background: var(--paper-2);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+.proj-tree-resize {
+  flex: 0 0 5px;
+  cursor: ew-resize;
+  background: var(--rule-2);
+  transition: background 120ms ease;
+}
+.proj-tree-resize:hover,
+.proj-tree-resize.dragging {
+  background: var(--sig);
 }
 .proj-editor-pane {
   flex: 1;
