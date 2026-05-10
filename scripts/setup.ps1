@@ -275,7 +275,7 @@ if (-not $SkipInstall) {
         if (Test-Tool 'black') { Write-Ok "black installed" } else { Write-Warn-Local "black not on PATH after install — Python formatting will be disabled." }
     }
 
-    Write-Step "typescript-language-server (Web LSP)"
+    Write-Step "typescript-language-server (Web LSP — primary)"
     if (Test-Tool 'typescript-language-server') {
         Write-Skip "typescript-language-server already installed"
     } else {
@@ -286,6 +286,40 @@ if (-not $SkipInstall) {
             Write-Ok "typescript-language-server installed"
         } else {
             Write-Warn-Local "typescript-language-server not on PATH after install — LSP-based Web tutoring will be disabled."
+        }
+    }
+
+    Write-Step "vscode-langservers-extracted (Web LSP — HTML + CSS)"
+    # Bundles vscode-html-language-server, vscode-css-language-server, and a
+    # few others; the bridge spawns the HTML and CSS shims for .html / .css
+    # files in projects/web/. Falls soft per-server when not on PATH.
+    if ((Test-Tool 'vscode-html-language-server') -and (Test-Tool 'vscode-css-language-server')) {
+        Write-Skip "vscode-html-language-server + vscode-css-language-server already installed"
+    } else {
+        Write-Host "    npm install -g vscode-langservers-extracted ..."
+        & npm install -g vscode-langservers-extracted --silent | Out-Host
+        Refresh-Path
+        if ((Test-Tool 'vscode-html-language-server') -and (Test-Tool 'vscode-css-language-server')) {
+            Write-Ok "vscode-langservers-extracted installed"
+        } else {
+            Write-Warn-Local "html / css language servers not on PATH after install — HTML / CSS LSP for web will be disabled."
+        }
+    }
+
+    Write-Step "biome (Web LSP — fast lint via lsp-proxy)"
+    # Biome's LSP runs alongside tsserver to provide faster lint diagnostics
+    # than vite-plugin-checker can give us (which runs in a worker on the dev
+    # server). The CLI is `biome` from @biomejs/biome.
+    if (Test-Tool 'biome') {
+        Write-Skip "biome already installed"
+    } else {
+        Write-Host "    npm install -g @biomejs/biome ..."
+        & npm install -g @biomejs/biome --silent | Out-Host
+        Refresh-Path
+        if (Test-Tool 'biome') {
+            Write-Ok "biome installed"
+        } else {
+            Write-Warn-Local "biome not on PATH after install — Biome LSP fan-out for web will be disabled (vite-plugin-checker still covers it from [SERVER])."
         }
     }
 

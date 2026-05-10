@@ -5,13 +5,21 @@
  *   Browser ── WS /lsp?session=<id> ──> tools/lsp.mjs ── stdio (LSP) ──> clangd | rust-analyzer | ...
  *
  * Lifecycle:
- *   POST /lsp/spawn { lang }                   → { ok, sessionId } (binary spawned, awaiting WS)
- *   GET  /lsp/availability?lang=<lang>         → { available, version?, error? }
+ *   POST /lsp/spawn { lang }                   → { ok, rootUri, mainFileUri?,
+ *                                                  servers: [{ serverKey, sessionId, acceptsLanguageIds }],
+ *                                                  unavailable: [...] }
+ *                                                One bundle per language: a single LSP_CONFIG entry
+ *                                                for single-server langs (cpp/rust/python/csharp), or a
+ *                                                fan-out across tsserver+html+css+biome for `web`.
+ *   GET  /lsp/availability?lang=<lang>         → { available, version?, error? } (per-server, takes a
+ *                                                serverKey — used by setup probes; the spawn endpoint
+ *                                                short-circuits per-server when the bin is missing.)
  *   WS   /lsp?session=<id>                     → bidirectional JSON-RPC (raw JSON over WS,
  *                                                Content-Length-framed on stdio)
  *   POST /lsp/dispose { sessionId }            → graceful shutdown + reap (also auto on WS close)
  *
- * Phase 0 wires only `cpp` (clangd). New languages are added by extending LSP_CONFIG.
+ * New languages are added by extending LSP_CONFIG (one entry per server) and LANG_SERVERS (the
+ * ordered fan-out per user-facing language).
  *
  * SECURITY: all spawns use the array form of `spawn` from node:child_process — no shell.
  * The binary names and arg arrays are hardcoded constants in LSP_CONFIG. User code travels
@@ -56,9 +64,19 @@ const IS_WIN = process.platform === 'win32';
  *           notifications, debounces, and writes the buffer to the file the URI points to. Use
  *           for servers whose flycheck (or equivalent) reads on-disk content rather than the LSP
  *           buffer (rust-analyzer + cargo check is the canonical case).
+ * @property {string[]} [acceptsLanguageIds] - LSP languageIds this server handles. The frontend
+ *           dispatches per-file didOpen / didChange to every server whose set covers the file's
+ *           languageId. Omit for single-server languages (the frontend treats those as universal).
  */
 
-/** @type {Record<string, LspConfig>} */
+/**
+ * LSP server entries are keyed by `serverKey`. Single-server languages reuse
+ * the language name as the key (`cpp`, `rust`, `python`, `csharp`); the `web`
+ * project workspace fans out to multiple servers (typescript-language-server
+ * primary, plus HTML / CSS / Biome) and each gets its own key.
+ *
+ * @type {Record<string, LspConfig>}
+ */
 const LSP_CONFIG = {
   cpp: {
     bin: 'clangd',
@@ -129,18 +147,71 @@ const LSP_CONFIG = {
     versionArgs: [],
   },
 
+  // ── Web project: tsserver (primary) + HTML/CSS/Biome (fan-out) ───────────
+  // All four share `projects/web/` as the workspace dir. The frontend routes
+  // didOpen / didChange / didClose per-file to the servers whose
+  // acceptsLanguageIds set includes the file's languageId, then merges
+  // diagnostics across them in [LSP] / gutter.
   web: {
     // typescript-language-server wraps tsserver and speaks LSP over --stdio.
-    // It happily handles `.js` files when a jsconfig.json with checkJs is
-    // present in the workspace, so we get type-checking-quality diagnostics
-    // even on plain JavaScript lessons. HTML/CSS LSPs are deferred — those
-    // errors surface via the iframe console / Vite-plugin-checker stderr.
+    // It handles `.js` files when a jsconfig.json with checkJs is present in
+    // the workspace, so we get type-checking-quality diagnostics even on
+    // plain JavaScript lessons.
     bin: 'typescript-language-server',
     args: ['--stdio'],
     workspaceMode: 'project',
     projectDir: 'web',
+    acceptsLanguageIds: ['typescript', 'typescriptreact', 'javascript', 'javascriptreact'],
     versionArgs: ['--version'],
   },
+
+  'web-html': {
+    // vscode-html-language-server (from `vscode-langservers-extracted`).
+    // The npm-global shim is `.cmd` on Windows so spawn needs `shell: true` —
+    // that's set globally by IS_WIN.
+    bin: 'vscode-html-language-server',
+    args: ['--stdio'],
+    workspaceMode: 'project',
+    projectDir: 'web',
+    acceptsLanguageIds: ['html'],
+    versionArgs: ['--version'],
+  },
+
+  'web-css': {
+    bin: 'vscode-css-language-server',
+    args: ['--stdio'],
+    workspaceMode: 'project',
+    projectDir: 'web',
+    acceptsLanguageIds: ['css', 'scss', 'less'],
+    versionArgs: ['--version'],
+  },
+
+  'web-biome': {
+    // Biome's LSP for fast lint feedback alongside tsserver. Biome is already
+    // in projects/web/'s devDependencies (used by vite-plugin-checker), so
+    // when typescript-language-server is installed Biome usually is too.
+    bin: 'biome',
+    args: ['lsp-proxy'],
+    workspaceMode: 'project',
+    projectDir: 'web',
+    acceptsLanguageIds: ['typescript', 'typescriptreact', 'javascript', 'javascriptreact', 'json'],
+    versionArgs: ['--version'],
+  },
+};
+
+/**
+ * User-facing language → ordered list of serverKeys to spawn. The first entry
+ * is the "primary" — its capabilities seed the frontend's `LspClient.capabilities`
+ * snapshot, and its mainFileUri (if any) is exposed for single-buffer convenience.
+ *
+ * @type {Record<string, string[]>}
+ */
+const LANG_SERVERS = {
+  cpp: ['cpp'],
+  rust: ['rust'],
+  python: ['python'],
+  csharp: ['csharp'],
+  web: ['web', 'web-html', 'web-css', 'web-biome'],
 };
 
 // ── Globals (HMR-safe) ──────────────────────────────────────────────────────
@@ -427,13 +498,13 @@ function whichBin(bin) {
   });
 }
 
-async function probeAvailability(lang) {
-  const cached = availabilityCache.get(lang);
+async function probeAvailability(serverKey) {
+  const cached = availabilityCache.get(serverKey);
   if (cached !== undefined) return cached;
-  const config = LSP_CONFIG[lang];
+  const config = LSP_CONFIG[serverKey];
   if (config === undefined) {
-    const result = { available: false, error: `unknown lang: ${lang}` };
-    availabilityCache.set(lang, result);
+    const result = { available: false, error: `unknown serverKey: ${serverKey}` };
+    availabilityCache.set(serverKey, result);
     return result;
   }
   const probeBin = config.probeBin ?? config.bin;
@@ -452,7 +523,7 @@ async function probeAvailability(lang) {
   const versionArgs = config.versionArgs ?? [];
   if (versionArgs.length === 0) {
     const result = { available: true, version: resolved };
-    availabilityCache.set(lang, result);
+    availabilityCache.set(serverKey, result);
     return result;
   }
   const version = await new Promise((resolveVer) => {
@@ -491,7 +562,7 @@ async function probeAvailability(lang) {
     });
   });
   const result = { available: true, version: version ?? resolved };
-  availabilityCache.set(lang, result);
+  availabilityCache.set(serverKey, result);
   return result;
 }
 
@@ -511,17 +582,17 @@ async function probeAvailability(lang) {
  * already manages files there); fresh-mode creates a per-session directory
  * under `.tmp/lsp/<sid>/` and seeds the configured workspace files.
  *
- * @param {string} lang
+ * @param {string} serverKey
  * @param {string} sessionId
  * @returns {{ dir: string; ephemeral: boolean }}
  */
-function createWorkspace(lang, sessionId) {
-  const config = LSP_CONFIG[lang];
-  if (config === undefined) throw new Error(`unknown lang: ${lang}`);
+function createWorkspace(serverKey, sessionId) {
+  const config = LSP_CONFIG[serverKey];
+  if (config === undefined) throw new Error(`unknown serverKey: ${serverKey}`);
 
   if (config.workspaceMode === 'project') {
     if (typeof config.projectDir !== 'string' || config.projectDir.length === 0) {
-      throw new Error(`project mode requires projectDir for ${lang}`);
+      throw new Error(`project mode requires projectDir for ${serverKey}`);
     }
     const dir = resolve(REPO_ROOT, 'projects', config.projectDir);
     return { dir, ephemeral: false };
@@ -573,21 +644,21 @@ function pathToFileUri(absPath) {
 }
 
 /**
- * Spawn an LSP child for the given language and return a sessionId. The child
+ * Spawn an LSP child for a single serverKey and return a sessionId. The child
  * is alive but has no WS attached yet — call attachWebSocket() to wire it up.
  *
- * @param {string} lang
- * @returns {Promise<{ ok: true; sessionId: string; mainFileUri: string; rootUri: string } | { ok: false; error: string }>}
+ * @param {string} serverKey
+ * @returns {Promise<{ ok: true; sessionId: string; mainFileUri?: string; rootUri: string } | { ok: false; error: string }>}
  */
-async function startSession(lang) {
-  const config = LSP_CONFIG[lang];
-  if (config === undefined) return { ok: false, error: `unknown lang: ${lang}` };
+async function startSession(serverKey) {
+  const config = LSP_CONFIG[serverKey];
+  if (config === undefined) return { ok: false, error: `unknown serverKey: ${serverKey}` };
 
-  const probe = await probeAvailability(lang);
+  const probe = await probeAvailability(serverKey);
   if (!probe.available) return { ok: false, error: probe.error ?? 'unavailable' };
 
   const sessionId = randomUUID();
-  const { dir: workspaceDir, ephemeral } = createWorkspace(lang, sessionId);
+  const { dir: workspaceDir, ephemeral } = createWorkspace(serverKey, sessionId);
 
   let proc;
   try {
@@ -603,7 +674,7 @@ async function startSession(lang) {
 
   /** @type {LspSession} */
   const session = {
-    lang,
+    lang: serverKey,
     proc,
     workspaceDir,
     workspaceEphemeral: ephemeral,
@@ -614,10 +685,10 @@ async function startSession(lang) {
   };
 
   proc.on('error', (e) => {
-    console.warn(`[lsp:${lang}:${sessionId.slice(0, 8)}] proc error:`, e);
+    console.warn(`[lsp:${serverKey}:${sessionId.slice(0, 8)}] proc error:`, e);
   });
   proc.on('exit', (code, signal) => {
-    console.info(`[lsp:${lang}:${sessionId.slice(0, 8)}] exited code=${code} signal=${signal}`);
+    console.info(`[lsp:${serverKey}:${sessionId.slice(0, 8)}] exited code=${code} signal=${signal}`);
     // If the WS is still open, close it so the client knows the server is gone.
     if (session.ws !== null) {
       try {
@@ -638,13 +709,13 @@ async function startSession(lang) {
   // stderr is informational; surface it in the dev-server console for debugging.
   proc.stderr.on('data', (chunk) => {
     const line = chunk.toString('utf8').trim();
-    if (line.length > 0) console.info(`[lsp:${lang}:${sessionId.slice(0, 8)}] stderr: ${line}`);
+    if (line.length > 0) console.info(`[lsp:${serverKey}:${sessionId.slice(0, 8)}] stderr: ${line}`);
   });
 
   proc.stdout.on('data', (chunk) => {
     session.lastActivity = Date.now();
     if (session.stdoutBuffer.length + chunk.length > MAX_BUFFER_BYTES) {
-      console.warn(`[lsp:${lang}:${sessionId.slice(0, 8)}] stdout buffer overrun, killing`);
+      console.warn(`[lsp:${serverKey}:${sessionId.slice(0, 8)}] stdout buffer overrun, killing`);
       try {
         proc.kill('SIGKILL');
       } catch {
@@ -684,6 +755,53 @@ async function startSession(lang) {
     ...(typeof config.mainFile === 'string' ? { mainFileUri: pathToFileUri(join(workspaceDir, config.mainFile)) } : {}),
     rootUri: pathToFileUri(workspaceDir),
   };
+}
+
+/**
+ * Spawn every available server for a user-facing language. Skips servers
+ * whose binary is not installed and reports them under `unavailable`. Returns
+ * `ok: false` only when no server in LANG_SERVERS[lang] could start.
+ *
+ * @param {string} lang
+ * @returns {Promise<
+ *   | { ok: true; rootUri: string; mainFileUri?: string;
+ *       servers: Array<{ serverKey: string; sessionId: string; acceptsLanguageIds: string[] }>;
+ *       unavailable: Array<{ serverKey: string; error: string }>; }
+ *   | { ok: false; error: string }>}
+ */
+async function startBundle(lang) {
+  const serverKeys = LANG_SERVERS[lang];
+  if (serverKeys === undefined || serverKeys.length === 0) {
+    return { ok: false, error: `unknown lang: ${lang}` };
+  }
+
+  const servers = [];
+  const unavailable = [];
+  let rootUri;
+  let mainFileUri;
+
+  for (const serverKey of serverKeys) {
+    const result = await startSession(serverKey);
+    if (!result.ok) {
+      unavailable.push({ serverKey, error: result.error });
+      continue;
+    }
+    if (rootUri === undefined) rootUri = result.rootUri;
+    if (mainFileUri === undefined && result.mainFileUri !== undefined) mainFileUri = result.mainFileUri;
+    servers.push({
+      serverKey,
+      sessionId: result.sessionId,
+      acceptsLanguageIds: LSP_CONFIG[serverKey]?.acceptsLanguageIds ?? [],
+    });
+  }
+
+  if (servers.length === 0) {
+    const reasons = unavailable.map((u) => `${u.serverKey}: ${u.error}`).join('; ');
+    return { ok: false, error: reasons.length > 0 ? reasons : 'no servers available' };
+  }
+  if (rootUri === undefined) return { ok: false, error: 'unreachable: bundle has servers but no rootUri' };
+
+  return mainFileUri !== undefined ? { ok: true, rootUri, mainFileUri, servers, unavailable } : { ok: true, rootUri, servers, unavailable };
 }
 
 /**
@@ -864,7 +982,7 @@ export async function handleLspRequest(req, res) {
         sendJson(res, 400, { error: 'missing lang' });
         return true;
       }
-      const result = await startSession(lang);
+      const result = await startBundle(lang);
       sendJson(res, result.ok ? 200 : 503, result);
       return true;
     }
@@ -928,4 +1046,4 @@ export function handleLspUpgrade(req, socket, head) {
 }
 
 // Internal exports for tests and the smoke script under .tmp/.
-export const __internals = { LSP_CONFIG, sessions, parseFrames, frameMessage, TMP_LSP_ROOT };
+export const __internals = { LSP_CONFIG, LANG_SERVERS, sessions, parseFrames, frameMessage, TMP_LSP_ROOT };
