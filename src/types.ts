@@ -24,9 +24,25 @@ export interface Progress {
   lastSeen?: string;
 }
 
+export interface TextBlock {
+  type: 'text';
+  text: string;
+}
+
+export interface ImageBlock {
+  type: 'image';
+  source: {
+    type: 'base64';
+    media_type: 'image/png';
+    data: string;
+  };
+}
+
+export type ContentBlock = TextBlock | ImageBlock;
+
 export interface Message {
   role: 'user' | 'assistant';
-  content: string;
+  content: string | ContentBlock[];
 }
 
 export interface ClaudeResponse {

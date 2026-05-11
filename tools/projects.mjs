@@ -21,7 +21,9 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import chokidar from 'chokidar';
@@ -88,6 +90,12 @@ const MISSING_CMD_HINTS = Object.freeze({
   dotnet: '.NET SDK not found on PATH. Install .NET 8 (or newer) from https://aka.ms/dotnet/download and restart the dev server.',
   pnpm: 'pnpm not found on PATH. Install with `npm install -g pnpm` and restart the dev server.',
 });
+
+const WGC_NO_SDK_HINT =
+  'Windows screen capture (WGC) needs the Windows 10 SDK (any version ≥ 10.0.19041) installed. ' +
+  'The easiest path is to install the Windows 10/11 SDK via the Visual Studio Installer (“Desktop development with C++” workload includes it), ' +
+  'or grab the standalone installer from https://developer.microsoft.com/windows/downloads/windows-sdk/. ' +
+  'Without it the tutor falls back to text-only payloads — share screenshots manually.';
 
 function missingCmdHint(cmd) {
   const baseName = cmd.replace(/\.(cmd|exe|bat)$/i, '');
@@ -203,9 +211,22 @@ function getReadinessPort(lang) {
 const BOOTSTRAP_START = '<!-- lang-tutor:bootstrap-start -->';
 const BOOTSTRAP_END = '<!-- lang-tutor:bootstrap-end -->';
 
-const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
-<script>
-(() => {
+// IIFE bundle of the npm `html-to-image` package, produced by
+// scripts/copy-html-to-image.mjs. Bundled and inlined (rather than dynamically
+// imported) because the iframe is cross-origin from the parent (`:5180` vs
+// `:5173`) and dynamic imports are CORS-restricted. Embedding inline costs
+// ~14 KB once per iframe load. If the file is missing (postinstall didn't run)
+// we fall back to an empty string and the screenshot handler reports a clear
+// error instead of crashing the bootstrap.
+const HTML_TO_IMAGE_BUNDLE = (() => {
+  try {
+    return readFileSync(join(REPO_ROOT, 'public', 'lang-tutor-assets', 'html-to-image.js'), 'utf8');
+  } catch {
+    return '';
+  }
+})();
+
+const BOOTSTRAP_INNER = `(() => {
   if (window.__langTutorBootstrap) return;
   window.__langTutorBootstrap = true;
   const buffer = [];
@@ -257,32 +278,83 @@ const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true });
   else startObserver();
 
-  window.addEventListener('message', (event) => {
-    const data = event.data;
-    if (!data || data.type !== 'lang-tutor:snapshot-request') return;
-    // Re-read on demand so a snapshot taken right as the overlay appears
-    // doesn't lose the race with the MutationObserver.
-    let hmrOverlay = latestOverlay;
-    try {
-      const live = document.querySelector('vite-error-overlay');
-      if (live !== null) hmrOverlay = readOverlayText(live);
-    } catch {}
-    const reply = {
-      type: 'lang-tutor:snapshot-reply',
-      requestId: data.requestId,
-      dom: document.documentElement.outerHTML,
-      consoleBuffer: buffer.slice(),
-      url: location.href,
-      title: document.title,
-      hmrOverlay,
+  // Resize a PNG dataURL via an offscreen canvas. Keeps aspect ratio; clamps
+  // the long edge to maxLong. Returns a new PNG dataURL.
+  const resizeDataUrl = (dataUrl, maxLong) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      if (w === 0 || h === 0) { reject(new Error('zero-dimension image')); return; }
+      const scale = Math.min(1, maxLong / Math.max(w, h));
+      const tw = Math.max(1, Math.round(w * scale));
+      const th = Math.max(1, Math.round(h * scale));
+      const c = document.createElement('canvas');
+      c.width = tw; c.height = th;
+      const ctx = c.getContext('2d');
+      if (!ctx) { reject(new Error('canvas 2d context unavailable')); return; }
+      ctx.drawImage(img, 0, 0, tw, th);
+      try { resolve(c.toDataURL('image/png')); }
+      catch (err) { reject(err instanceof Error ? err : new Error(String(err))); }
     };
-    if (event.source && typeof event.source.postMessage === 'function') {
-      event.source.postMessage(reply, event.origin || '*');
+    img.onerror = () => reject(new Error('image decode failed'));
+    img.src = dataUrl;
+  });
+
+  window.addEventListener('message', async (event) => {
+    const data = event.data;
+    if (!data || typeof data !== 'object') return;
+    const reply = (payload) => {
+      if (event.source && typeof event.source.postMessage === 'function') {
+        event.source.postMessage(payload, event.origin || '*');
+      }
+    };
+
+    if (data.type === 'lang-tutor:snapshot-request') {
+      // Re-read on demand so a snapshot taken right as the overlay appears
+      // doesn't lose the race with the MutationObserver.
+      let hmrOverlay = latestOverlay;
+      try {
+        const live = document.querySelector('vite-error-overlay');
+        if (live !== null) hmrOverlay = readOverlayText(live);
+      } catch {}
+      reply({
+        type: 'lang-tutor:snapshot-reply',
+        requestId: data.requestId,
+        dom: document.documentElement.outerHTML,
+        consoleBuffer: buffer.slice(),
+        url: location.href,
+        title: document.title,
+        hmrOverlay,
+      });
+      return;
+    }
+
+    if (data.type === 'lang-tutor:screenshot-request') {
+      const requestId = data.requestId;
+      try {
+        if (!window.htmlToImage || typeof window.htmlToImage.toPng !== 'function') {
+          throw new Error('html-to-image bundle missing — run \\'pnpm install\\' to refresh public/lang-tutor-assets/');
+        }
+        // Render the document body (rather than documentElement) — html-to-image
+        // walks the full layout tree, but the <html> element's serialised
+        // bounding box is sometimes 0×0 on documents with quirky styling.
+        const target = document.body || document.documentElement;
+        const rawDataUrl = await window.htmlToImage.toPng(target, { pixelRatio: 1, cacheBust: false });
+        const fullDataUrl = await resizeDataUrl(rawDataUrl, 1568);
+        const thumbDataUrl = await resizeDataUrl(rawDataUrl, 256);
+        reply({ type: 'lang-tutor:screenshot-reply', requestId, fullDataUrl, thumbDataUrl });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        reply({ type: 'lang-tutor:screenshot-reply', requestId, error: msg });
+      }
+      return;
     }
   });
-})();
-</script>
-${BOOTSTRAP_END}`;
+})();`;
+
+const BOOTSTRAP_SCRIPT =
+  BOOTSTRAP_START + '\n<script>' + HTML_TO_IMAGE_BUNDLE + '</script>\n<script>' + BOOTSTRAP_INNER + '</script>\n' + BOOTSTRAP_END;
 
 function injectBootstrap(lang) {
   if (PROJECT_CONFIG[lang].bootstrap !== 'web-iframe') return;
@@ -1303,4 +1375,219 @@ export function subscribeFsEvents(lang, onEvent) {
   const state = ensureWatcher(lang);
   state.subs.add(onEvent);
   return () => state.subs.delete(onEvent);
+}
+
+// ── WGC screenshot helper for desktop-process workspaces (csharp) ──────────
+//
+// Lazy-built C# helper at tools/wgc-capture/. On first capture (or when
+// WGC_CAPTURE_REBUILD=1) we run `dotnet publish` against whichever Windows SDK
+// is installed (probed at runtime), then spawn the resulting exe with the PID
+// of the supervised process and two temp output paths.
+
+const WGC_CAPTURE_DIR = join(__dirname, 'wgc-capture');
+const WGC_CAPTURE_PUBLISH_DIR = join(WGC_CAPTURE_DIR, 'bin', 'Release', 'publish');
+const WGC_CAPTURE_EXE = join(WGC_CAPTURE_PUBLISH_DIR, 'wgc-capture.exe');
+const UAP_PLATFORMS_DIR = 'C:\\Program Files (x86)\\Windows Kits\\10\\Platforms\\UAP';
+
+/**
+ * Return the highest installed Windows SDK platform version under
+ * Windows Kits\10\Platforms\UAP\, or null if none. Format: '10.0.X.X'.
+ */
+function findWindowsSdkVersion() {
+  if (!IS_WIN) return null;
+  if (!existsSync(UAP_PLATFORMS_DIR)) return null;
+  let entries;
+  try {
+    entries = readdirSync(UAP_PLATFORMS_DIR, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const versions = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    if (!/^10\.0\.\d+\.\d+$/.test(e.name)) continue;
+    if (!existsSync(join(UAP_PLATFORMS_DIR, e.name, 'Platform.xml'))) continue;
+    versions.push(e.name);
+  }
+  if (versions.length === 0) return null;
+  versions.sort((a, b) => {
+    const av = a.split('.').map(Number);
+    const bv = b.split('.').map(Number);
+    for (let i = 0; i < 4; i++) {
+      const ai = av[i] ?? 0;
+      const bi = bv[i] ?? 0;
+      if (ai !== bi) return ai - bi;
+    }
+    return 0;
+  });
+  return versions[versions.length - 1];
+}
+
+/**
+ * Lazy-build the WGC capture helper exe. Returns { ok, error? }. The build is
+ * cached by the existence of WGC_CAPTURE_EXE; setting WGC_CAPTURE_REBUILD=1
+ * forces a fresh publish (useful when iterating on Program.cs).
+ */
+function ensureWgcHelper() {
+  if (process.env.WGC_CAPTURE_REBUILD !== '1' && existsSync(WGC_CAPTURE_EXE)) {
+    return { ok: true };
+  }
+  if (!commandExists('dotnet')) return { ok: false, error: missingCmdHint('dotnet') };
+  const sdkVersion = findWindowsSdkVersion();
+  if (sdkVersion === null) return { ok: false, error: WGC_NO_SDK_HINT };
+
+  const args = [
+    'publish',
+    WGC_CAPTURE_DIR,
+    '-c',
+    'Release',
+    '-r',
+    'win-x64',
+    '--self-contained',
+    'false',
+    '-p:PublishSingleFile=true',
+    `-p:WgcWindowsSdkVersion=${sdkVersion}`,
+    '-p:PublishDir=bin/Release/publish/',
+  ];
+  let result;
+  try {
+    result = spawnSync('dotnet', args, { shell: IS_WIN, encoding: 'utf8', timeout: 120_000 });
+  } catch (e) {
+    return { ok: false, error: `dotnet publish threw: ${e.message}` };
+  }
+  if (result.status !== 0) {
+    const out = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
+    // Catch the very specific "no Platform.xml" error and surface the SDK hint
+    // — otherwise dump the last few lines of dotnet's output.
+    if (/Platform\.xml/i.test(out)) return { ok: false, error: WGC_NO_SDK_HINT };
+    const tail = out.split('\n').slice(-8).join('\n');
+    return { ok: false, error: `wgc-capture build failed (exit ${result.status}):\n${tail}` };
+  }
+  if (!existsSync(WGC_CAPTURE_EXE)) {
+    return { ok: false, error: `wgc-capture build succeeded but exe not at ${WGC_CAPTURE_EXE}` };
+  }
+  return { ok: true };
+}
+
+const WGC_CAPTURE_TIMEOUT_MS = 4_000;
+
+/**
+ * Capture a PNG of the running desktop process's main window via the WGC
+ * helper exe. Returns `{ ok, fullDataUrl?, thumbDataUrl?, error? }`. On any
+ * failure the error string is suitable to surface directly to the student.
+ */
+export async function captureProjectScreenshot(lang) {
+  assertLang(lang);
+  if (PROJECT_CONFIG[lang].readiness.kind !== 'process-alive') {
+    return { ok: false, error: `screenshot capture not supported for ${lang}` };
+  }
+  if (!IS_WIN) {
+    return { ok: false, error: 'desktop screenshot capture is Windows-only (WGC).' };
+  }
+  const state = procs.get(lang);
+  if (!state?.proc || state.pid === null) {
+    return { ok: false, error: 'process not running' };
+  }
+  const pid = state.pid;
+
+  const build = ensureWgcHelper();
+  if (!build.ok) return { ok: false, error: build.error };
+
+  const tempBase = join(tmpdir(), `lang-tutor-shot-${randomBytes(6).toString('hex')}`);
+  const fullPath = `${tempBase}-full.png`;
+  const thumbPath = `${tempBase}-thumb.png`;
+
+  const exit = await new Promise((res) => {
+    let settled = false;
+    const child = spawn(WGC_CAPTURE_EXE, ['--pid', String(pid), '--full', fullPath, '--thumb', thumbPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+      if (stderr.length > 2000) stderr = stderr.slice(-2000);
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // already gone
+      }
+      res({ code: null, stderr: `wgc-capture timed out after ${WGC_CAPTURE_TIMEOUT_MS} ms` });
+    }, WGC_CAPTURE_TIMEOUT_MS);
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      res({ code, stderr: stderr.trim() });
+    });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      res({ code: null, stderr: `wgc-capture spawn error: ${err.message}` });
+    });
+  });
+
+  const cleanup = () => {
+    for (const p of [fullPath, thumbPath]) {
+      try {
+        if (existsSync(p)) unlinkSync(p);
+      } catch {
+        // best-effort
+      }
+    }
+  };
+
+  if (exit.code !== 0) {
+    cleanup();
+    return { ok: false, error: mapWgcStderr(exit.stderr) };
+  }
+
+  let fullBytes;
+  let thumbBytes;
+  try {
+    fullBytes = readFileSync(fullPath);
+    thumbBytes = readFileSync(thumbPath);
+  } catch (e) {
+    cleanup();
+    return { ok: false, error: `wgc-capture exit 0 but PNG read failed: ${e.message}` };
+  }
+  cleanup();
+
+  const fullDataUrl = `data:image/png;base64,${fullBytes.toString('base64')}`;
+  const thumbDataUrl = `data:image/png;base64,${thumbBytes.toString('base64')}`;
+  return { ok: true, fullDataUrl, thumbDataUrl };
+}
+
+/**
+ * Map stderr from the WGC helper to a friendly hint. The Program.cs prints one
+ * line per failure; we recognise the common shapes and pass everything else
+ * through (truncated).
+ */
+function mapWgcStderr(stderr) {
+  const s = stderr ?? '';
+  if (/no top-level window found for PID/i.test(s)) {
+    return 'No top-level window found yet — give the app a moment to open its main window, then try again.';
+  }
+  if (/WGC unavailable/i.test(s) || /RPC_E_DISCONNECTED/i.test(s)) {
+    return 'Windows Graphics Capture is unavailable on this system. WGC requires Windows 10 May 2020 Update (build 19041) or newer.';
+  }
+  if (/window not capturable/i.test(s) || /E_FAIL/i.test(s)) {
+    return 'Windows refused to capture this window (it may be transparent, minimised, or use a non-capturable composition layer).';
+  }
+  if (/no frame arrived/i.test(s) || /timed out/i.test(s)) {
+    return 'Capture timed out — the window may be minimised, off-screen, or the renderer is stuck.';
+  }
+  if (/D3D11CreateDevice failed/i.test(s)) {
+    return 'Direct3D 11 device creation failed (graphics driver issue?). Try restarting the app.';
+  }
+  const tail = s
+    .split('\n')
+    .filter((l) => l.trim().length > 0)
+    .slice(-2)
+    .join(' · ');
+  return tail.length > 0 ? `wgc-capture: ${tail}` : 'wgc-capture failed with no stderr output.';
 }

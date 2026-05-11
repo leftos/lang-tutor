@@ -15,7 +15,15 @@
  *    the running indicator.
  */
 
-import { getStatus, type ProjectLogEntry, type ProjectStatus, startProject, stopProject, subscribeProjectLogs } from './projectApi';
+import {
+  captureProjectScreenshot,
+  getStatus,
+  type ProjectLogEntry,
+  type ProjectStatus,
+  startProject,
+  stopProject,
+  subscribeProjectLogs,
+} from './projectApi';
 import type { ProjectLanguage, WebProjectRuntime } from './types';
 
 const MAX_LOG_LINES = 1000;
@@ -80,6 +88,11 @@ export interface ProjectPreviewOptions {
   runLabelEl: HTMLElement;
   reloadBtn: HTMLButtonElement;
   externalBtn: HTMLButtonElement;
+  screenshotBtn: HTMLButtonElement;
+  /** Called when the screenshot button captures a fresh image. */
+  onScreenshot?: (pair: ScreenshotPair) => void;
+  /** Called when a manual screenshot capture fails so the UI can surface a message. */
+  onScreenshotError?: (reason: string) => void;
   /**
    * Click handler for parsed `<file>(<line>,<col>):` prefixes in the desktop
    * Build-errors tab. Receives a path *relative to the project root* and the
@@ -103,11 +116,26 @@ export interface DomSnapshot {
   hmrOverlay: string | null;
 }
 
+export interface ScreenshotPair {
+  /** PNG dataURL clamped to 1568 px long edge — sent to Claude. */
+  full: string;
+  /** PNG dataURL clamped to 256 px long edge — persisted in history. */
+  thumb: string;
+}
+
 export interface ProjectPreview {
   destroy(): void;
   isRunning(): boolean;
   /** Ask the iframe for its current DOM and recent console output. Returns null if not running or on timeout. */
   requestSnapshot(): Promise<DomSnapshot | null>;
+  /**
+   * Capture a PNG of the running app:
+   *  - web-vite: via postMessage to the iframe (html-to-image rasterisation).
+   *  - desktop-process: via POST /proj/screenshot (WGC helper exe).
+   * Returns null when not running, on timeout, or on capture failure (caller
+   * decides how to surface — auto-Evaluate falls back to text-only).
+   */
+  requestScreenshot(): Promise<ScreenshotPair | null>;
 }
 
 function div(...classes: string[]): HTMLDivElement {
@@ -272,6 +300,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
       setRunButton('Stop', 'stop');
       opts.reloadBtn.disabled = false;
       opts.externalBtn.disabled = false;
+      opts.screenshotBtn.disabled = false;
     } else {
       // About:blank rather than empty src so the previous page doesn't linger.
       iframe.src = 'about:blank';
@@ -287,6 +316,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
       }
       opts.reloadBtn.disabled = true;
       opts.externalBtn.disabled = true;
+      opts.screenshotBtn.disabled = true;
     }
     setPreviewEmptyMessage();
     syncBodyVisibility();
@@ -427,6 +457,24 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
     },
     { signal: ctrl.signal }
   );
+  opts.screenshotBtn.addEventListener(
+    'click',
+    async () => {
+      if (!running) return;
+      opts.screenshotBtn.disabled = true;
+      try {
+        const shot = await requestScreenshot();
+        if (shot !== null) {
+          opts.onScreenshot?.(shot);
+        } else {
+          opts.onScreenshotError?.('Screenshot capture failed or timed out.');
+        }
+      } finally {
+        opts.screenshotBtn.disabled = !running;
+      }
+    },
+    { signal: ctrl.signal }
+  );
 
   // Subscribe to logs immediately — backend buffers recent lines so we don't
   // miss anything even when a previous run already started.
@@ -510,6 +558,47 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
     });
   }
 
+  function requestScreenshot(): Promise<ScreenshotPair | null> {
+    if (!running || iframe.contentWindow === null) return Promise.resolve(null);
+    const requestId = `shot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise((resolveShot) => {
+      let settled = false;
+      const onMessage = (event: MessageEvent): void => {
+        const data = event.data as {
+          type?: string;
+          requestId?: string;
+          fullDataUrl?: string;
+          thumbDataUrl?: string;
+          error?: string;
+        };
+        if (data?.type !== 'lang-tutor:screenshot-reply') return;
+        if (data.requestId !== requestId) return;
+        settled = true;
+        window.removeEventListener('message', onMessage);
+        if (typeof data.fullDataUrl === 'string' && typeof data.thumbDataUrl === 'string') {
+          resolveShot({ full: data.fullDataUrl, thumb: data.thumbDataUrl });
+        } else {
+          if (data.error !== undefined) console.warn('[screenshot] iframe reported:', data.error);
+          resolveShot(null);
+        }
+      };
+      window.addEventListener('message', onMessage);
+      try {
+        iframe.contentWindow?.postMessage({ type: 'lang-tutor:screenshot-request', requestId }, '*');
+      } catch {
+        // fall through to timeout
+      }
+      // html-to-image walks the DOM and inlines fonts/images — give it more
+      // headroom than the DOM snapshot (1500 ms).
+      window.setTimeout(() => {
+        if (!settled) {
+          window.removeEventListener('message', onMessage);
+          resolveShot(null);
+        }
+      }, 5000);
+    });
+  }
+
   return {
     destroy(): void {
       ctrl.abort();
@@ -520,6 +609,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
       return running;
     },
     requestSnapshot,
+    requestScreenshot,
   };
 }
 
@@ -618,6 +708,9 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
   }
 
   function refreshStatusPill(): void {
+    // Always reconcile the screenshot button so it tracks build phase changes
+    // without requiring callers to remember to do it.
+    opts.screenshotBtn.disabled = !running || buildPhase !== 'ready';
     if (starting) {
       setStatusPill('starting', 'starting');
       return;
@@ -664,6 +757,10 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
       setRunButton('Run', 'run');
       pid = null;
     }
+    // Screenshot is only meaningful once the WPF window is on screen — gate it
+    // on the build phase reaching 'running' to avoid capturing an empty desktop
+    // while NuGet restores. The status-pill refresh keeps this in sync.
+    opts.screenshotBtn.disabled = !isRunning || buildPhase !== 'ready';
     refreshStatusPill();
   }
 
@@ -810,7 +907,40 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
     }
   }
 
+  async function doRequestScreenshot(): Promise<ScreenshotPair | null> {
+    if (!running) return null;
+    try {
+      const res = await captureProjectScreenshot(opts.lang.id);
+      if (res.ok && res.fullDataUrl !== undefined && res.thumbDataUrl !== undefined) {
+        return { full: res.fullDataUrl, thumb: res.thumbDataUrl };
+      }
+      if (res.error !== undefined) console.warn('[screenshot] supervisor reported:', res.error);
+      return null;
+    } catch (err) {
+      console.warn('[screenshot] /proj/screenshot failed:', err);
+      return null;
+    }
+  }
+
   opts.runBtn.addEventListener('click', () => void handleRun(), { signal: ctrl.signal });
+  opts.screenshotBtn.addEventListener(
+    'click',
+    async () => {
+      if (!running || buildPhase !== 'ready') return;
+      opts.screenshotBtn.disabled = true;
+      try {
+        const shot = await doRequestScreenshot();
+        if (shot !== null) {
+          opts.onScreenshot?.(shot);
+        } else {
+          opts.onScreenshotError?.('Screenshot capture failed — see console for details.');
+        }
+      } finally {
+        refreshStatusPill();
+      }
+    },
+    { signal: ctrl.signal }
+  );
 
   const unsubLogs = subscribeProjectLogs(langId, appendLog);
 
@@ -872,5 +1002,6 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
     requestSnapshot(): Promise<null> {
       return Promise.resolve(null);
     },
+    requestScreenshot: doRequestScreenshot,
   };
 }

@@ -1,5 +1,14 @@
 import { CLAUDE_MODEL } from './constants';
-import type { ClaudeResponse, Message, Progress, Topic } from './types';
+import type { ClaudeResponse, ContentBlock, Message, Progress, TextBlock, Topic } from './types';
+
+/** Extract the plain-text content of a message, ignoring any image blocks. */
+function messageText(m: Message): string {
+  if (typeof m.content === 'string') return m.content;
+  return m.content
+    .filter((b): b is TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n');
+}
 
 interface PostResult {
   ok: boolean;
@@ -89,15 +98,38 @@ export interface CallResult {
  */
 export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
   // Convert the final message to block form so we can attach cache_control.
-  // Earlier messages stay as plain { role, content: string } — Anthropic only
-  // needs the marker on the last block of the prefix we want cached.
+  // Earlier messages stay as-is — Anthropic only needs the marker on the last
+  // block of the prefix we want cached. The final message's content may already
+  // be a ContentBlock[] (e.g. text + image attachment); in that case we attach
+  // the marker to its last text block, leaving image blocks untouched.
   const lastIdx = msgs.length - 1;
   const messagesPayload = msgs.map((m, i) => {
     if (i !== lastIdx) return m;
-    return {
-      role: m.role,
-      content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }],
-    };
+    if (typeof m.content === 'string') {
+      return {
+        role: m.role,
+        content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }],
+      };
+    }
+    let lastTextIdx = -1;
+    for (let j = m.content.length - 1; j >= 0; j--) {
+      if (m.content[j]?.type === 'text') {
+        lastTextIdx = j;
+        break;
+      }
+    }
+    if (lastTextIdx === -1) {
+      // Image-only payload — append a 1-char text block to carry the marker.
+      return {
+        role: m.role,
+        content: [...m.content, { type: 'text', text: ' ', cache_control: { type: 'ephemeral' } }],
+      };
+    }
+    const newContent: ContentBlock[] = m.content.map((b, j) => {
+      if (j !== lastTextIdx || b.type !== 'text') return b;
+      return { ...b, cache_control: { type: 'ephemeral' } } as TextBlock;
+    });
+    return { role: m.role, content: newContent };
   });
 
   let r: Response;
@@ -198,7 +230,7 @@ export async function fetchProgressExtraction(history: Message[], topics: readon
   const topicSchema = topics.map((t) => `{"id":"${t.id}","title":"${t.title}","status":"?"}`).join(',');
   const snippet = history
     .slice(-14)
-    .map((m) => `${m.role.toUpperCase()}: ${m.content.slice(0, 280)}`)
+    .map((m) => `${m.role.toUpperCase()}: ${messageText(m).slice(0, 280)}`)
     .join('\n\n');
 
   const prompt = `Analyze this tutoring conversation and return ONLY valid JSON (no markdown, no other text) with this schema. Set each topic status to "not-started", "in-progress", or "mastered".

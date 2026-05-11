@@ -33,11 +33,22 @@ import {
   subscribeFsEvents,
 } from './projectApi';
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
-import { createProjectPreview, type ProjectPreview } from './projectPreview';
+import { createProjectPreview, type ProjectPreview, type ScreenshotPair } from './projectPreview';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { storageDelete, storageGet, storageSet } from './storage';
-import type { Language, LanguageId, Message, Progress, ProjectState, SingleBufferLanguageId, TopicStatus } from './types';
+import type {
+  ContentBlock,
+  ImageBlock,
+  Language,
+  LanguageId,
+  Message,
+  Progress,
+  ProjectState,
+  SingleBufferLanguageId,
+  TextBlock,
+  TopicStatus,
+} from './types';
 import { isSingleBufferLanguage } from './types';
 
 const THEME_KEY = 'lang-tutor:theme';
@@ -364,17 +375,86 @@ function renderProgressTab(): void {
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────
-function appendMsg(role: 'user' | 'assistant', text: string): void {
+
+/** Strip the `data:image/png;base64,` prefix if present and return raw base64. */
+function dataUrlToBase64(dataUrl: string): string {
+  const comma = dataUrl.indexOf(',');
+  return comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
+}
+
+function imageBlockFromDataUrl(dataUrl: string): ImageBlock {
+  return {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: dataUrlToBase64(dataUrl) },
+  };
+}
+
+function renderImageAttachment(block: ImageBlock): HTMLElement {
+  const a = document.createElement('a');
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.className = 'msg-attachment-link';
+  const dataUrl = `data:${block.source.media_type};base64,${block.source.data}`;
+  a.href = dataUrl;
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.alt = 'screenshot';
+  img.className = 'msg-attachment';
+  a.appendChild(img);
+  return a;
+}
+
+function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[]): void {
   const msgList = el('msgList');
   const bl = div('msg-block');
   const lbl = div('msg-label');
   lbl.textContent = role === 'user' ? 'you' : 'tutor';
   const body = div(role === 'user' ? 'msg-you' : 'msg-ai');
-  body.appendChild(role === 'user' ? renderPlainWithFences(text) : renderMarkdown(text));
+  if (typeof content === 'string') {
+    body.appendChild(role === 'user' ? renderPlainWithFences(content) : renderMarkdown(content));
+  } else {
+    for (const blk of content) {
+      if (blk.type === 'text') {
+        body.appendChild(role === 'user' ? renderPlainWithFences(blk.text) : renderMarkdown(blk.text));
+      } else {
+        body.appendChild(renderImageAttachment(blk));
+      }
+    }
+  }
   bl.appendChild(lbl);
   bl.appendChild(body);
   msgList.appendChild(bl);
   msgList.scrollTop = msgList.scrollHeight;
+}
+
+// ── Chat attachment chip (single-slot, replace-not-stack) ─────────────────
+let pendingAttachment: ScreenshotPair | null = null;
+
+function setChatAttachment(pair: ScreenshotPair | null): void {
+  pendingAttachment = pair;
+  const slot = el('chatAttachment');
+  slot.textContent = '';
+  if (pair === null) {
+    slot.style.display = 'none';
+    return;
+  }
+  slot.style.display = 'flex';
+  const chip = div('chat-attachment-chip');
+  const img = document.createElement('img');
+  img.src = pair.thumb;
+  img.alt = 'screenshot attachment';
+  img.className = 'chat-attachment-thumb';
+  const meta = span('Screenshot attached to next message', 'chat-attachment-label');
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'chat-attachment-close';
+  closeBtn.setAttribute('aria-label', 'Remove attachment');
+  closeBtn.textContent = '×';
+  closeBtn.addEventListener('click', () => setChatAttachment(null));
+  chip.appendChild(img);
+  chip.appendChild(meta);
+  chip.appendChild(closeBtn);
+  slot.appendChild(chip);
 }
 
 let thinkingEl: HTMLElement | null = null;
@@ -817,6 +897,11 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
     runLabelEl: el('projRunLabel'),
     reloadBtn: el<HTMLButtonElement>('projReloadBtn'),
     externalBtn: el<HTMLButtonElement>('projOpenExternalBtn'),
+    screenshotBtn: el<HTMLButtonElement>('projScreenshotBtn'),
+    onScreenshot: (pair) => setChatAttachment(pair),
+    onScreenshotError: (reason) => {
+      console.warn('[screenshot]', reason);
+    },
     onJumpTo: (path, line, col) => {
       void projectEditorInstance?.revealAt(path, line, col);
       projectFileTree?.expandPath(path);
@@ -1060,9 +1145,14 @@ async function extractProgress(): Promise<void> {
 }
 
 // ── Session control ───────────────────────────────────────────────────────
-async function streamReply(): Promise<{ ok: boolean; text: string }> {
+//
+// `lastMessageOverride` lets the caller swap out the persisted final message
+// with a heavier one for the API call only — used for screenshots so history
+// keeps the 256 px thumbnail but Claude sees the 1568 px full-res frame.
+async function streamReply(lastMessageOverride?: Message): Promise<{ ok: boolean; text: string }> {
+  const msgsForApi = lastMessageOverride !== undefined ? [...history.slice(0, -1), lastMessageOverride] : history;
   const state = { bubble: null as StreamingBubble | null };
-  const result = await callClaude(history, currentSystemPrompt, (chunk) => {
+  const result = await callClaude(msgsForApi, currentSystemPrompt, (chunk) => {
     if (state.bubble === null) {
       removeThinking();
       state.bubble = appendMsgStreaming();
@@ -1079,15 +1169,15 @@ async function streamReply(): Promise<{ ok: boolean; text: string }> {
   if (result.ok) {
     appendMsg('assistant', result.text);
   } else {
-    appendErrorMsg(result.text, () => void deliverReply());
+    appendErrorMsg(result.text, () => void deliverReply(lastMessageOverride));
   }
   return result;
 }
 
-async function deliverReply(): Promise<void> {
+async function deliverReply(lastMessageOverride?: Message): Promise<void> {
   setSendingState(true);
   showThinking();
-  const result = await streamReply();
+  const result = await streamReply(lastMessageOverride);
   if (result.ok) {
     history.push({ role: 'assistant', content: result.text });
     storageSet(historyKey(activeLang), history.slice(-MAX_HISTORY));
@@ -1108,18 +1198,48 @@ async function startSession(): Promise<void> {
   await deliverReply();
 }
 
-async function sendMessage(text: string): Promise<void> {
+/**
+ * Send a chat or evaluate message to the tutor.
+ *
+ * `attachment` semantics:
+ *  - `undefined` (param omitted)   → consume `pendingAttachment` (the chip
+ *                                    set via the manual screenshot button)
+ *                                    and clear it after pushing to history.
+ *  - explicit `ScreenshotPair`     → use this pair *without* touching the
+ *                                    chip — used by `evaluateProjectCode`
+ *                                    when it auto-captures fresh.
+ *  - explicit `null`               → force text-only, ignoring any chip.
+ *
+ * History keeps the 256 px thumbnail; the API gets the 1568 px full image via
+ * `deliverReply`'s `lastMessageOverride`.
+ */
+async function sendMessage(text: string, attachment?: ScreenshotPair | null): Promise<void> {
   if (!text.trim() || isSending) return;
   el<HTMLTextAreaElement>('chatInput').value = '';
+
+  const consumePending = attachment === undefined;
+  const att = consumePending ? pendingAttachment : attachment;
 
   if (history.at(-1)?.role === 'user') {
     history.pop();
     discardPendingFailure();
   }
 
-  history.push({ role: 'user', content: text });
-  appendMsg('user', text);
-  await deliverReply();
+  let storedContent: string | ContentBlock[];
+  let apiOverride: Message | undefined;
+  if (att !== null && att !== undefined) {
+    const textBlock: TextBlock = { type: 'text', text };
+    storedContent = [textBlock, imageBlockFromDataUrl(att.thumb)];
+    apiOverride = { role: 'user', content: [textBlock, imageBlockFromDataUrl(att.full)] };
+  } else {
+    storedContent = text;
+  }
+
+  history.push({ role: 'user', content: storedContent });
+  appendMsg('user', storedContent);
+  if (consumePending && pendingAttachment !== null) setChatAttachment(null);
+
+  await deliverReply(apiOverride);
 }
 
 // ── Code panel ────────────────────────────────────────────────────────────
@@ -1350,8 +1470,15 @@ async function evaluateProjectCode(): Promise<void> {
   // projects skip it — there is no rendered page to capture.
   const snapshotPromise = isWeb && preview?.isRunning() ? preview.requestSnapshot() : Promise.resolve(null);
   const logsPromise = fetchRecentLogs(langWhenStarted, 60).catch(() => ({ lines: [] as { stream: string; line: string; ts: number }[] }));
+  // Auto-capture a screenshot in parallel with the other prep. Either runtime
+  // (web-vite or desktop-process) can supply one through requestScreenshot().
+  // Hard-cap at 6 s so a stuck capture never blocks the evaluate forever.
+  const screenshotPromise: Promise<ScreenshotPair | null> =
+    preview?.isRunning() === true
+      ? Promise.race([preview.requestScreenshot(), new Promise<null>((res) => window.setTimeout(() => res(null), 6000))])
+      : Promise.resolve(null);
 
-  const [snapshot, logs] = await Promise.all([snapshotPromise, logsPromise]);
+  const [snapshot, logs, screenshot] = await Promise.all([snapshotPromise, logsPromise, screenshotPromise]);
   if (langWhenStarted !== activeLang) return;
 
   const blocks: string[] = [];
@@ -1409,7 +1536,14 @@ async function evaluateProjectCode(): Promise<void> {
   const projectLspBlock = await buildProjectLspBlock();
   if (projectLspBlock !== null) blocks.push(projectLspBlock);
 
-  await sendMessage(blocks.join('\n\n'));
+  // [SCREENSHOT] note — added only when capture was attempted but failed so
+  // the tutor can either ask for a manual share or proceed without visual.
+  // On success the image rides as an Anthropic content block (see sendMessage).
+  if (preview?.isRunning() === true && screenshot === null) {
+    blocks.push('[SCREENSHOT]\n(capture failed or timed out — proceed with the text payload, or ask the student to share a screenshot manually)');
+  }
+
+  await sendMessage(blocks.join('\n\n'), screenshot);
   void extractProgress();
 }
 

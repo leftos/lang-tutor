@@ -16,6 +16,7 @@
  *   POST /proj/start          { lang }                    → { ok, vitePort, ready }
  *   POST /proj/stop           { lang }                    → { ok }
  *   POST /proj/reset          { lang }                    → { root, created } (stop + wipe folder + rescaffold)
+ *   POST /proj/screenshot     { lang }                    → { ok, fullDataUrl?, thumbDataUrl?, error? } (desktop only)
  *   POST /proj/open           { lang, target }            → { ok, error? }   target = vscode|vs|explorer
  *   GET  /proj/open/targets                               → { vscode, vs, explorer }   bool availability
  *   GET  /proj/status?lang=…                              → { running, ready, … }
@@ -23,6 +24,7 @@
  */
 
 import {
+  captureProjectScreenshot,
   deleteFile,
   ensureScaffold,
   getOpenAvailability,
@@ -272,6 +274,20 @@ function handleFsWatchStream(query, req, res) {
   });
 }
 
+async function handleProjScreenshot(req, res) {
+  const body = await readJsonBody(req);
+  if (!body.lang) {
+    sendJson(res, 400, { error: 'missing lang' });
+    return;
+  }
+  try {
+    const result = await captureProjectScreenshot(body.lang);
+    sendJson(res, result.ok ? 200 : 500, result);
+  } catch (e) {
+    sendJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+}
+
 async function handleProjOpen(req, res) {
   const body = await readJsonBody(req);
   if (!body.lang) {
@@ -297,6 +313,7 @@ async function handleProj(method, urlPath, req, res) {
   if (method === 'POST' && urlPath === '/proj/stop') return handleProjStop(req, res);
   if (method === 'POST' && urlPath === '/proj/scaffold') return handleProjScaffold(query, res);
   if (method === 'POST' && urlPath === '/proj/reset') return handleProjReset(req, res);
+  if (method === 'POST' && urlPath === '/proj/screenshot') return handleProjScreenshot(req, res);
   if (method === 'POST' && urlPath === '/proj/open') return handleProjOpen(req, res);
   if (method === 'GET' && urlPath === '/proj/open/targets') return handleProjOpenTargets(res);
   if (method === 'GET' && urlPath === '/proj/status') return handleProjStatus(query, res);

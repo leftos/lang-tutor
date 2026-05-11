@@ -174,6 +174,18 @@ export async function openProjectExternal(lang: LanguageId, target: OpenTarget):
   return postJson('/proj/open', { lang, target });
 }
 
+export interface ScreenshotResponse {
+  readonly ok: boolean;
+  readonly fullDataUrl?: string;
+  readonly thumbDataUrl?: string;
+  readonly error?: string;
+}
+
+/** Capture the running desktop process's main window (WPF helper exe). */
+export async function captureProjectScreenshot(lang: LanguageId): Promise<ScreenshotResponse> {
+  return postJson('/proj/screenshot', { lang });
+}
+
 /**
  * Open an SSE connection to /proj/logs?lang=… and call onEntry for each log line.
  * The server sends recent buffered logs first, then live log lines as they arrive.

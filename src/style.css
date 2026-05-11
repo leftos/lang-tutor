@@ -716,6 +716,59 @@
   }
 }
 
+/* ─── Chat attachment chip (single-slot above input) ─────── */
+.chat-attachment {
+  display: flex;
+  padding: 8px 24px 0;
+  flex-shrink: 0;
+}
+.chat-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 6px;
+  background: var(--paper-2);
+  border: 1px solid var(--rule-2);
+  border-radius: 4px;
+}
+.chat-attachment-thumb {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 2px;
+}
+.chat-attachment-label {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+.chat-attachment-close {
+  background: transparent;
+  border: none;
+  color: var(--ink-mute);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+.chat-attachment-close:hover {
+  background: var(--rule);
+  color: var(--ink);
+}
+
+/* ─── Inline screenshot attachment inside a chat bubble ───── */
+.msg-attachment-link {
+  display: block;
+  margin-top: 6px;
+}
+.msg-attachment {
+  display: block;
+  max-width: 256px;
+  border-radius: 6px;
+  border: 1px solid var(--rule-2);
+}
+
 /* ─── Chat input ─────────────────────────────────────────── */
 .input-row {
   display: flex;

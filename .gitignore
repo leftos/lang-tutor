@@ -4,6 +4,14 @@ node_modules/
 # Build output
 dist/
 
+# .NET build artifacts (wgc-capture and any future C# tools)
+tools/*/bin/
+tools/*/obj/
+
+# Generated static assets — rebuilt by scripts/copy-html-to-image.mjs on
+# postinstall / predev / prebuild from node_modules/html-to-image.
+public/lang-tutor-assets/
+
 # Web-course workspace (created on demand, owned by the dev/prod server)
 projects/
 

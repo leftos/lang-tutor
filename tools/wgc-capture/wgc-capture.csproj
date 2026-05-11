@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!--
+      The Windows SDK platform version is parameterised so the lang-tutor
+      supervisor can pass whatever's installed on the student's machine.
+      The supervisor probes C:\Program Files (x86)\Windows Kits\10\Platforms\UAP\
+      at build time and passes the highest available version as
+      -p:WgcWindowsSdkVersion=10.0.X.X. WGC itself only requires Windows 10
+      build 19041 (May 2020 Update); the SDK version here gates which TFM
+      MSBuild can resolve, not the runtime floor.
+    -->
+    <WgcWindowsSdkVersion Condition="'$(WgcWindowsSdkVersion)' == ''">10.0.22621.0</WgcWindowsSdkVersion>
+    <TargetFramework>net8.0-windows$(WgcWindowsSdkVersion)</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWPF>false</UseWPF>
+    <UseWindowsForms>false</UseWindowsForms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <AssemblyName>wgc-capture</AssemblyName>
+    <RootNamespace>WgcCapture</RootNamespace>
+    <LangVersion>12</LangVersion>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <!-- CsWinRT 2.x ships the WinRT projection glue for .NET 8. The Windows TFM
+       already provides the Windows.* type metadata; CsWinRT wires up the
+       IWinRTObject/As<T> extensions and the COM interop helpers we need
+       (e.g. IGraphicsCaptureItemInterop). -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.CsWinRT" Version="2.2.0" />
+  </ItemGroup>
+
+</Project>

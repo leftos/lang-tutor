@@ -82,6 +82,7 @@
 
       <div id="chatView" class="chat-view">
         <div id="msgList" class="msg-list"></div>
+        <div id="chatAttachment" class="chat-attachment" style="display:none"></div>
         <div id="inputRow" class="input-row" style="display:none">
           <textarea id="chatInput" class="chat-input" placeholder="Ask the tutor… &nbsp;(↵ to send · ⇧↵ for newline)"></textarea>
           <button type="button" id="sendBtn" class="send-btn" aria-label="Send">
@@ -143,6 +144,9 @@
               </button>
               <button type="button" id="projOpenExternalBtn" class="proj-preview-icon-btn" title="Open preview in new tab" disabled>
                 <i class="ti ti-external-link" aria-hidden="true"></i>
+              </button>
+              <button type="button" id="projScreenshotBtn" class="proj-preview-icon-btn" title="Capture a screenshot and attach it to your next chat message" disabled>
+                <i class="ti ti-camera" aria-hidden="true"></i>
               </button>
               <button type="button" id="projEvalBtn" class="proj-preview-eval-btn" title="Send open files + rendered page + console + server logs to the tutor">
                 <span>Send to tutor</span>
