@@ -131,6 +131,22 @@
       -->
       <div class="project-workspace" id="projectWorkspace" style="display:none">
         <section class="proj-editor-pane">
+          <div class="proj-toolbar">
+            <span class="file-label">project</span>
+            <span class="file-spec">workspace</span>
+            <div class="toolbar-spacer"></div>
+            <button type="button" id="projConsoleRunBtn" class="ghost-btn icon-btn" title="Run the active C# file as a console snippet" disabled>
+              <i class="ti ti-terminal-2" aria-hidden="true"></i>
+            </button>
+            <button type="button" id="projEvalBtn" class="ghost-btn" title="Send open files + rendered page + console + server logs to the tutor">
+              <span>Send to tutor</span>
+              <i class="ti ti-arrow-narrow-right" aria-hidden="true"></i>
+            </button>
+            <button type="button" id="projRunBtn" class="primary-btn">
+              <i class="ti ti-player-play-filled" aria-hidden="true"></i>
+              <span id="projRunLabel">Run</span>
+            </button>
+          </div>
           <div class="proj-tabs" id="projTabs" role="tablist"></div>
           <div class="proj-editor" id="projEditor"></div>
           <div class="proj-status" id="projStatus"></div>
@@ -147,14 +163,6 @@
               </button>
               <button type="button" id="projScreenshotBtn" class="proj-preview-icon-btn" title="Capture a screenshot and attach it to your next chat message" disabled>
                 <i class="ti ti-camera" aria-hidden="true"></i>
-              </button>
-              <button type="button" id="projEvalBtn" class="proj-preview-eval-btn" title="Send open files + rendered page + console + server logs to the tutor">
-                <span>Send to tutor</span>
-                <i class="ti ti-arrow-narrow-right" aria-hidden="true"></i>
-              </button>
-              <button type="button" id="projRunBtn" class="proj-preview-run-btn">
-                <i class="ti ti-player-play-filled" aria-hidden="true"></i>
-                <span id="projRunLabel">Run</span>
               </button>
             </div>
             <div class="proj-preview-body" id="projPreviewBody"></div>

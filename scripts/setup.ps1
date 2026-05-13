@@ -10,6 +10,8 @@
   Tools installed if missing:
     Node 20 LTS  (OpenJS.NodeJS.LTS)
     pnpm         (pnpm.pnpm)
+    Docker       (Docker.DockerDesktop) — local sandbox runner
+    .NET 8 SDK   (Microsoft.DotNet.SDK.8) — C# / WPF project runner
     Rust         (Rustlang.Rustup) — gives rustc, cargo, rustfmt
     Python 3.13  (Python.Python.3.13)
     LLVM         (LLVM.LLVM) — gives clang, clang-format, clangd
@@ -65,6 +67,30 @@ function Refresh-Path {
 function Test-Tool {
     param([string]$Name)
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Test-DockerReady {
+    if (-not (Test-Tool 'docker')) {
+        return $false
+    }
+    & docker info *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Test-DotnetSdkAtLeast {
+    param([int]$Major)
+    if (-not (Test-Tool 'dotnet')) {
+        return $false
+    }
+    $sdks = & dotnet --list-sdks 2>$null
+    foreach ($sdk in $sdks) {
+        if ($sdk -match '^(\d+)\.') {
+            if ([int]$Matches[1] -ge $Major) {
+                return $true
+            }
+        }
+    }
+    return $false
 }
 
 function Find-LlvmBin {
@@ -191,6 +217,33 @@ if (-not $SkipInstall) {
         Install-WingetPackage -Id 'pnpm.pnpm' -DisplayName 'pnpm'
     }
     Write-Ok "pnpm $((& pnpm --version))"
+
+    Write-Step "Docker Desktop (local sandbox)"
+    if (Test-Tool 'docker') {
+        Write-Skip "$((& docker --version)) already installed"
+    } else {
+        Install-WingetPackage -Id 'Docker.DockerDesktop' -DisplayName 'Docker Desktop'
+    }
+    if (Test-Tool 'docker') {
+        Write-Ok "$((& docker --version))"
+    } else {
+        Write-Warn-Local "docker still not on PATH — local code Run will be disabled until Docker Desktop is installed."
+    }
+    if (-not (Test-DockerReady)) {
+        Write-Warn-Local "Docker engine is not reachable. Start Docker Desktop after setup, then run .\lt.ps1 toolchain."
+    }
+
+    Write-Step ".NET SDK 8+ (C# / WPF project runner)"
+    if (Test-DotnetSdkAtLeast -Major 8) {
+        Write-Skip "dotnet SDK already installed: $((& dotnet --list-sdks | Select-Object -First 1))"
+    } else {
+        Install-WingetPackage -Id 'Microsoft.DotNet.SDK.8' -DisplayName '.NET SDK 8'
+    }
+    if (Test-DotnetSdkAtLeast -Major 8) {
+        Write-Ok "dotnet SDK available: $((& dotnet --list-sdks | Select-Object -First 1))"
+    } else {
+        Write-Warn-Local "dotnet SDK 8+ still not on PATH — C# WPF Run will be disabled until the SDK is installed."
+    }
 
     Write-Step "Rust (rustc + cargo + rustfmt + rust-analyzer)"
     if ((Test-Tool 'rustc') -and (Test-Tool 'rustfmt') -and (Test-Tool 'rust-analyzer')) {
@@ -365,6 +418,17 @@ try {
     Pop-Location
 }
 Write-Ok "dependencies installed"
+
+# ── Phase 2.5: local sandbox image ─────────────────────────────────────────
+Write-Step "Building local sandbox image"
+$toolchainScript = Join-Path $repoRoot 'scripts\build-toolchain-image.ps1'
+if (Test-DockerReady) {
+    & $toolchainScript | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "toolchain image build failed (exit $LASTEXITCODE)" }
+} else {
+    Write-Warn-Local "Skipping image build because Docker Desktop is not running."
+    Write-Warn-Local "Start Docker Desktop, then run .\lt.ps1 toolchain before using Run for Rust/C++/Python or C# console snippets."
+}
 
 # ── Phase 3: .env check ─────────────────────────────────────────────────────
 Write-Step "Checking .env"

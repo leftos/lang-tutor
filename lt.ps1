@@ -18,6 +18,7 @@
       typecheck  Run tsc --noEmit.
       lint       Run biome check --write .
       format     Run biome format --write .
+      toolchain  Build the local Docker sandbox image for Rust/C++/Python/C# snippets.
       install    Run pnpm install.
       setup      Run scripts/setup.ps1.
       clean      Remove generated build output.
@@ -39,6 +40,7 @@
     .\lt.ps1 serve
     .\lt.ps1 preview --port 4173
     .\lt.ps1 typecheck
+    .\lt.ps1 toolchain
     .\lt.ps1 lint
     .\lt.ps1 setup -NoBrowser
 #>
@@ -49,7 +51,7 @@
     Justification = 'Top-level params consumed by subcommands via script scope.')]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('', 'dev', 'serve', 'build', 'preview', 'typecheck', 'lint', 'format', 'install', 'setup', 'clean', 'help')]
+    [ValidateSet('', 'dev', 'serve', 'build', 'preview', 'typecheck', 'lint', 'format', 'toolchain', 'install', 'setup', 'clean', 'help')]
     [string]$Command = '',
 
     [switch]$NoBrowser,
@@ -68,6 +70,7 @@ $ServerPath = Join-Path $ScriptDir 'server.mjs'
 $EnvFile = Join-Path $ScriptDir '.env'
 $AssetScript = Join-Path $ScriptDir 'scripts\copy-html-to-image.mjs'
 $SetupScript = Join-Path $ScriptDir 'scripts\setup.ps1'
+$ToolchainScript = Join-Path $ScriptDir 'scripts\build-toolchain-image.ps1'
 
 function Test-Tool {
     param([string]$Name, [string]$InstallHint)
@@ -212,6 +215,16 @@ function Invoke-Format {
     }
 }
 
+function Invoke-Toolchain {
+    Assert-File $ToolchainScript 'scripts\build-toolchain-image.ps1 is missing.'
+    if ($Rest.Count -gt 0) {
+        & $ToolchainScript @Rest
+    } else {
+        & $ToolchainScript
+    }
+    Test-ExitOk 'toolchain image build'
+}
+
 function Invoke-Install {
     Assert-Pnpm
     Push-Location $ScriptDir
@@ -272,6 +285,7 @@ Commands:
   typecheck  Run tsc --noEmit.
   lint       Run biome check --write .
   format     Run biome format --write .
+  toolchain  Build the local Docker sandbox image for Rust/C++/Python/C# snippets.
   install    Run pnpm install.
   setup      Run scripts/setup.ps1.
   clean      Remove dist/ and generated public/lang-tutor-assets/.
@@ -284,6 +298,7 @@ Examples:
   .\lt.ps1 serve
   .\lt.ps1 preview --port 4173
   .\lt.ps1 typecheck
+  .\lt.ps1 toolchain
   .\lt.ps1 lint
   .\lt.ps1 setup -NoBrowser
 '@
@@ -300,6 +315,7 @@ switch ($effective) {
     'typecheck' { Invoke-Typecheck }
     'lint'      { Invoke-Lint }
     'format'    { Invoke-Format }
+    'toolchain' { Invoke-Toolchain }
     'install'   { Invoke-Install }
     'setup'     { Invoke-Setup }
     'clean'     { Invoke-Clean }

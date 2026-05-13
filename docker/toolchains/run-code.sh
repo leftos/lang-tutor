@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+lang="${1:-}"
+run_dir="/tmp/run"
+mkdir -p "$run_dir"
+
+case "$lang" in
+  cpp)
+    if [[ ! -f main.cpp ]]; then
+      echo "main.cpp not found in sandbox workspace" >&2
+      exit 64
+    fi
+    cp /workspace/main.cpp "$run_dir/main.cpp"
+    cd "$run_dir"
+    clang++ -std=c++23 -Wall -Wextra -pedantic -O0 -g main.cpp -o /tmp/main 2>&1
+    /tmp/main 2>&1
+    ;;
+  rust)
+    if [[ ! -f main.rs ]]; then
+      echo "main.rs not found in sandbox workspace" >&2
+      exit 64
+    fi
+    cp /workspace/main.rs "$run_dir/main.rs"
+    cd "$run_dir"
+    rustc --edition=2021 main.rs -o /tmp/main 2>&1
+    /tmp/main 2>&1
+    ;;
+  python)
+    if [[ ! -f main.py ]]; then
+      echo "main.py not found in sandbox workspace" >&2
+      exit 64
+    fi
+    cp /workspace/main.py "$run_dir/main.py"
+    cd "$run_dir"
+    python3 main.py 2>&1
+    ;;
+  csharp)
+    if [[ ! -f main.cs ]]; then
+      echo "main.cs not found in sandbox workspace" >&2
+      exit 64
+    fi
+    export DOTNET_CLI_HOME=/tmp/dotnet-home
+    export HOME=/tmp/home
+    export NUGET_PACKAGES=/tmp/nuget-packages
+    cp /workspace/main.cs "$run_dir/main.cs"
+    cd "$run_dir"
+    mkdir -p "$DOTNET_CLI_HOME" "$HOME" "$NUGET_PACKAGES" app
+    cat > app/app.csproj <<'EOF'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+EOF
+    cp main.cs app/Program.cs
+    set +e
+    dotnet_output="$(dotnet run --project app/app.csproj --configuration Release --verbosity quiet 2>&1)"
+    dotnet_status=$?
+    set -e
+    printf '%s\n' "$dotnet_output" | sed '/^An issue was encountered verifying workloads\. For more information, run "dotnet workload update"\.$/d'
+    exit "$dotnet_status"
+    ;;
+  *)
+    echo "unknown language: $lang" >&2
+    exit 64
+    ;;
+esac

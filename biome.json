@@ -30,6 +30,17 @@
     }
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!**/.tmp"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/bin",
+      "!**/obj",
+      "!**/.tmp",
+      "!**/projects",
+      "!**/public/lang-tutor-assets",
+      "!**/.claude",
+      "!**/.mcp.json"
+    ]
   }
 }

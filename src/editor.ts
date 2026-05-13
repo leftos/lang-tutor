@@ -200,7 +200,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
 
   const formatNow = async (): Promise<void> => {
     // Prefer the LSP formatter (clangd, rust-analyzer, etc.) when available.
-    if (lspClient !== null && lspClient.isOpen()) {
+    if (lspClient?.isOpen()) {
       const edits = await lspClient.formatting();
       if (applyLspTextEdits(edits)) return;
     }
@@ -335,7 +335,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
       // Sync to LSP so diagnostics reflect the new doc immediately (e.g., when
       // resetting starter code or pasting).
-      if (lspClient !== null && lspClient.isOpen()) {
+      if (lspClient?.isOpen()) {
         lspClient.didChange(text);
       }
     },

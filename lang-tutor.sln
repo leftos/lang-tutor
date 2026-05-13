@@ -1,0 +1,38 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "projects", "projects", "{17245595-230B-9055-A944-863F0DDDA8E8}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "csharp", "projects\csharp\csharp.csproj", "{EB12AB1C-089A-A3F8-9DE5-BE9F6B49A023}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "wgc-capture", "tools\wgc-capture\wgc-capture.csproj", "{F3BF1B39-C895-9CCE-DE9E-064346D450F4}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EB12AB1C-089A-A3F8-9DE5-BE9F6B49A023}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB12AB1C-089A-A3F8-9DE5-BE9F6B49A023}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB12AB1C-089A-A3F8-9DE5-BE9F6B49A023}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB12AB1C-089A-A3F8-9DE5-BE9F6B49A023}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F3BF1B39-C895-9CCE-DE9E-064346D450F4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F3BF1B39-C895-9CCE-DE9E-064346D450F4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F3BF1B39-C895-9CCE-DE9E-064346D450F4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F3BF1B39-C895-9CCE-DE9E-064346D450F4}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EB12AB1C-089A-A3F8-9DE5-BE9F6B49A023} = {17245595-230B-9055-A944-863F0DDDA8E8}
+		{F3BF1B39-C895-9CCE-DE9E-064346D450F4} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {AFB19F5A-9590-4724-AFAA-F67AF7DD5F5C}
+	EndGlobalSection
+EndGlobal

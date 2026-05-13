@@ -19,18 +19,18 @@ After setup, use `.\lt.ps1 dev` as the root dev-server entrypoint.
 
 Two workspace shapes:
 
-- **Single-buffer** (Rust / C++ / Python): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted via a remote sandbox or in-browser runtime.
-- **Project workspace** (C# / Web): on-disk project under `projects/<lang>/` with a sidebar file tree, multi-tab editor, integrated supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Edits autosave; the supervisor streams stdout/stderr into the Output tab.
+- **Single-buffer** (Rust / C++ / Python): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted in a local Docker sandbox.
+- **Project workspace** (C# / Web): on-disk project under `projects/<lang>/` with a sidebar file tree, multi-tab editor, Run / Send controls above the code, integrated supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Edits autosave; the supervisor streams stdout/stderr into the Output tab.
 
 | Language | Workspace | Lesson focus | Run target | Live errors | Format on save |
 |----------|-----------|--------------|------------|-------------|----------------|
-| **Rust** | single-buffer | Beginner-to-intermediate fundamentals | [Rust Playground](https://play.rust-lang.org) | local `rustc` | local `rustfmt` |
-| **C++** | single-buffer | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | [Wandbox](https://wandbox.org) (`gcc-head`, `c++23`) | local `clang -fsyntax-only` | local `clang-format` |
-| **Python** | single-buffer | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | [Pyodide](https://pyodide.org) — in-browser WebAssembly | local `python ast.parse` | local `black` |
-| **C#** | project workspace | Modern C# 12 → WPF fundamentals → MVVM patterns | local `dotnet run` (real WPF window opens on the desktop) | dotnet build (streamed into the Build errors tab) | — |
+| **Rust** | single-buffer | Beginner-to-intermediate fundamentals | local Docker sandbox (`rustc`) | local `rustc` | local `rustfmt` |
+| **C++** | single-buffer | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | local Docker sandbox (`clang++ -std=c++23`) | local `clang -fsyntax-only` | local `clang-format` |
+| **Python** | single-buffer | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | local Docker sandbox (`python3`) | local `python ast.parse` | local `black` |
+| **C#** | project workspace | Modern C# 12 → WPF fundamentals → MVVM patterns | local `dotnet run` for the WPF project, plus console snippets in Docker | dotnet build (streamed into the Build errors tab) | — |
 | **Web** | project workspace | Vanilla HTML/CSS/JS → TS → React → Hono → SQLite | local `pnpm dev` Vite server, iframe preview at `:5180` | TS compile via Vite | — |
 
-Live error checking and format-on-save are optional for the single-buffer languages — if a toolchain isn't installed, those features silently fall back. The `scripts/setup.ps1` quickstart installs everything for you.
+Live error checking and format-on-save are optional for the single-buffer languages — if a host toolchain isn't installed, those features silently fall back. The Run button uses the local `lang-tutor-toolchains:latest` Docker image built by setup.
 
 The C# workspace requires the .NET 8+ SDK on PATH (the supervisor preflights and prints an install hint if it's missing or the project's `<TargetFramework>` is newer than any installed SDK). The Web workspace requires `pnpm` on PATH.
 
@@ -40,16 +40,22 @@ Reset wipes the active language's progress + chat history. For project workspace
 
 The lesson plan for each language is in `src/constants.ts`. Edit it freely.
 
+Progress, chat history, editor buffers, and UI state are mirrored to
+`.local/state/local-storage.json` through the local backend. Browser
+`localStorage` is still used as a cache, but the repo-local file is what keeps
+state available when you switch between `localhost`, `127.0.0.1`, LAN IPs, or
+different Vite ports.
+
 ## Stack
 
 - **TypeScript** (strict, including `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`)
 - **CodeMirror 6** for the editor (syntax highlighting, autocomplete, search, lint, fold gutter, multi-cursor)
 - **Vite 7** for dev server, HMR, and production builds
 - **Tailwind CSS 4** via the `@tailwindcss/vite` plugin (config-in-CSS)
-- **Pyodide** for in-browser Python (lazy-loaded from CDN on first run)
+- **Docker Desktop** for local sandboxed Rust / C++ / Python / C# console runs
 - **Biome** for linting and formatting
 - **pnpm** for package management
-- **Node 20+** runtime for the production proxy (`server.mjs`) and for the `/check` + `/format` toolchain endpoints
+- **Node 20+** runtime for the production proxy (`server.mjs`) and for the `/run` / `/check` / `/format` toolchain endpoints
 
 Optional local toolchains (auto-detected; gracefully disabled if missing):
 `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`.
@@ -58,6 +64,7 @@ Optional local toolchains (auto-detected; gracefully disabled if missing):
 
 - **Node 20.6+** (uses `--env-file` flag)
 - **pnpm** — install with `npm install -g pnpm` if you don't have it
+- **Docker Desktop** running Linux containers for local sandboxed code execution
 - An **Anthropic API key**
 
 ## Setup
@@ -100,6 +107,7 @@ Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`
 .\lt.ps1 typecheck  # tsc --noEmit
 .\lt.ps1 lint       # biome check --write . (lint + format)
 .\lt.ps1 preview    # vite preview (preview the production build via Vite)
+.\lt.ps1 toolchain  # build lang-tutor-toolchains:latest for local code runs
 ```
 
 ## Project structure
@@ -111,21 +119,25 @@ Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`
 │   ├── editor.ts      CodeMirror 6 setup (theme, syntax highlight, lint, format-on-save)
 │   ├── lint.ts        Frontend client for /check + /format
 │   ├── api.ts         Claude API calls (chat + progress extraction, streaming)
-│   ├── runners.ts     Code execution dispatch (Rust Playground / Wandbox / Pyodide)
+│   ├── runners.ts     Code execution dispatch (/run local sandbox endpoint)
 │   ├── render.ts      Markdown rendering, message DOM construction
 │   ├── storage.ts     localStorage wrapper
 │   ├── constants.ts   LANGUAGES record (topics, prompts, starter code), storage-key helpers
 │   ├── types.ts       TypeScript interfaces
 │   └── style.css      Tailwind import + design tokens + component classes
 ├── tools/
-│   └── checker.mjs    Backend: spawns rustc/clang/python/rustfmt/clang-format/black
+│   ├── checker.mjs    Backend: spawns rustc/clang/python/rustfmt/clang-format/black
+│   └── runner.mjs     Backend: runs single-buffer code in the Docker sandbox image
 ├── scripts/
+│   ├── build-toolchain-image.ps1  Builds lang-tutor-toolchains:latest
 │   └── setup.ps1      One-shot Windows setup (installs runtimes, opens browser)
+├── docker/
+│   └── toolchains/    Docker image with Clang/LLVM, Rust, Python, .NET, formatters, and LSPs
 ├── index.html         Vite entry HTML
 ├── vite.config.ts     Dev server proxy + Tailwind plugin + /check + /format middleware
 ├── tsconfig.json      Strict TypeScript config
 ├── biome.json         Lint + format config
-├── server.mjs         Production server (serves dist/ + /v1/messages + /check + /format)
+├── server.mjs         Production server (serves dist/ + /v1/messages + /run + /check + /format)
 ├── lt.ps1             Root helper for dev/build/serve/check workflows
 └── .env               ANTHROPIC_API_KEY (gitignored)
 ```
@@ -153,11 +165,13 @@ Both POST to the local `/v1/messages` proxy:
 
 ### Code execution
 
-- **Rust** → direct browser `fetch` to `https://play.rust-lang.org/execute`
-- **C++** → direct browser `fetch` to `https://wandbox.org/api/compile.json` (gcc-head, `-std=c++23`)
-- **Python** → Pyodide. Lazy-loaded on first Run click (~15 MB initial download from CDN, cached aggressively after). Subsequent runs are fast.
-- **C#** → local `dotnet run --verbosity minimal` supervised by `tools/projects.mjs`. The Run button starts it; status pill shows `restoring NuGet…` → `building…` → `running (PID …)` derived from dotnet's stdout. The WPF window opens on the user's desktop. Stop or close the window → status flips to `stopped` or `exited (code N)`.
+- **Rust** → browser `POST /run`, backend runs `rustc --edition=2021` inside `lang-tutor-toolchains:latest`.
+- **C++** → browser `POST /run`, backend runs `clang++ -std=c++23` inside `lang-tutor-toolchains:latest`.
+- **Python** → browser `POST /run`, backend runs `python3` inside `lang-tutor-toolchains:latest`.
+- **C#** → local `dotnet run --project LangTutor.Wpf/LangTutor.Wpf.csproj --verbosity minimal` supervised by `tools/projects.mjs`. The default scaffold is `projects/csharp/LangTutor.sln` with `LangTutor.Wpf/` for WPF/XAML work and `LangTutor.Console/Program.cs` for console exercises. The Run button starts the WPF project; status pill shows `restoring NuGet…` → `building…` → `running (PID …)` derived from dotnet's stdout. The WPF window opens on the user's desktop. Stop or close the window → status flips to `stopped` or `exited (code N)`. For non-GUI lessons, the terminal button above the editor runs the active `.cs` file as a temporary console app inside `lang-tutor-toolchains:latest`.
 - **Web** → local `pnpm dev` Vite server supervised by `tools/projects.mjs`, rendered into a sandboxed iframe at `http://127.0.0.1:5180/`.
+
+The snippet sandbox uses Docker with `--network none`, a read-only container root, dropped Linux capabilities, `no-new-privileges`, and CPU / memory / process limits. Build or refresh it with `.\lt.ps1 toolchain`.
 
 ### Evaluate flow
 
@@ -173,6 +187,5 @@ Both POST to the local `/v1/messages` proxy:
 - The `.env` file is gitignored. Never commit a real key.
 - The Anthropic model ID is in `src/constants.ts` as `CLAUDE_MODEL`.
 - Resetting progress only affects the **active** language. Switch first if you want to reset a different one.
-- Pyodide auto-loads any standard-library packages it detects in your import statements (`numpy`, `pandas`, etc.) on first use.
-- C++ compiles run on Wandbox's shared infrastructure — expect 1–3 s per run.
+- Rust, C++, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
 - The XSS-safe DOM construction means you can paste arbitrary content from the AI without risk.

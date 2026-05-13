@@ -24,6 +24,7 @@ import {
   stopProject,
   subscribeProjectLogs,
 } from './projectApi';
+import { runLocalSnippet } from './runners';
 import type { ProjectLanguage, WebProjectRuntime } from './types';
 
 const MAX_LOG_LINES = 1000;
@@ -89,6 +90,8 @@ export interface ProjectPreviewOptions {
   reloadBtn: HTMLButtonElement;
   externalBtn: HTMLButtonElement;
   screenshotBtn: HTMLButtonElement;
+  consoleRunBtn: HTMLButtonElement;
+  getConsoleSnippet?: () => { path: string; content: string; dirty: boolean } | null;
   /** Called when the screenshot button captures a fresh image. */
   onScreenshot?: (pair: ScreenshotPair) => void;
   /** Called when a manual screenshot capture fails so the UI can surface a message. */
@@ -201,6 +204,8 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   // before exiting); 'crashed' is inferred from the status poll seeing
   // running flip to false unexpectedly (no user-stop).
   let failureKind: WebFailureKind = 'none';
+
+  opts.consoleRunBtn.style.display = 'none';
 
   // Tab body containers — created once, swapped via display: none.
   const iframe = document.createElement('iframe');
@@ -643,6 +648,7 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
   let pid: number | null = null;
   let lastExitCode: number | null = null;
   let phase: ProjectStatus['phase'] = 'stopped';
+  let consoleRunning = false;
   // Dedupe key per Run cycle: dotnet emits each error twice (once during
   // compile, once in the "Build FAILED" summary). Cleared in clearLogs().
   const seenErrors = new Set<string>();
@@ -665,6 +671,8 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
   // grey out so the header doesn't look like the user can fix anything.
   opts.reloadBtn.style.display = 'none';
   opts.externalBtn.style.display = 'none';
+  opts.consoleRunBtn.style.display = '';
+  opts.consoleRunBtn.disabled = false;
 
   function syncBodyVisibility(): void {
     outputPane.style.display = activeTab === 'output' ? 'block' : 'none';
@@ -804,6 +812,17 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
     if (isCsharpErrorLine(entry)) appendErrorLine(entry.line);
   }
 
+  function appendLocalLine(stream: ProjectLogEntry['stream'], line: string): void {
+    appendLog({ stream, line, ts: Date.now() });
+  }
+
+  function appendRunOutput(output: string, ok: boolean): void {
+    const lines = output.split(/\r?\n/);
+    for (const line of lines) {
+      appendLocalLine(ok ? 'stdout' : 'stderr', line);
+    }
+  }
+
   function appendErrorLine(rawLine: string): void {
     const parsed = parseCsharpErrorLine(rawLine);
     // Dedupe by path:line:col:code (or whole-line text for unparsed shapes).
@@ -907,6 +926,36 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
     }
   }
 
+  async function handleConsoleRun(): Promise<void> {
+    if (consoleRunning) return;
+    const snippet = opts.getConsoleSnippet?.() ?? null;
+    activeTab = 'output';
+    renderTabs();
+    syncBodyVisibility();
+    if (snippet === null) {
+      appendLocalLine('system', '[console] Open a .cs file, then run it as a console snippet.');
+      return;
+    }
+    if (!snippet.path.toLowerCase().endsWith('.cs')) {
+      appendLocalLine('system', `[console] ${snippet.path} is not a .cs file.`);
+      return;
+    }
+
+    consoleRunning = true;
+    opts.consoleRunBtn.disabled = true;
+    appendLocalLine('system', `[console] Running ${snippet.path} in local C# sandbox...`);
+    try {
+      const result = await runLocalSnippet('csharp', snippet.content);
+      appendRunOutput(result.output, result.ok);
+      appendLocalLine('system', result.ok ? '[console] Finished.' : '[console] Failed.');
+    } catch (e) {
+      appendLocalLine('stderr', `[console] ${(e as Error).message}`);
+    } finally {
+      consoleRunning = false;
+      opts.consoleRunBtn.disabled = false;
+    }
+  }
+
   async function doRequestScreenshot(): Promise<ScreenshotPair | null> {
     if (!running) return null;
     try {
@@ -923,6 +972,7 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
   }
 
   opts.runBtn.addEventListener('click', () => void handleRun(), { signal: ctrl.signal });
+  opts.consoleRunBtn.addEventListener('click', () => void handleConsoleRun(), { signal: ctrl.signal });
   opts.screenshotBtn.addEventListener(
     'click',
     async () => {
@@ -995,6 +1045,8 @@ function createDesktopPreview(opts: ProjectPreviewOptions): ProjectPreview {
       // back to a web-vite project — they share the same DOM nodes.
       opts.reloadBtn.style.display = '';
       opts.externalBtn.style.display = '';
+      opts.consoleRunBtn.style.display = 'none';
+      opts.consoleRunBtn.disabled = true;
     },
     isRunning(): boolean {
       return running;

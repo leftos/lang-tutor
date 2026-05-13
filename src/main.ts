@@ -36,7 +36,7 @@ import { createProjectEditor, type ProjectEditor } from './projectEditor';
 import { createProjectPreview, type ProjectPreview, type ScreenshotPair } from './projectPreview';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
-import { storageDelete, storageGet, storageSet } from './storage';
+import { hydrateStorageFromDisk, storageDelete, storageGet, storageSet } from './storage';
 import type {
   ContentBlock,
   ImageBlock,
@@ -212,9 +212,9 @@ function renderFileSpec(): void {
   const lang = getLanguage(activeLang);
   const map: Record<LanguageId, string> = {
     rust: 'edition 2021 · stable',
-    cpp: 'gcc · c++23',
-    python: 'pyodide · 3.13',
-    csharp: 'c# 12 · run in vs/rider',
+    cpp: 'clang · c++23',
+    python: 'local python · 3.13',
+    csharp: 'dotnet 8 · c# 12',
     web: `vite · http://${window.location.hostname || 'localhost'}:5180`,
   };
   spec.textContent = map[lang.id];
@@ -570,6 +570,7 @@ function setSendingState(sending: boolean): void {
   el<HTMLTextAreaElement>('chatInput').disabled = sending;
   el<HTMLButtonElement>('sendBtn').disabled = sending;
   el<HTMLButtonElement>('evalBtn').disabled = sending || history.length === 0;
+  el<HTMLButtonElement>('projEvalBtn').disabled = sending || history.length === 0;
 }
 
 // ── Start screen ──────────────────────────────────────────────────────────
@@ -628,6 +629,7 @@ function renderChatView(): void {
     el('resetBtn').style.display = 'none';
   }
   el<HTMLButtonElement>('evalBtn').disabled = isSending || history.length === 0;
+  el<HTMLButtonElement>('projEvalBtn').disabled = isSending || history.length === 0;
 }
 
 function clearOutput(): void {
@@ -645,6 +647,8 @@ function setWorkshopMode(mode: 'single' | 'project'): void {
   for (const id of SINGLE_BUFFER_IDS) {
     el(id).style.display = isProject ? 'none' : '';
   }
+  const mainToolbar = document.querySelector<HTMLElement>('.main-toolbar');
+  if (mainToolbar !== null) mainToolbar.style.display = isProject ? 'none' : 'flex';
   const eyebrow = document.querySelector<HTMLElement>('.output-eyebrow');
   if (eyebrow !== null) eyebrow.style.display = isProject ? 'none' : '';
 
@@ -898,6 +902,8 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
     reloadBtn: el<HTMLButtonElement>('projReloadBtn'),
     externalBtn: el<HTMLButtonElement>('projOpenExternalBtn'),
     screenshotBtn: el<HTMLButtonElement>('projScreenshotBtn'),
+    consoleRunBtn: el<HTMLButtonElement>('projConsoleRunBtn'),
+    getConsoleSnippet: () => projectEditorInstance?.getActiveFile() ?? null,
     onScreenshot: (pair) => setChatAttachment(pair),
     onScreenshotError: (reason) => {
       console.warn('[screenshot]', reason);
@@ -1887,6 +1893,7 @@ initProjectPreviewResize();
 initProjectTreeResize();
 
 // ── Init ──────────────────────────────────────────────────────────────────
+await hydrateStorageFromDisk();
 applyStoredTheme();
 migrateOldStorage();
 const initialLang = loadInitialActiveLang();

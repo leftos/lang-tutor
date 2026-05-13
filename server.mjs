@@ -15,9 +15,11 @@ import { dirname, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { handleStateRequest } from './tools/app-state.mjs';
 import { checkCode, formatCode } from './tools/checker.mjs';
 import { handleLspRequest, handleLspUpgrade } from './tools/lsp.mjs';
 import { handleProjectRequest } from './tools/project-routes.mjs';
+import { runSnippet } from './tools/runner.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -65,10 +67,11 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (await handleStateRequest(req, res)) return;
   if (await handleLspRequest(req, res)) return;
   if (await handleProjectRequest(req, res)) return;
 
-  if (req.method === 'POST' && (req.url === '/check' || req.url === '/format')) {
+  if (req.method === 'POST' && (req.url === '/check' || req.url === '/format' || req.url === '/run')) {
     try {
       const body = await readBody(req);
       const { lang, code } = JSON.parse(body);
@@ -77,7 +80,14 @@ const server = createServer(async (req, res) => {
         res.end(JSON.stringify({ error: 'expected { lang, code }' }));
         return;
       }
-      const result = req.url === '/check' ? await checkCode(lang, code) : await formatCode(lang, code);
+      let result;
+      if (req.url === '/check') {
+        result = await checkCode(lang, code);
+      } else if (req.url === '/format') {
+        result = await formatCode(lang, code);
+      } else {
+        result = await runSnippet(lang, code);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
     } catch (e) {

@@ -137,6 +137,8 @@ export interface ProjectEditor {
   getOpenPaths(): string[];
   /** Currently open files with their in-memory contents (includes unsaved edits). */
   getOpenFiles(): Array<{ path: string; content: string; dirty: boolean }>;
+  /** Active open file with its in-memory content, or null when no tab is active. */
+  getActiveFile(): { path: string; content: string; dirty: boolean } | null;
   /**
    * Open `path` (if not already open), focus the tab, place the cursor at
    * 1-based (line, col), and scroll it into view. Out-of-range coordinates
@@ -796,6 +798,13 @@ export function createProjectEditor(opts: ProjectEditorOptions): ProjectEditor {
           return { path, content: tab.state.doc.toString(), dirty: isDirty(tab) };
         })
         .filter((f): f is { path: string; content: string; dirty: boolean } => f !== null);
+    },
+    getActiveFile(): { path: string; content: string; dirty: boolean } | null {
+      if (active === null) return null;
+      const tab = tabs.get(active);
+      if (tab === undefined) return null;
+      tab.state = view.state;
+      return { path: active, content: tab.state.doc.toString(), dirty: isDirty(tab) };
     },
     getLspClient(): LspClient | null {
       return lspClient;

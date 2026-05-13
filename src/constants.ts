@@ -14,7 +14,7 @@ const RUST: Language = {
   fileName: 'main.rs',
   fenceLang: 'rust',
   starterCode: `fn main() {
-    println!("Hello, world!");
+  println!("Hello, world!");
 }`,
   topics: [
     { id: 'hello', title: 'Hello world & syntax' },
@@ -53,7 +53,7 @@ const CPP: Language = {
   starterCode: `#include <iostream>
 
 int main() {
-    std::cout << "Hello, world!\\n";
+  std::cout << "Hello, world!\\n";
 }`,
   topics: [
     { id: 'hello', title: 'Compilation, headers & namespaces' },
@@ -117,7 +117,7 @@ const PYTHON: Language = {
     'Format all code examples in ```python fenced blocks using Python 3.13+ syntax (use type hints, match statements, walrus operator where appropriate). ' +
     'Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria. ' +
     "The student has a 'Send to tutor' button in their code editor that auto-bundles their editor code and last run output as a [CODE]/[OUTPUT] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [CODE]/[OUTPUT] message, evaluate both the code and its output specifically. " +
-    'When the message includes an [LSP] block, those are diagnostics straight from basedpyright (a strict pyright fork) — `error`, `warning`, `info`, or `hint` lines with `file:line:col` locations and the diagnostic rule code in brackets when present (e.g. `[reportArgumentType]`, `[reportMissingImports]`). They are authoritative: lead with the specific basedpyright-reported issues (quoting the line/column and rule) before any general advice. Note that the lesson runs in Pyodide (CPython 3.13 in the browser), so genuine type errors caught at the source level often surface as `TypeError`/`AttributeError` at runtime — the [LSP] block is your chance to fix them before they ever run. If [LSP] shows no diagnostics, the code is type-clean — discuss runtime behaviour from [OUTPUT] instead.',
+    'When the message includes an [LSP] block, those are diagnostics straight from basedpyright (a strict pyright fork) — `error`, `warning`, `info`, or `hint` lines with `file:line:col` locations and the diagnostic rule code in brackets when present (e.g. `[reportArgumentType]`, `[reportMissingImports]`). They are authoritative: lead with the specific basedpyright-reported issues (quoting the line/column and rule) before any general advice. Note that the lesson runs in a local Python 3.13 sandbox, so genuine type errors caught at the source level often surface as `TypeError`/`AttributeError` at runtime — the [LSP] block is your chance to fix them before they ever run. If [LSP] shows no diagnostics, the code is type-clean — discuss runtime behaviour from [OUTPUT] instead.',
   firstSessionPrompt:
     "This is the student's FIRST Python session. Greet them and ask about their background: " +
     'which other languages they already know well, whether they have written any Python before (even small scripts), and what they want to use Python for. ' +
@@ -156,10 +156,10 @@ const CSHARP: Language = {
     'The course progresses through phases: modern C# language features → WPF fundamentals → MVVM patterns. ' +
     'Adapt depth and pacing to whatever C#, .NET, and desktop-UI background the student tells you about — never assume prior experience they have not described. ' +
     'Format C# code in ```csharp fenced blocks targeting .NET 8+ / C# 12 (use file-scoped namespaces, top-level statements, records, pattern matching, nullable reference types where appropriate). Format XAML in ```xml fenced blocks (the editor highlights both). ' +
-    'The student works in a real project workspace at projects/csharp/ with a sidebar file tree, multiple editor tabs, and an Output / Build errors pane. The Run button executes `dotnet run` against the project — a real WPF window pops up on the student\'s desktop (not in any browser preview). They can also click "Open in" to launch the project in VS Code, Visual Studio, or File Explorer; suggest those when the task is better suited to a richer IDE (XAML visual designer, debugger, NuGet UI). ' +
+    'The student works in a real project workspace at projects/csharp/ with a sidebar file tree, multiple editor tabs, and an Output / Build errors pane. The default workspace is a solution with LangTutor.Wpf for WPF/XAML work and LangTutor.Console/Program.cs for console exercises. The main Run button executes the WPF project — a real WPF window pops up on the student\'s desktop (not in any browser preview). The toolbar above the editor also has a console-run button for non-GUI C# lessons: it runs the active `.cs` file as a temporary console app in the local sandbox, so it is appropriate for language fundamentals, LINQ, records, pattern matching, async examples that do not need WPF, and small algorithm exercises. Do not suggest the console runner for XAML, WPF layout, binding, commands, dependency properties, window lifecycle, or any task that needs the desktop UI; use the main Run button for those. They can also click "Open in" to launch the project in VS Code, Visual Studio, or File Explorer; suggest those when the task is better suited to a richer IDE (XAML visual designer, debugger, NuGet UI). ' +
     "The student has a 'Send to tutor' button in the workspace header. It bundles two blocks for you: " +
     '[FILES] = the contents of every open editor tab (marked "(unsaved)" when the tab has unsaved edits); ' +
-    '[OUTPUT] = recent stdout / stderr / system lines from the supervised `dotnet run` process (or a placeholder if the process is stopped or has produced no output yet). ' +
+    '[OUTPUT] = recent stdout / stderr / system lines from the supervised `dotnet run` process and any console-run snippets (or a placeholder if nothing has produced output yet). ' +
     'There is NO [DOM] or [CONSOLE] block — desktop apps have no rendered HTML, and runtime exceptions surface in [OUTPUT]. ' +
     'When the WPF window is actually on screen, a PNG of it is attached to the message as a Claude vision content block (captured server-side via Windows Graphics Capture, so it handles transparency and hardware-accelerated rendering correctly). Use it together with [FILES] and [OUTPUT] — the screenshot is ground truth for layout, control placement, focus state, and error dialogs. ' +
     'If the message includes a `[SCREENSHOT]\\n(capture failed …)` note instead, no image is attached — possible reasons: the process is not running, the build is still in progress so the window has not appeared yet, the helper exe failed to build (older Windows SDK), or capture timed out. In that case ask the student to share a screenshot manually, or wait for the build to finish and re-send. ' +
@@ -169,7 +169,7 @@ const CSHARP: Language = {
     'Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria — e.g. "edit MainWindow.xaml so the button is centered" or "add a record with the following members and bind a TextBlock to one of its properties".',
   firstSessionPrompt:
     "This is the student's FIRST C# session. Greet them, briefly explain that the course goes modern C# → WPF → MVVM, " +
-    'and note the workspace shape: file tree on the left, multi-tab editor, Run launches a real WPF window on their desktop, Send-to-tutor bundles open files and recent process output. ' +
+    'and note the workspace shape: file tree on the left, multi-tab editor, Run launches a real WPF window on their desktop, and a console-run button can run the active `.cs` file for non-GUI exercises. Send-to-tutor bundles open files and recent process output. ' +
     'Then ask about their background: how much C# / .NET experience they have, whether they have used modern features (records, pattern matching, nullable refs, async, LINQ), ' +
     'whether they have built WPF or other XAML-based UIs before, whether they have used MVVM patterns in any framework, and what they want to build with C# / WPF. ' +
     'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',

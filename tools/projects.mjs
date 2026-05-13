@@ -40,6 +40,8 @@ const PROCESS_ALIVE_DEFAULT_MS = 500;
 
 const IS_WIN = process.platform === 'win32';
 const PNPM = IS_WIN ? 'pnpm.cmd' : 'pnpm';
+const CSHARP_SOLUTION_FILE = 'LangTutor.sln';
+const CSHARP_WPF_PROJECT_FILE = 'LangTutor.Wpf/LangTutor.Wpf.csproj';
 
 /**
  * Per-language project configuration. Single source of truth for
@@ -70,12 +72,12 @@ const PROJECT_CONFIG = Object.freeze({
   },
   csharp: {
     scaffoldDir: 'csharp',
-    install: { cmd: 'dotnet', args: ['restore'], marker: 'obj' },
+    install: { cmd: 'dotnet', args: ['restore', CSHARP_SOLUTION_FILE], marker: 'LangTutor.Wpf/obj' },
     // --verbosity minimal: default would be 'quiet' under non-TTY, which prints
     // nothing until the build fails. 'minimal' streams the restore + build
     // milestones we need for the frontend's build-phase pill, plus
     // `Foo.cs(L,C): error CSnnnn:` lines for the Build errors tab.
-    dev: { cmd: 'dotnet', args: ['run', '--verbosity', 'minimal'] },
+    dev: { cmd: 'dotnet', args: ['run', '--project', CSHARP_WPF_PROJECT_FILE, '--verbosity', 'minimal'] },
     readiness: { kind: 'process-alive', minAliveMs: PROCESS_ALIVE_DEFAULT_MS },
     treeIgnore: new Set(['bin', 'obj', '.vs']),
     bootstrap: null,
@@ -122,38 +124,24 @@ function commandExists(cmd) {
 }
 
 /**
- * Csharp preflight: catch the two failure modes that produce inscrutable
- * `dotnet run` errors otherwise:
- *  - No .csproj in projects/csharp/ (user deleted the scaffold; dotnet
- *    reports "Couldn't find a project to run" which means nothing to a
- *    student).
- *  - .csproj `<TargetFramework>` is newer than any installed SDK (`net8.0`
- *    on a machine with only .NET 6 SDK; dotnet emits a wall of NETSDK1045
- *    babble).
- *
- * Returns `null` on pass; a friendly hint string on fail.
+ * Csharp preflight: catch the failures that produce inscrutable `dotnet run`
+ * output otherwise: missing WPF project and SDK / TFM mismatches. Returns
+ * `null` on pass; a friendly hint string on fail.
  */
 function preflightCsharp(cwd) {
-  let csprojPath = null;
-  try {
-    const entries = readdirSync(cwd, { withFileTypes: true });
-    const csproj = entries.find((e) => e.isFile() && e.name.toLowerCase().endsWith('.csproj'));
-    if (csproj === undefined) {
-      return 'No .csproj file found in projects/csharp/. The project scaffold is incomplete — click Reset to re-scaffold.';
-    }
-    csprojPath = join(cwd, csproj.name);
-  } catch (e) {
-    return `Could not list projects/csharp/: ${e.message}`;
+  const wpfProjectPath = safeResolve(cwd, CSHARP_WPF_PROJECT_FILE);
+  if (!existsSync(wpfProjectPath)) {
+    return `No WPF .csproj file found at projects/csharp/${CSHARP_WPF_PROJECT_FILE}. Click Reset to re-scaffold.`;
   }
 
   let csprojContent;
   try {
-    csprojContent = readFileSync(csprojPath, 'utf8');
+    csprojContent = readFileSync(wpfProjectPath, 'utf8');
   } catch (e) {
-    return `Could not read ${csprojPath}: ${e.message}`;
+    return `Could not read ${wpfProjectPath}: ${e.message}`;
   }
 
-  const tfMatch = csprojContent.match(/<TargetFramework>\s*net(\d+)\.\d+(?:-[\w]+)?\s*<\/TargetFramework>/i);
+  const tfMatch = csprojContent.match(/<TargetFramework>\s*net(\d+)\.\d+[^<]*<\/TargetFramework>/i);
   if (tfMatch === null) return null; // unrecognised TFM — let dotnet itself complain
   const requiredMajor = Number.parseInt(tfMatch[1], 10);
   if (!Number.isFinite(requiredMajor)) return null;
@@ -174,7 +162,7 @@ function preflightCsharp(cwd) {
   const hasMatch = [...installedMajors].some((v) => v >= requiredMajor);
   if (!hasMatch) {
     const installed = [...installedMajors].sort((a, b) => a - b).join(', ') || 'none';
-    return `Project targets .NET ${requiredMajor}+ but only these SDK majors are installed: ${installed}. Install .NET ${requiredMajor} SDK from https://aka.ms/dotnet/download (or edit csharp.csproj's <TargetFramework> to match).`;
+    return `Project targets .NET ${requiredMajor}+ but only these SDK majors are installed: ${installed}. Install .NET ${requiredMajor} SDK from https://aka.ms/dotnet/download (or edit LangTutor.Wpf.csproj's <TargetFramework> to match).`;
   }
   return null;
 }
@@ -353,8 +341,7 @@ const BOOTSTRAP_INNER = `(() => {
   });
 })();`;
 
-const BOOTSTRAP_SCRIPT =
-  BOOTSTRAP_START + '\n<script>' + HTML_TO_IMAGE_BUNDLE + '</script>\n<script>' + BOOTSTRAP_INNER + '</script>\n' + BOOTSTRAP_END;
+const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}\n<script>${HTML_TO_IMAGE_BUNDLE}</script>\n<script>${BOOTSTRAP_INNER}</script>\n${BOOTSTRAP_END}`;
 
 function injectBootstrap(lang) {
   if (PROJECT_CONFIG[lang].bootstrap !== 'web-iframe') return;
@@ -569,63 +556,89 @@ through any other editor — lang-tutor reads and writes them on disk.
 };
 
 const SCAFFOLD_CSHARP = {
-  'csharp.csproj': `<Project Sdk="Microsoft.NET.Sdk">
+  'LangTutor.sln': `Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LangTutor.Wpf", "LangTutor.Wpf\\LangTutor.Wpf.csproj", "{9F5B6B88-6D6E-45F4-A375-E3BD8E4B5CE9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LangTutor.Console", "LangTutor.Console\\LangTutor.Console.csproj", "{4EC0AFD9-6E8B-4F9C-A263-C660E8E76773}"
+EndProject
+Global
+  GlobalSection(SolutionConfigurationPlatforms) = preSolution
+    Debug|Any CPU = Debug|Any CPU
+    Release|Any CPU = Release|Any CPU
+  EndGlobalSection
+  GlobalSection(ProjectConfigurationPlatforms) = postSolution
+    {9F5B6B88-6D6E-45F4-A375-E3BD8E4B5CE9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {9F5B6B88-6D6E-45F4-A375-E3BD8E4B5CE9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {9F5B6B88-6D6E-45F4-A375-E3BD8E4B5CE9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {9F5B6B88-6D6E-45F4-A375-E3BD8E4B5CE9}.Release|Any CPU.Build.0 = Release|Any CPU
+    {4EC0AFD9-6E8B-4F9C-A263-C660E8E76773}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {4EC0AFD9-6E8B-4F9C-A263-C660E8E76773}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {4EC0AFD9-6E8B-4F9C-A263-C660E8E76773}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {4EC0AFD9-6E8B-4F9C-A263-C660E8E76773}.Release|Any CPU.Build.0 = Release|Any CPU
+  EndGlobalSection
+EndGlobal
+`,
+
+  'LangTutor.Wpf/LangTutor.Wpf.csproj': `<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>LangTutorWpf</RootNamespace>
+    <RootNamespace>LangTutor.Wpf</RootNamespace>
   </PropertyGroup>
 </Project>
 `,
 
-  'App.xaml': `<Application x:Class="LangTutorWpf.App"
+  'LangTutor.Wpf/App.xaml': `<Application x:Class="LangTutor.Wpf.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml">
-    <Application.Resources>
-    </Application.Resources>
+  <Application.Resources>
+  </Application.Resources>
 </Application>
 `,
 
-  'App.xaml.cs': `using System.Windows;
+  'LangTutor.Wpf/App.xaml.cs': `using System.Windows;
 
-namespace LangTutorWpf;
+namespace LangTutor.Wpf;
 
 public partial class App : Application
 {
 }
 `,
 
-  'MainWindow.xaml': `<Window x:Class="LangTutorWpf.MainWindow"
+  'LangTutor.Wpf/MainWindow.xaml': `<Window x:Class="LangTutor.Wpf.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Lang Tutor · C# Workshop"
+        Title="Lang Tutor - C# Workshop"
         Height="320" Width="480">
-    <Grid Margin="24">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <TextBlock x:Name="GreetingText"
-                   Text="Hello from your C# workshop."
-                   FontSize="18"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Center"/>
-        <Button Grid.Row="1"
-                Content="Click me"
-                Padding="16,8"
-                HorizontalAlignment="Center"
-                Click="OnClickMe"/>
-    </Grid>
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock x:Name="GreetingText"
+               Text="Hello from your C# workshop."
+               FontSize="18"
+               VerticalAlignment="Center"
+               HorizontalAlignment="Center"/>
+    <Button Grid.Row="1"
+            Content="Click me"
+            Padding="16,8"
+            HorizontalAlignment="Center"
+            Click="OnClickMe"/>
+  </Grid>
 </Window>
 `,
 
-  'MainWindow.xaml.cs': `using System.Windows;
+  'LangTutor.Wpf/MainWindow.xaml.cs': `using System.Windows;
 
-namespace LangTutorWpf;
+namespace LangTutor.Wpf;
 
 public partial class MainWindow : Window
 {
@@ -644,15 +657,30 @@ public partial class MainWindow : Window
 }
 `,
 
+  'LangTutor.Console/LangTutor.Console.csproj': `<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LangTutor.Console</RootNamespace>
+  </PropertyGroup>
+</Project>
+`,
+
+  'LangTutor.Console/Program.cs': `Console.WriteLine("Hello from the C# console workspace.");
+Console.WriteLine("Edit Program.cs, then use the console run button to run just this file.");
+`,
+
   'README.md': `# Your C# workshop
 
 This folder is your sandbox for the C# course in lang-tutor.
 
-- \`csharp.csproj\` — project file: target framework, references, build settings
-- \`App.xaml\` / \`App.xaml.cs\` — application entry point, sets the startup window
-- \`MainWindow.xaml\` / \`MainWindow.xaml.cs\` — the window that opens when you run
+- \`LangTutor.sln\` - solution containing the WPF app and console workspace
+- \`LangTutor.Wpf/\` - WPF app: XAML, app lifecycle, layout, binding, MVVM
+- \`LangTutor.Console/Program.cs\` - small console exercises for language fundamentals
 
-When you click Run in lang-tutor (or run \`dotnet run\` here), .NET will:
+When you click Run in lang-tutor, it runs the WPF project:
 
 1. Restore NuGet packages (one-time, cached after)
 2. Compile the C# + XAML
@@ -661,8 +689,13 @@ When you click Run in lang-tutor (or run \`dotnet run\` here), .NET will:
 The window is a real Windows app, not an in-browser preview — it pops up on top
 of your other windows. Click the button to watch the click counter increment.
 
-You can also build and run from Visual Studio or JetBrains Rider by opening the
-\`.csproj\` file directly.
+For console lessons, open \`LangTutor.Console/Program.cs\` and use the console
+run button above the editor. That sends the active C# file to the local sandbox,
+which is useful for records, pattern matching, LINQ, async basics, and small
+algorithm exercises that do not need WPF.
+
+You can also build and run from Visual Studio or JetBrains Rider by opening
+\`LangTutor.sln\`.
 `,
 };
 
@@ -1247,11 +1280,15 @@ export function getOpenAvailability() {
   return openAvailabilityCache;
 }
 
-function findCsproj(root) {
+function findVisualStudioTarget(root) {
   try {
     const entries = readdirSync(root, { withFileTypes: true });
+    const solution = entries.find((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.sln'));
+    if (solution !== undefined) {
+      return join(root, solution.name);
+    }
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.csproj')) {
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.csproj')) {
         return join(root, entry.name);
       }
     }
@@ -1263,7 +1300,7 @@ function findCsproj(root) {
 
 /**
  * Launch an external editor / file manager pointed at the project root (or,
- * for Visual Studio, the .csproj inside it). Spawned detached + unref'd so
+ * for Visual Studio, the .sln / .csproj inside it). Spawned detached + unref'd so
  * the launched app outlives the dev server.
  *
  * @param {string} lang     Project language id.
@@ -1295,12 +1332,12 @@ export function openProject(lang, target) {
 
     if (target === 'vs') {
       if (!IS_WIN) return { ok: false, error: 'Visual Studio is Windows-only' };
-      const csproj = findCsproj(root);
-      if (csproj === null) return { ok: false, error: 'no .csproj found in project root' };
+      const targetFile = findVisualStudioTarget(root);
+      if (targetFile === null) return { ok: false, error: 'no .sln or .csproj found in project root' };
       // `start "" "<file>"` opens with the registered file association — Visual
       // Studio if installed. The empty "" is required because start treats
       // its first quoted arg as a window title.
-      spawn('cmd', ['/c', 'start', '', csproj], { stdio: 'ignore', detached: true }).unref();
+      spawn('cmd', ['/c', 'start', '', targetFile], { stdio: 'ignore', detached: true }).unref();
       return { ok: true };
     }
   } catch (e) {

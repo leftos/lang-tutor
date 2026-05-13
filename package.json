@@ -17,7 +17,6 @@
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
     "@tailwindcss/vite": "^4.0.0",
-    "@types/dompurify": "3.2.0",
     "@types/node": "^25.6.2",
     "@types/ws": "8.18.1",
     "esbuild": "^0.28.0",
@@ -48,7 +47,6 @@
     "dompurify": "3.4.2",
     "html-to-image": "^1.11.13",
     "marked": "18.0.3",
-    "pyodide": "^0.29.4",
     "ws": "8.20.0"
   }
 }

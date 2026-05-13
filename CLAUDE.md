@@ -6,10 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A single-page, multi-language programming tutor (Rust, C++, Python, C#, Web). Two workspace shapes:
 
-- **Single-buffer** (`rust` / `cpp` / `python`): one editor, one Run, one output pane. Code runs through a remote sandbox (Playground / Wandbox) or in-browser runtime (Pyodide).
-- **Project workspace** (`csharp` / `web`): on-disk project under `projects/<lang>/` with sidebar file tree, multi-tab editor, supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Run/Stop wired to the supervisor; logs streamed via SSE.
+- **Single-buffer** (`rust` / `cpp` / `python`): one editor, one Run, one output pane. Code runs in the local Docker sandbox image (`lang-tutor-toolchains:latest`).
+- **Project workspace** (`csharp` / `web`): on-disk project under `projects/<lang>/` with sidebar file tree, multi-tab editor, Run / Send controls above the code, supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Run/Stop wired to the supervisor; logs streamed via SSE.
 
 The user chats with Claude (via the Anthropic API), writes code, runs it, and submits code+output (single-buffer) or files+output/dom (project) for evaluation. Lesson progress is extracted by a second LLM call into structured JSON and persisted in `localStorage`, **independently per language**. Switching language is non-destructive — each language has its own conversation history, lesson progress, and saved editor / tab state.
+
+`localStorage` is mirrored into `.local/state/local-storage.json` by the local
+`/state/local-storage` endpoint. This keeps progress portable across dev-server
+origins such as `localhost`, `127.0.0.1`, LAN IPs, and port changes.
 
 ## Stack
 
@@ -17,10 +21,10 @@ The user chats with Claude (via the Anthropic API), writes code, runs it, and su
 - **CodeMirror 6** for the editor (syntax highlight, autocomplete, search, lint, multi-cursor, fold gutter)
 - **Vite 7** for dev server, HMR, and production builds
 - **Tailwind CSS 4** via `@tailwindcss/vite` plugin (config-in-CSS via `@theme`)
-- **Pyodide** for in-browser Python (lazy-loaded from CDN on first run)
+- **Docker Desktop** for local sandboxed Rust / C++ / Python / C# console runs
 - **Biome** for linting and formatting
 - **pnpm** for package management
-- **Node 20+** runtime for the production proxy (`server.mjs`) and for the local `/check` + `/format` toolchain endpoints
+- **Node 20+** runtime for the production proxy (`server.mjs`) and for the local `/run` + `/check` + `/format` toolchain endpoints
 - **chokidar** for filesystem watch on project workspaces (SSE-broadcast tree-change events to the frontend)
 - Optional local toolchains:
   - Single-buffer: `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`
@@ -60,7 +64,7 @@ src/
   projectApi.ts      Frontend client for /fs/* + /proj/* (typed fetch wrappers + SSE subscribers)
   lint.ts            Frontend client for /check (returns CodeMirror Diagnostic[]) and /format
   api.ts             callClaude (streaming) + fetchProgressExtraction (non-streaming) — proxied through /v1/messages
-  runners.ts         runCode dispatch: runRust (Rust Playground), runCpp (Wandbox), runPython (Pyodide)
+  runners.ts         runCode dispatch to /run, backed by the local Docker sandbox image
   render.ts          renderMarkdown, setInline, renderPlainWithFences (DocumentFragment builders)
   storage.ts         localStorage wrapper (typed get/set/delete)
   constants.ts       LANGUAGES record (topics, prompts, starter / scaffold metadata), storage-key helpers
@@ -126,13 +130,12 @@ Both POST to `/v1/messages` (the local proxy):
 
 **Single-buffer** — `runCode(lang, code, onProgress?)` in `src/runners.ts` returns `Promise<{ ok: boolean; output: string }>`:
 
-- `runRust` → POST `https://play.rust-lang.org/execute` (channel: stable, edition: 2021).
-- `runCpp` → POST `https://wandbox.org/api/compile.json` (compiler: `gcc-head`, options: `warning,c++23,boost-nothing`). Treats `status !== '0'` or compiler messages containing `error:` as failure.
-- `runPython` → Lazy-loads Pyodide on first call (`import('pyodide')` plus CDN `indexURL`). Captures stdout/stderr via `setStdout`/`setStderr` batched callbacks. Calls `loadPackagesFromImports(code)` so importing `numpy`, etc. just works.
+- Rust / C++ / Python → POST `/run` with `{ lang, code }`; `tools/runner.mjs` writes the code into `.tmp/runs/<lang>-*/` and runs `lang-tutor-toolchains:latest` with `--network none`, a read-only container root, dropped capabilities, `no-new-privileges`, and CPU / memory / process limits.
+- C++ uses `clang++ -std=c++23` inside the image. Rust uses `rustc --edition=2021`. Python uses `python3`.
 
-Pyodide is a `dependency`, not `devDependency`, because the loader code is bundled into the production build. The heavy WASM/Python-stdlib assets (~15 MB) come from the jsDelivr CDN on first run, cached aggressively after.
+The toolchain image is built by `.\lt.ps1 toolchain` / `scripts/build-toolchain-image.ps1` from `docker/toolchains/`. It contains Clang/LLVM, Rust, Python 3.13, .NET SDK, formatters, and LSPs.
 
-**Project workspaces** — supervised by `tools/projects.mjs`. Run/Stop hits `POST /proj/start` / `/proj/stop`; status pill streams from `POST /proj/status` polled every 2 s + log SSE on `/proj/logs`. PROJECT_CONFIG drives the install/dev commands (web → `pnpm install` + `pnpm dev`; csharp → `dotnet restore` + `dotnet run --verbosity minimal`). Readiness is `http-probe` for web (Vite port 5180) or `process-alive` for csharp (500 ms warm-up). The C# pill additionally reflects build phases derived from dotnet's `--verbosity minimal` output: `spawning…` → `restoring NuGet…` → `building…` → `running (PID N)`.
+**Project workspaces** — supervised by `tools/projects.mjs`. Run/Stop hits `POST /proj/start` / `/proj/stop`; status pill streams from `POST /proj/status` polled every 2 s + log SSE on `/proj/logs`. PROJECT_CONFIG drives the install/dev commands (web → `pnpm install` + `pnpm dev`; csharp → `dotnet restore LangTutor.sln` + `dotnet run --project LangTutor.Wpf/LangTutor.Wpf.csproj --verbosity minimal`). Readiness is `http-probe` for web (Vite port 5180) or `process-alive` for csharp (500 ms warm-up). The C# pill additionally reflects build phases derived from dotnet's `--verbosity minimal` output: `spawning…` → `restoring NuGet…` → `building…` → `running (PID N)`. The C# toolbar also has a terminal button for non-GUI lessons: it runs the active `.cs` tab as a temporary console app through `/run` with `lang: "csharp"`.
 
 ### Evaluate flow
 
@@ -183,7 +186,7 @@ Two backend modules, both shared between `vite.config.ts` (dev middleware in a `
 - `GET /proj/logs/recent?lang=…&n=200` → `{ lines }`.
 - `GET /proj/open/targets` + `POST /proj/open` body `{ lang, target }` — "Open in" launcher (vscode / vs / explorer); availability cached after first probe.
 
-All spawns use `child_process.spawn(cmd, args[])` — array form, no shell injection vector. User code is piped via stdin only (single-buffer) or read from disk (project). ENOENT on the executable returns `{ available: false }` (single-buffer) or a friendly install hint pushed into the project's log buffer (project).
+All spawns use `child_process.spawn(cmd, args[])` — array form, no shell injection vector. Single-buffer code is written to an untracked temp workspace and mounted into the local Docker sandbox; project code is read from disk. ENOENT on local host tools returns `{ available: false }` (single-buffer checks/formatters) or a friendly install hint pushed into the project's log buffer (project).
 
 The supervisor stashes its `procs` Map on `globalThis['__langTutorProcs']` so Vite HMR reloading `tools/projects.mjs` doesn't lose track of running children. Process-exit / SIGINT / SIGTERM handlers (registered once via a global flag) call `killProcessTree` for every supervised PID so children die with the dev server.
 
@@ -206,4 +209,3 @@ Tailwind v4 utilities for layout, plus component classes in `src/style.css` (`.b
 - `noUncheckedIndexedAccess` is on — array indexing yields `T | undefined`. Code uses `?? ''` and explicit checks rather than `!`.
 - DOM mutation never uses `innerHTML` with dynamic strings (XSS-safe). The progress tab and start screen are built with `document.createElement` plus the `div`/`span` helpers in `main.ts`.
 - The Vite proxy strips `Set-Cookie` from Anthropic responses to suppress the `_cfuvid` cookie warning in DevTools.
-- Pyodide loads from a CDN URL of the form `https://cdn.jsdelivr.net/pyodide/v{version}/full/`, where `version` is the version reported by the bundled npm package — they stay in sync automatically.
