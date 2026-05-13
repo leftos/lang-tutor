@@ -30,17 +30,17 @@ The user chats with Claude (via the Anthropic API), writes code, runs it, and su
 
 ```powershell
 pnpm install                # first time
-pnpm dev                    # Vite dev server (default port 5173) — proxies /v1/messages → Anthropic API
-pnpm build                  # type-check + Vite build to dist/
-pnpm serve                  # node --env-file=.env server.mjs (default port 3000)
-pnpm preview                # vite preview (preview the production build via Vite)
-pnpm typecheck              # tsc --noEmit
-pnpm lint                   # biome check --write .
+.\lt.ps1 dev                # Vite dev server (default port 5173) — proxies /v1/messages → Anthropic API
+.\lt.ps1 build              # type-check + Vite build to dist/
+.\lt.ps1 serve              # node --env-file=.env server.mjs (default port 3000)
+.\lt.ps1 preview            # vite preview (preview the production build via Vite)
+.\lt.ps1 typecheck          # tsc --noEmit
+.\lt.ps1 lint               # biome check --write .
 ```
 
 Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` before first run. The browser never sees the key — Vite's dev proxy and `server.mjs` both inject it server-side.
 
-**Windows Ctrl+C tip:** `pnpm dev` / `pnpm serve` go through a `.cmd` wrapper, so Ctrl+C triggers the *"Terminate batch job (Y/N)?"* prompt. Use `.\dev.ps1` and `.\serve.ps1` instead — they invoke Node directly so Ctrl+C kills cleanly. Prefer these when iterating.
+**Windows Ctrl+C tip:** `pnpm dev` / `pnpm serve` go through a `.cmd` wrapper, so Ctrl+C triggers the *"Terminate batch job (Y/N)?"* prompt. Use `.\lt.ps1 dev` and `.\lt.ps1 serve` instead — they invoke Node directly so Ctrl+C kills cleanly. Prefer these when iterating.
 
 **Slow-command output:** capture builds, test runs, and Vite/dotnet logs to `.tmp/` (gitignored, project-root) instead of re-running. `cmd 2>&1 | tee .tmp/output.log` then Read/Grep the file.
 

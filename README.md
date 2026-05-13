@@ -13,6 +13,7 @@ One-shot setup that installs all runtimes via winget, fetches dependencies, and 
 ```
 
 It's idempotent — checks each tool first and only installs what's missing. First run takes 5–10 minutes (downloads); subsequent runs are seconds. After it finishes installing it'll prompt you for `ANTHROPIC_API_KEY` if `.env` isn't set, then start the dev server and open `http://localhost:5173`.
+After setup, use `.\lt.ps1 dev` as the root dev-server entrypoint.
 
 ## Languages
 
@@ -75,30 +76,30 @@ copy .env.example .env
 The Vite dev server proxies `/v1/messages` to `https://api.anthropic.com`, injecting your API key from `.env` so it never reaches the browser. HMR is on for `.ts` and `.css` changes.
 
 ```powershell
-pnpm dev
+.\lt.ps1 dev
 ```
 
 Open the URL Vite prints (default `http://localhost:5173`).
 
-**Windows Ctrl+C tip:** `pnpm dev` is invoked through a `.cmd` wrapper, so Ctrl+C triggers the *"Terminate batch job (Y/N)?"* prompt. Use `.\dev.ps1` instead — it runs Vite via Node directly so Ctrl+C kills it cleanly. Same idea for the production server: use `.\serve.ps1` instead of `pnpm serve`.
+**Windows Ctrl+C tip:** `pnpm dev` is invoked through a `.cmd` wrapper, so Ctrl+C triggers the *"Terminate batch job (Y/N)?"* prompt. Use `.\lt.ps1 dev` instead — it runs Vite via Node directly so Ctrl+C kills it cleanly. Same idea for the production server: use `.\lt.ps1 serve` instead of `pnpm serve`.
 
 ## Production
 
 Build the static bundle, then run the Node proxy server which serves `dist/` and proxies API calls.
 
 ```powershell
-pnpm build      # type-checks, then builds to dist/
-pnpm serve      # node --env-file=.env server.mjs
+.\lt.ps1 build      # type-checks, then builds to dist/
+.\lt.ps1 serve      # node --env-file=.env server.mjs
 ```
 
-Open `http://localhost:3000` (override with `$env:PORT = "8080"; pnpm serve`).
+Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`).
 
 ## Other commands
 
 ```powershell
-pnpm typecheck  # tsc --noEmit
-pnpm lint       # biome check --write . (lint + format)
-pnpm preview    # vite preview (preview the production build via Vite)
+.\lt.ps1 typecheck  # tsc --noEmit
+.\lt.ps1 lint       # biome check --write . (lint + format)
+.\lt.ps1 preview    # vite preview (preview the production build via Vite)
 ```
 
 ## Project structure
@@ -125,8 +126,7 @@ pnpm preview    # vite preview (preview the production build via Vite)
 ├── tsconfig.json      Strict TypeScript config
 ├── biome.json         Lint + format config
 ├── server.mjs         Production server (serves dist/ + /v1/messages + /check + /format)
-├── dev.ps1            Run the dev server bypassing pnpm.cmd (clean Ctrl+C)
-├── serve.ps1          Run the production server bypassing pnpm.cmd
+├── lt.ps1             Root helper for dev/build/serve/check workflows
 └── .env               ANTHROPIC_API_KEY (gitignored)
 ```
 

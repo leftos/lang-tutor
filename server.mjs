@@ -4,8 +4,8 @@
  * injecting x-api-key from ANTHROPIC_API_KEY so the browser never sees the key.
  *
  * Usage:
- *   pnpm build                              # build dist/
- *   pnpm serve                              # node --env-file=.env server.mjs
+ *   .\lt.ps1 build                          # build dist/
+ *   .\lt.ps1 serve                          # node --env-file=.env server.mjs
  *   or: ANTHROPIC_API_KEY=sk-ant-... node server.mjs
  */
 
@@ -26,7 +26,7 @@ const DIST_DIR = join(__dirname, 'dist');
 
 if (!API_KEY) {
   console.error('Error: ANTHROPIC_API_KEY environment variable is not set.');
-  console.error('  pnpm serve');
+  console.error('  .\\lt.ps1 serve');
   console.error('  (runs: node --env-file=.env server.mjs)');
   process.exit(1);
 }
