@@ -27,6 +27,7 @@ export interface Progress {
 export interface TextBlock {
   type: 'text';
   text: string;
+  cache_control?: { type: 'ephemeral' };
 }
 
 export interface ImageBlock {
@@ -48,6 +49,21 @@ export interface Message {
 export interface ClaudeResponse {
   content?: Array<{ type: string; text: string }>;
   error?: { message: string };
+}
+
+export type AiProvider = 'anthropic' | 'openai' | 'gemini';
+
+export interface ProviderConfig {
+  provider: AiProvider;
+  label: string;
+  model: string;
+  apiKey: string;
+}
+
+export interface ProviderSettings {
+  activeProvider: AiProvider;
+  rememberKeys: boolean;
+  providers: Record<AiProvider, { model: string; apiKey?: string }>;
 }
 
 export interface RunResult {

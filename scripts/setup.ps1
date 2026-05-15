@@ -430,35 +430,19 @@ if (Test-DockerReady) {
     Write-Warn-Local "Start Docker Desktop, then run .\lt.ps1 toolchain before using Run for Rust/C++/Python or C# console snippets."
 }
 
-# ── Phase 3: .env check ─────────────────────────────────────────────────────
-Write-Step "Checking .env"
+# ── Phase 3: optional .env bootstrap ────────────────────────────────────────
+Write-Step "Checking optional .env"
 $envPath = Join-Path $repoRoot '.env'
 $envExamplePath = Join-Path $repoRoot '.env.example'
 if (-not (Test-Path $envPath)) {
     if (Test-Path $envExamplePath) {
         Copy-Item $envExamplePath $envPath
-        Write-Host ""
-        Write-Host "    Created .env from .env.example." -ForegroundColor Yellow
-        Write-Host "    Open .env and set ANTHROPIC_API_KEY=sk-ant-... before re-running." -ForegroundColor Yellow
-        Write-Host ""
-        Start-Process notepad.exe $envPath
-        exit 0
+        Write-Host "    Created .env from .env.example. Provider API keys are configured in the browser UI." -ForegroundColor Yellow
     } else {
-        Write-Error ".env.example missing — can't bootstrap .env"
-        exit 1
+        Write-Warn-Local ".env.example missing — continuing without .env."
     }
 }
-
-# Crude check for an unset key.
-$envContent = Get-Content $envPath -Raw
-if ($envContent -match '(?m)^\s*ANTHROPIC_API_KEY\s*=\s*$' -or
-    $envContent -match '(?m)^\s*ANTHROPIC_API_KEY\s*=\s*sk-ant-\.\.\.\s*$' -or
-    $envContent -notmatch '(?m)^\s*ANTHROPIC_API_KEY\s*=\s*\S+') {
-    Write-Warn-Local ".env has no ANTHROPIC_API_KEY set. Open .env, paste your key, and re-run."
-    Start-Process notepad.exe $envPath
-    exit 0
-}
-Write-Ok ".env has ANTHROPIC_API_KEY"
+Write-Ok ".env check complete"
 
 # ── Phase 4: launch dev server ──────────────────────────────────────────────
 Write-Step "Starting Vite dev server"

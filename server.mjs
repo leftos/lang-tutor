@@ -1,37 +1,40 @@
 /**
- * Rust teacher — production server
- * Serves the Vite build (dist/) and proxies POST /v1/messages to the Anthropic API,
- * injecting x-api-key from ANTHROPIC_API_KEY so the browser never sees the key.
+ * Lang Tutor — production server
+ * Serves the Vite build (dist/), account/session APIs, state persistence, and
+ * local code/project tooling. Model-provider API keys stay in the browser.
  *
  * Usage:
  *   .\lt.ps1 build                          # build dist/
  *   .\lt.ps1 serve                          # node --env-file=.env server.mjs
- *   or: ANTHROPIC_API_KEY=sk-ant-... node server.mjs
+ *   or: node server.mjs
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { dirname, extname, join } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleStateRequest } from './tools/app-state.mjs';
+import { handleAuthRequest, readAuthSession } from './tools/auth-routes.mjs';
 import { checkCode, formatCode } from './tools/checker.mjs';
 import { handleLspRequest, handleLspUpgrade } from './tools/lsp.mjs';
 import { handleProjectRequest } from './tools/project-routes.mjs';
 import { runSnippet } from './tools/runner.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const API_KEY = process.env.ANTHROPIC_API_KEY;
 const PORT = process.env.PORT || 3000;
 const DIST_DIR = join(__dirname, 'dist');
 
-if (!API_KEY) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is not set.');
-  console.error('  .\\lt.ps1 serve');
-  console.error('  (runs: node --env-file=.env server.mjs)');
-  process.exit(1);
+function normalizeBasePath(value) {
+  const raw = value?.trim();
+  if (!raw || raw === './') return '/';
+  const withLeadingSlash = raw.startsWith('/') ? raw : `/${raw}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
 }
+
+const BASE_PATH = normalizeBasePath(process.env.LANG_TUTOR_BASE_PATH);
+const BASE_PREFIX = BASE_PATH === '/' ? null : BASE_PATH.slice(0, -1);
+const REQUIRE_AUTH = process.env.LANG_TUTOR_REQUIRE_AUTH === 'true';
+const TOOL_PATHS = ['/check', '/format', '/run', '/lsp', '/fs', '/proj'];
 
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -48,6 +51,19 @@ const MIME_TYPES = new Map([
   ['.woff', 'font/woff'],
 ]);
 
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
+  "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net",
+  "img-src 'self' data:",
+  "connect-src 'self' https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://cdn.jsdelivr.net ws: wss:",
+  "frame-src 'self' http://127.0.0.1:* http://localhost:*",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -58,6 +74,8 @@ function readBody(req) {
 }
 
 const server = createServer(async (req, res) => {
+  stripBasePath(req);
+
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
@@ -67,7 +85,13 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+  if (await handleAuthRequest(req, res)) return;
   if (await handleStateRequest(req, res)) return;
+  if (isToolRequest(req) && !(await requireSignedInUser(req, res))) return;
   if (await handleLspRequest(req, res)) return;
   if (await handleProjectRequest(req, res)) return;
 
@@ -97,47 +121,19 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/v1/messages') {
-    try {
-      const body = await readBody(req);
-      const upstream = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body,
-      });
-      // Pipe the upstream body straight through so SSE streaming works.
-      // Don't buffer with .json() — that defeats streaming for stream:true requests.
-      res.writeHead(upstream.status, {
-        'Content-Type': upstream.headers.get('content-type') ?? 'application/json',
-        'Cache-Control': 'no-cache',
-        'Access-Control-Allow-Origin': '*',
-      });
-      if (upstream.body) {
-        await pipeline(Readable.fromWeb(upstream.body), res);
-      } else {
-        res.end();
-      }
-    } catch (e) {
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-      }
-      res.end(JSON.stringify({ error: { message: e.message } }));
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const urlPath = requestPath(req);
+    let filePath = safeStaticPath(urlPath);
+    if (filePath === null) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
     }
-    return;
-  }
-
-  if (req.method === 'GET') {
-    const urlPath = (req.url ?? '/').split('?')[0];
-    let filePath = join(DIST_DIR, urlPath === '/' ? 'index.html' : urlPath);
     if (!existsSync(filePath)) filePath = join(DIST_DIR, 'index.html');
     const mime = MIME_TYPES.get(extname(filePath)) ?? 'application/octet-stream';
     try {
       res.writeHead(200, { 'Content-Type': mime });
-      res.end(readFileSync(filePath));
+      res.end(req.method === 'HEAD' ? undefined : readFileSync(filePath));
     } catch {
       res.writeHead(404);
       res.end('Not found');
@@ -150,12 +146,89 @@ const server = createServer(async (req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
-  handleLspUpgrade(req, socket, head);
+  stripBasePath(req);
+  if (!isLspUpgrade(req)) {
+    handleLspUpgrade(req, socket, head);
+    return;
+  }
+  requireSignedInUpgrade(req, socket)
+    .then((allowed) => {
+      if (allowed) handleLspUpgrade(req, socket, head);
+    })
+    .catch(() => {
+      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+      socket.destroy();
+    });
 });
 
 server.listen(PORT, () => {
-  console.log(`\n  Rust teacher running at http://localhost:${PORT}\n`);
+  console.log(`\n  Lang Tutor running at http://localhost:${PORT}${BASE_PATH === '/' ? '' : BASE_PATH}\n`);
   if (!existsSync(DIST_DIR)) {
     console.log('  Warning: dist/ not found — run "pnpm build" first.\n');
   }
 });
+
+function stripBasePath(req) {
+  if (BASE_PREFIX === null || typeof req.url !== 'string') return;
+  if (req.url === BASE_PREFIX) {
+    req.url = '/';
+    return;
+  }
+  if (req.url.startsWith(`${BASE_PREFIX}/`)) {
+    req.url = req.url.slice(BASE_PREFIX.length) || '/';
+    return;
+  }
+  if (req.url.startsWith(`${BASE_PREFIX}?`)) {
+    req.url = `/${req.url.slice(BASE_PREFIX.length)}`;
+  }
+}
+
+function requestPath(req) {
+  return (req.url ?? '/').split('?')[0];
+}
+
+function safeStaticPath(urlPath) {
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(urlPath);
+  } catch {
+    return null;
+  }
+  if (decodedPath.includes('\0')) return null;
+
+  const distRoot = resolve(DIST_DIR);
+  const relativePath = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '');
+  const filePath = resolve(distRoot, relativePath);
+  if (filePath !== distRoot && !filePath.startsWith(`${distRoot}${sep}`)) return null;
+  return filePath;
+}
+
+function isToolRequest(req) {
+  const path = requestPath(req);
+  return TOOL_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function isLspUpgrade(req) {
+  return requestPath(req) === '/lsp';
+}
+
+async function requireSignedInUser(req, res) {
+  if (!REQUIRE_AUTH) return true;
+  if (await readAuthSession(req)) return true;
+  writeJsonResponse(res, 401, { error: 'Sign in to use hosted tooling.' });
+  return false;
+}
+
+async function requireSignedInUpgrade(req, socket) {
+  if (!REQUIRE_AUTH) return true;
+  if (await readAuthSession(req)) return true;
+  socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+  socket.destroy();
+  return false;
+}
+
+function writeJsonResponse(res, statusCode, body) {
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(body));
+}

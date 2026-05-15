@@ -345,7 +345,7 @@ if (globalThis[EXIT_HOOK_KEY] !== true) {
   });
   process.on('SIGTERM', () => {
     cleanup();
-    process.exit(143);
+    process.exit(0);
   });
   process.on('exit', cleanup);
 }

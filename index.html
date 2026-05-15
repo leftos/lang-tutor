@@ -18,7 +18,7 @@
     <div class="header-mark">
       <span class="mark-glyph">§</span>
       <span class="mark-text">Lang<span class="mark-dot">·</span>Tutor</span>
-      <span class="mark-edition">a personal manual · ed. mmxxvi</span>
+      <span class="mark-edition">interactive coding tutor</span>
     </div>
 
     <nav id="languageRail" class="language-rail" aria-label="Language">
@@ -50,6 +50,15 @@
     </nav>
 
     <div class="header-tools">
+      <span id="authStatus" class="auth-status">Local progress</span>
+      <button type="button" id="providerBtn" class="ghost-btn" title="Choose AI provider and API key">
+        <i class="ti ti-key" aria-hidden="true"></i>
+        <span>AI Provider</span>
+      </button>
+      <button type="button" id="accountBtn" class="ghost-btn" title="Sign in to sync progress">
+        <i class="ti ti-user-circle" aria-hidden="true"></i>
+        <span>Account</span>
+      </button>
       <button type="button" id="themeToggle" class="ghost-btn icon-btn" aria-label="Toggle theme" title="Toggle light / dark">
         <i class="ti ti-contrast-2-filled" aria-hidden="true"></i>
       </button>
@@ -57,12 +66,132 @@
     </div>
   </header>
 
+  <dialog id="providerDialog" class="settings-dialog">
+    <form method="dialog" class="settings-panel">
+      <div class="settings-heading">
+        <div>
+          <h2>AI Provider</h2>
+          <p>Your provider API key stays in this browser and is never saved to the Lang Tutor server.</p>
+        </div>
+        <button type="submit" class="settings-close" aria-label="Close">
+          <i class="ti ti-x" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div class="provider-grid">
+        <section class="provider-form">
+          <label class="settings-field">
+            <span>Provider</span>
+            <select id="providerSelect">
+              <option value="anthropic">Anthropic Claude</option>
+              <option value="openai">OpenAI ChatGPT</option>
+              <option value="gemini">Google Gemini</option>
+            </select>
+          </label>
+          <label class="settings-field">
+            <span>Model</span>
+            <select id="providerModelSelect" disabled>
+              <option value="">Enter an API key, then load models</option>
+            </select>
+          </label>
+          <div class="model-action-row">
+            <button type="button" id="refreshProviderModelsBtn" class="ghost-btn">
+              <i class="ti ti-refresh" aria-hidden="true"></i>
+              <span>Load models</span>
+            </button>
+            <span id="providerModelWarning" class="settings-warning"></span>
+          </div>
+          <label class="settings-field">
+            <span>API key</span>
+            <input id="providerApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste provider API key">
+          </label>
+          <label class="settings-check">
+            <input id="rememberProviderKey" type="checkbox">
+            <span>Remember this key on this device</span>
+          </label>
+          <p class="settings-note">
+            Remembered keys are stored in browser localStorage for this device only. Leave unchecked to keep the key in memory until this tab is closed.
+          </p>
+          <button type="button" id="saveProviderBtn" class="primary-btn">
+            <i class="ti ti-device-floppy" aria-hidden="true"></i>
+            <span>Save provider</span>
+          </button>
+          <p id="providerStatus" class="settings-status" role="status"></p>
+        </section>
+
+        <section class="provider-help">
+          <h3 id="providerHelpTitle">Anthropic Claude setup</h3>
+          <ol id="providerHelpSteps"></ol>
+          <div id="providerHelpLinks" class="settings-link-row"></div>
+        </section>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="accountDialog" class="settings-dialog">
+    <form method="dialog" class="settings-panel account-panel">
+      <div class="settings-heading">
+        <div>
+          <h2>Account</h2>
+          <p>Sign in to sync progress and chat history across browsers. Provider API keys are not synced.</p>
+        </div>
+        <button type="submit" class="settings-close" aria-label="Close">
+          <i class="ti ti-x" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <div id="signedInPanel" class="signed-in-panel" style="display:none">
+        <span class="settings-note-label">Signed in</span>
+        <strong id="signedInEmail"></strong>
+        <button type="button" id="signOutBtn" class="ghost-btn">
+          <i class="ti ti-logout" aria-hidden="true"></i>
+          <span>Sign out</span>
+        </button>
+      </div>
+
+      <div id="signedOutPanel" class="signed-out-panel">
+        <div class="account-mode-tabs" role="tablist" aria-label="Account action">
+          <button type="button" id="signInModeBtn" class="is-active">Sign in</button>
+          <button type="button" id="registerModeBtn">Create</button>
+        </div>
+        <label class="settings-field">
+          <span>Email</span>
+          <input id="accountEmail" type="email" autocomplete="email">
+        </label>
+        <label class="settings-field">
+          <span>Password</span>
+          <input id="accountPassword" type="password" autocomplete="current-password" minlength="8">
+        </label>
+        <button type="button" id="accountSubmitBtn" class="primary-btn">
+          <i class="ti ti-login" aria-hidden="true"></i>
+          <span>Sign in</span>
+        </button>
+      </div>
+      <p id="accountStatus" class="settings-status" role="status"></p>
+    </form>
+  </dialog>
+
   <!-- ─── Chapter strip ───────────────────────────────────── -->
   <div id="chapterStrip" class="chapter-strip">
-    <span class="folio" id="folio">Pg.&nbsp;—</span>
-    <h1 class="chapter-name" id="chapterName">A blank page</h1>
+    <span class="folio" id="folio">Start</span>
+    <h1 class="chapter-name" id="chapterName">Ready to begin</h1>
     <span class="chapter-meta" id="chapterMeta"></span>
   </div>
+
+  <section id="authGate" class="auth-gate" aria-labelledby="authGateTitle" hidden>
+    <div class="auth-gate-panel">
+      <span class="auth-gate-kicker">Account required</span>
+      <h2 id="authGateTitle">Sign in to use Lang Tutor.</h2>
+      <p>
+        Your lessons, chat history, code, and progress are saved to your account so you can continue from another browser.
+        Provider API keys stay on this device and are never stored on the Lang Tutor server.
+      </p>
+      <button type="button" id="authGateAccountBtn" class="primary-btn">
+        <i class="ti ti-user-circle" aria-hidden="true"></i>
+        <span>Sign in or create account</span>
+      </button>
+    </div>
+  </section>
 
   <!-- ─── Body ───────────────────────────────────────────── -->
   <div id="bodySplit">

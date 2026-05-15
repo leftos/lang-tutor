@@ -1,5 +1,7 @@
 import type { Diagnostic } from '@codemirror/lint';
 import type { EditorState } from '@codemirror/state';
+import { appUrl } from './appUrls';
+import { canUseHostedTooling } from './authClient';
 import type { LanguageId } from './types';
 
 interface BackendDiagnostic {
@@ -45,13 +47,14 @@ function lineColToPos(state: EditorState, line: number, col: number): number {
  * Returns [] silently if the toolchain is unavailable.
  */
 export async function fetchDiagnostics(lang: LanguageId, state: EditorState): Promise<Diagnostic[]> {
+  if (!canUseHostedTooling()) return [];
   if (unavailable.has(lang)) return [];
   const code = state.doc.toString();
   if (!code.trim()) return [];
 
   let response: Response;
   try {
-    response = await fetch('/check', {
+    response = await fetch(appUrl('/check'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lang, code }),
@@ -96,9 +99,10 @@ export async function fetchDiagnostics(lang: LanguageId, state: EditorState): Pr
  * null if the formatter is unavailable / failed (caller should leave content untouched).
  */
 export async function fetchFormatted(lang: LanguageId, code: string): Promise<string | null> {
+  if (!canUseHostedTooling()) return null;
   let response: Response;
   try {
-    response = await fetch('/format', {
+    response = await fetch(appUrl('/format'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lang, code }),

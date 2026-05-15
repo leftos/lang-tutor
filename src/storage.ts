@@ -1,10 +1,14 @@
+import { appUrl } from './appUrls';
+import { csrfHeader, hasAuthSession, isAuthRequired } from './authClient';
+
 const STATE_PREFIX = 'lang-tutor:';
 const STATE_ENDPOINT = '/state/local-storage';
+const SENSITIVE_KEYS = new Set(['lang-tutor:provider-settings']);
 
 let remoteStateAvailable = false;
 
 function isMirroredKey(key: string): boolean {
-  return key.startsWith(STATE_PREFIX);
+  return key.startsWith(STATE_PREFIX) && !SENSITIVE_KEYS.has(key);
 }
 
 function collectMirroredEntries(): Record<string, string> {
@@ -23,27 +27,48 @@ function collectMirroredEntries(): Record<string, string> {
 async function postState(payload: unknown): Promise<void> {
   if (!remoteStateAvailable) return;
   try {
-    await fetch(STATE_ENDPOINT, {
+    const response = await fetch(appUrl(STATE_ENDPOINT), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', ...csrfHeader() },
       body: JSON.stringify(payload),
     });
+    if (!response.ok) remoteStateAvailable = false;
   } catch {
     remoteStateAvailable = false;
   }
 }
 
 export async function hydrateStorageFromDisk(): Promise<void> {
+  const authRequired = isAuthRequired();
+  const signedIn = hasAuthSession();
+  if (authRequired && !signedIn) {
+    remoteStateAvailable = false;
+    return;
+  }
   try {
-    const response = await fetch(STATE_ENDPOINT, { cache: 'no-store' });
+    const response = await fetch(appUrl(STATE_ENDPOINT), { cache: 'no-store' });
     if (!response.ok) return;
     const payload = (await response.json()) as { entries?: Record<string, string> };
     remoteStateAvailable = true;
 
     const entries = payload.entries ?? {};
-    for (const [key, value] of Object.entries(entries)) {
-      if (isMirroredKey(key) && localStorage.getItem(key) === null) {
-        localStorage.setItem(key, value);
+    const remoteHasState = Object.keys(entries).some(isMirroredKey);
+
+    if (authRequired && signedIn && remoteHasState) {
+      for (const key of Object.keys(collectMirroredEntries())) {
+        localStorage.removeItem(key);
+      }
+      for (const [key, value] of Object.entries(entries)) {
+        if (isMirroredKey(key)) {
+          localStorage.setItem(key, value);
+        }
+      }
+    } else {
+      for (const [key, value] of Object.entries(entries)) {
+        if (isMirroredKey(key) && localStorage.getItem(key) === null) {
+          localStorage.setItem(key, value);
+        }
       }
     }
 

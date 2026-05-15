@@ -6,6 +6,8 @@
  * call sites can decide whether to retry, fall back, or bubble up.
  */
 
+import { appUrl } from './appUrls';
+import { canUseHostedTooling } from './authClient';
 import type { FsTreeResponse, LanguageId } from './types';
 
 interface ScaffoldResponse {
@@ -36,8 +38,23 @@ interface StopResponse {
   readonly ok: boolean;
 }
 
+const hostedToolingUnavailableMessage = 'Sign in to use hosted project tooling.';
+
+const unavailableOpenTargets: OpenAvailability = {
+  vscode: false,
+  vs: false,
+  explorer: false,
+};
+
+function requireHostedTooling(): void {
+  if (!canUseHostedTooling()) {
+    throw new Error(hostedToolingUnavailableMessage);
+  }
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetch(url, {
+  requireHostedTooling();
+  const response = await fetch(appUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -47,13 +64,15 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  requireHostedTooling();
+  const response = await fetch(appUrl(url));
   if (!response.ok) throw new Error(`${url} → ${response.status}`);
   return (await response.json()) as T;
 }
 
 export async function ensureScaffold(lang: LanguageId): Promise<ScaffoldResponse> {
-  const response = await fetch(`/proj/scaffold?lang=${encodeURIComponent(lang)}`, { method: 'POST' });
+  requireHostedTooling();
+  const response = await fetch(appUrl(`/proj/scaffold?lang=${encodeURIComponent(lang)}`), { method: 'POST' });
   if (!response.ok) throw new Error(`/proj/scaffold → ${response.status}`);
   return (await response.json()) as ScaffoldResponse;
 }
@@ -92,6 +111,17 @@ export async function stopProject(lang: LanguageId): Promise<StopResponse> {
 }
 
 export async function getStatus(lang: LanguageId): Promise<ProjectStatus> {
+  if (!canUseHostedTooling()) {
+    return {
+      running: false,
+      ready: false,
+      phase: 'stopped',
+      pid: null,
+      lastExitCode: null,
+      vitePort: null,
+      error: hostedToolingUnavailableMessage,
+    };
+  }
   return getJson(`/proj/status?lang=${encodeURIComponent(lang)}`);
 }
 
@@ -134,7 +164,9 @@ export interface ProjectLogEntry {
  * Returns a function that closes the EventSource.
  */
 export function subscribeFsEvents(lang: LanguageId, onEvent: (event: FsWatchEvent) => void): () => void {
-  const url = `/fs/watch?lang=${encodeURIComponent(lang)}`;
+  if (!canUseHostedTooling()) return () => undefined;
+
+  const url = appUrl(`/fs/watch?lang=${encodeURIComponent(lang)}`);
   const source = new EventSource(url);
 
   source.addEventListener('message', (e) => {
@@ -155,6 +187,7 @@ export function subscribeFsEvents(lang: LanguageId, onEvent: (event: FsWatchEven
 }
 
 export async function fetchRecentLogs(lang: LanguageId, n: number): Promise<{ lines: ProjectLogEntry[] }> {
+  if (!canUseHostedTooling()) return { lines: [] };
   return getJson(`/proj/logs/recent?lang=${encodeURIComponent(lang)}&n=${n}`);
 }
 
@@ -167,6 +200,7 @@ export interface OpenAvailability {
 }
 
 export async function fetchOpenAvailability(): Promise<OpenAvailability> {
+  if (!canUseHostedTooling()) return unavailableOpenTargets;
   return getJson('/proj/open/targets');
 }
 
@@ -191,7 +225,9 @@ export async function captureProjectScreenshot(lang: LanguageId): Promise<Screen
  * The server sends recent buffered logs first, then live log lines as they arrive.
  */
 export function subscribeProjectLogs(lang: LanguageId, onEntry: (entry: ProjectLogEntry) => void): () => void {
-  const url = `/proj/logs?lang=${encodeURIComponent(lang)}`;
+  if (!canUseHostedTooling()) return () => undefined;
+
+  const url = appUrl(`/proj/logs?lang=${encodeURIComponent(lang)}`);
   const source = new EventSource(url);
 
   source.addEventListener('message', (e) => {

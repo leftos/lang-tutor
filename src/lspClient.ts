@@ -24,6 +24,8 @@
  * time any server publishes.
  */
 
+import { appUrl, appWsUrl } from './appUrls';
+import { canUseHostedTooling } from './authClient';
 import type { LanguageId } from './types';
 
 // ── LSP wire types (minimal subset) ─────────────────────────────────────────
@@ -290,13 +292,14 @@ function normalizeUri(uri: string): string {
  * initialize handshake fails. Caller should silently fall back.
  */
 export async function connectLsp(lang: LanguageId): Promise<LspClient | null> {
+  if (!canUseHostedTooling()) return null;
   const languageId = LSP_LANGUAGE_IDS[lang];
   if (languageId === undefined) return null;
 
   // 1. Spawn the bundle (one or more LSP children sharing a workspace).
   let spawnRes: Response;
   try {
-    spawnRes = await fetch('/lsp/spawn', {
+    spawnRes = await fetch(appUrl('/lsp/spawn'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lang }),
@@ -327,8 +330,7 @@ export async function connectLsp(lang: LanguageId): Promise<LspClient | null> {
   // 2. Open one WebSocket per server and run initialize on each.
   const sessions: ServerSession[] = [];
   for (const meta of servers) {
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${wsProto}//${window.location.host}/lsp?session=${encodeURIComponent(meta.sessionId)}`);
+    const ws = new WebSocket(appWsUrl(`/lsp?session=${encodeURIComponent(meta.sessionId)}`));
     await new Promise<void>((resolve, reject) => {
       ws.addEventListener('open', () => resolve(), { once: true });
       ws.addEventListener('error', () => reject(new Error('ws error')), { once: true });
@@ -356,7 +358,7 @@ export async function connectLsp(lang: LanguageId): Promise<LspClient | null> {
 
 async function disposeRemoteSession(sessionId: string): Promise<void> {
   try {
-    await fetch('/lsp/dispose', {
+    await fetch(appUrl('/lsp/dispose'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),

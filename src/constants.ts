@@ -1,6 +1,4 @@
 import type { Language, LanguageId } from './types';
-
-export const CLAUDE_MODEL = 'claude-sonnet-4-6';
 export const ACTIVE_LANG_KEY = 'lang-tutor:active';
 export const MAX_HISTORY = 30;
 
