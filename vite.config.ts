@@ -16,6 +16,14 @@ interface CheckBody {
   code?: string;
 }
 
+function normalizeBasePath(value: string | undefined): string {
+  const raw = value?.trim();
+  if (!raw) return '/';
+  if (raw === './') return raw;
+  const withLeadingSlash = raw.startsWith('/') ? raw : `/${raw}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
 function readJsonBody(req: { on: (e: string, cb: (...a: unknown[]) => void) => void }): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -114,7 +122,9 @@ function toolchainPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
+
   return {
+    base: normalizeBasePath(process.env.LANG_TUTOR_BASE_PATH ?? env.LANG_TUTOR_BASE_PATH),
     plugins: [tailwindcss(), toolchainPlugin()],
     build: {
       // CodeMirror language packages are intentionally isolated into one editor vendor chunk.
@@ -137,25 +147,6 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host: true,
-      proxy: {
-        '/v1': {
-          target: 'https://api.anthropic.com',
-          changeOrigin: true,
-          configure: (proxy) => {
-            proxy.on('proxyReq', (proxyReq) => {
-              proxyReq.setHeader('x-api-key', env.ANTHROPIC_API_KEY ?? '');
-              proxyReq.setHeader('anthropic-version', '2023-06-01');
-              proxyReq.removeHeader('origin');
-              proxyReq.removeHeader('referer');
-            });
-            proxy.on('proxyRes', (proxyRes) => {
-              // Cloudflare cookies meant for api.anthropic.com would be rejected by the
-              // browser as cross-origin and noisy in DevTools. Strip them.
-              delete proxyRes.headers['set-cookie'];
-            });
-          },
-        },
-      },
     },
   };
 });

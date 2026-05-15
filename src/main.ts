@@ -1,6 +1,15 @@
 import './style.css';
 import { callClaude, fetchProgressExtraction } from './api';
 import {
+  canUseHostedTooling,
+  isAuthRequired,
+  loadAuthSession,
+  loginAccount,
+  logoutAccount,
+  registerAccount,
+  type AccountSession,
+} from './authClient';
+import {
   ACTIVE_LANG_KEY,
   activeTabKey,
   codeKey,
@@ -34,10 +43,21 @@ import {
 } from './projectApi';
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
 import { createProjectPreview, type ProjectPreview, type ScreenshotPair } from './projectPreview';
+import {
+  DEFAULT_PROVIDER_MODELS,
+  fetchProviderModels,
+  loadProviderSettings,
+  PROVIDER_LABELS,
+  type ProviderModel,
+  providerSetupUrl,
+  readProviderKey,
+  saveProviderSettings,
+} from './providerSettings';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
 import { hydrateStorageFromDisk, storageDelete, storageGet, storageSet } from './storage';
 import type {
+  AiProvider,
   ContentBlock,
   ImageBlock,
   Language,
@@ -61,6 +81,8 @@ let currentSystemPrompt = '';
 let extractionQueued = false;
 let isSending = false;
 let editor: TutorEditor;
+let authSession: AccountSession | null = null;
+let accountMode: 'sign-in' | 'register' = 'sign-in';
 // Per-language project state. Project-kind languages (e.g. 'web') own
 // files on disk; this map caches the tree + tab UI state in memory.
 const projectStates = new Map<LanguageId, ProjectState>();
@@ -87,6 +109,323 @@ function span(text: string, ...classes: string[]): HTMLSpanElement {
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
+}
+
+// ── Account / provider settings ──────────────────────────────────────────
+function renderAccountSummary(): void {
+  const status = el('authStatus');
+  const accountBtn = el<HTMLButtonElement>('accountBtn');
+  if (authSession !== null) {
+    status.textContent = authSession.user.email;
+    accountBtn.querySelector('span')!.textContent = 'Account';
+  } else {
+    status.textContent = isAuthRequired() ? 'Sign in required' : 'Local progress';
+    accountBtn.querySelector('span')!.textContent = 'Sign in';
+  }
+
+  const signedIn = el('signedInPanel');
+  const signedOut = el('signedOutPanel');
+  signedIn.style.display = authSession !== null ? 'grid' : 'none';
+  signedOut.style.display = authSession === null ? 'block' : 'none';
+  if (authSession !== null) {
+    el('signedInEmail').textContent = authSession.user.email;
+  }
+  updateAuthGate();
+}
+
+function updateAuthGate(): void {
+  const locked = isAuthRequired() && authSession === null;
+  document.documentElement.classList.toggle('auth-required', locked);
+  const gate = document.getElementById('authGate');
+  if (gate !== null) {
+    gate.hidden = !locked;
+  }
+}
+
+function renderAccountMode(): void {
+  el('signInModeBtn').classList.toggle('is-active', accountMode === 'sign-in');
+  el('registerModeBtn').classList.toggle('is-active', accountMode === 'register');
+  el<HTMLInputElement>('accountPassword').autocomplete = accountMode === 'sign-in' ? 'current-password' : 'new-password';
+  el('accountSubmitBtn').querySelector('span')!.textContent = accountMode === 'sign-in' ? 'Sign in' : 'Create account';
+}
+
+async function initializeAuth(): Promise<void> {
+  try {
+    authSession = await loadAuthSession();
+  } catch (e) {
+    console.warn('[auth] session load failed', e);
+    authSession = null;
+  }
+  renderAccountSummary();
+  renderAccountMode();
+}
+
+async function submitAccount(): Promise<void> {
+  const email = el<HTMLInputElement>('accountEmail').value.trim();
+  const password = el<HTMLInputElement>('accountPassword').value;
+  const status = el('accountStatus');
+  if (!email || !password) {
+    status.textContent = 'Enter an email and password.';
+    return;
+  }
+
+  el<HTMLButtonElement>('accountSubmitBtn').disabled = true;
+  status.textContent = accountMode === 'sign-in' ? 'Signing in...' : 'Creating account...';
+  try {
+    authSession = accountMode === 'sign-in' ? await loginAccount({ email, password }) : await registerAccount({ email, password });
+    el<HTMLInputElement>('accountPassword').value = '';
+    status.textContent = 'Progress sync is active.';
+    renderAccountSummary();
+    await hydrateStorageFromDisk();
+    loadLanguageState(activeLang);
+  } catch (e) {
+    status.textContent = e instanceof Error ? e.message : String(e);
+  } finally {
+    el<HTMLButtonElement>('accountSubmitBtn').disabled = false;
+  }
+}
+
+async function signOut(): Promise<void> {
+  const status = el('accountStatus');
+  el<HTMLButtonElement>('signOutBtn').disabled = true;
+  status.textContent = 'Signing out...';
+  try {
+    await logoutAccount();
+    authSession = null;
+    status.textContent = 'Signed out. Progress remains cached in this browser.';
+    renderAccountSummary();
+    loadLanguageState(activeLang);
+  } catch (e) {
+    status.textContent = e instanceof Error ? e.message : String(e);
+  } finally {
+    el<HTMLButtonElement>('signOutBtn').disabled = false;
+  }
+}
+
+const providerHelp: Record<AiProvider, { title: string; steps: string[]; links: Array<{ label: string; href: string }> }> = {
+  anthropic: {
+    title: 'Anthropic Claude setup',
+    steps: [
+      'Create or sign in to an Anthropic Console account.',
+      'Open Billing, add payment details, and buy usage credits. $20 is a reasonable starting amount for light personal use.',
+      'Open API Keys, create a key for Lang Tutor, and paste it here.',
+      'Keep auto-reload off at first, or set conservative reload limits while you learn your usage.',
+    ],
+    links: [
+      { label: 'API keys', href: 'https://console.anthropic.com/settings/keys' },
+      { label: 'Billing', href: 'https://console.anthropic.com/settings/billing' },
+    ],
+  },
+  openai: {
+    title: 'OpenAI ChatGPT setup',
+    steps: [
+      'Create or sign in to an OpenAI platform account.',
+      'Open Billing, add payment details, then add prepaid credits. $20 is a reasonable starting balance for experimentation.',
+      'Open API keys and create a restricted key for this project when available.',
+      'Set a project budget or usage limit before sharing the app with anyone else.',
+    ],
+    links: [
+      { label: 'API keys', href: 'https://platform.openai.com/api-keys' },
+      { label: 'Billing', href: 'https://platform.openai.com/settings/organization/billing/overview' },
+    ],
+  },
+  gemini: {
+    title: 'Google Gemini setup',
+    steps: [
+      'Create or sign in to Google AI Studio.',
+      'Create a Gemini API key for a Google Cloud project and paste it here.',
+      'Gemini often starts with free-tier usage. For paid quota, attach a Google Cloud billing account instead of prepaid credits.',
+      'Set a Cloud Billing budget or alert around $20 so unexpected usage is visible quickly.',
+    ],
+    links: [
+      { label: 'API keys', href: 'https://aistudio.google.com/apikey' },
+      { label: 'Billing', href: 'https://console.cloud.google.com/billing' },
+    ],
+  },
+};
+
+function selectedProvider(): AiProvider {
+  const raw = el<HTMLSelectElement>('providerSelect').value;
+  return raw === 'openai' || raw === 'gemini' ? raw : 'anthropic';
+}
+
+const providerModelCache = new Map<AiProvider, { apiKey: string; models: ProviderModel[] }>();
+let providerModelRequestId = 0;
+
+function providerFormKey(provider: AiProvider): string {
+  return el<HTMLInputElement>('providerApiKey').value.trim() || readProviderKey(provider);
+}
+
+function setProviderModelWarning(message: string): void {
+  el('providerModelWarning').textContent = message;
+}
+
+function updateProviderSaveAvailability(): void {
+  const provider = selectedProvider();
+  const select = el<HTMLSelectElement>('providerModelSelect');
+  const hasKey = providerFormKey(provider).trim().length > 0;
+  const hasModel = !select.disabled && select.value.trim().length > 0;
+  el<HTMLButtonElement>('saveProviderBtn').disabled = !hasKey || !hasModel;
+}
+
+function renderProviderModelPlaceholder(message: string, selectedModel = ''): void {
+  const select = el<HTMLSelectElement>('providerModelSelect');
+  select.textContent = '';
+  const option = document.createElement('option');
+  option.value = selectedModel;
+  option.textContent = selectedModel ? `${message}: ${selectedModel}` : message;
+  select.appendChild(option);
+  select.value = selectedModel;
+  select.disabled = true;
+  updateProviderSaveAvailability();
+}
+
+function renderProviderModelOptions(provider: AiProvider, models: readonly ProviderModel[], selectedModel: string): void {
+  const select = el<HTMLSelectElement>('providerModelSelect');
+  const savedModel = selectedModel.trim();
+  const hasSavedModel = savedModel.length > 0;
+  const savedStillAvailable = models.some((model) => model.id === savedModel);
+
+  select.textContent = '';
+  if (models.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No compatible chat models returned';
+    select.appendChild(option);
+    select.value = '';
+    select.disabled = true;
+    setProviderModelWarning(`${PROVIDER_LABELS[provider]} did not return any compatible text-generation models for this key.`);
+    updateProviderSaveAvailability();
+    return;
+  }
+
+  if (hasSavedModel && !savedStillAvailable) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Select an available model';
+    select.appendChild(option);
+    setProviderModelWarning(`Previously selected model "${savedModel}" is no longer available. Pick a new model.`);
+  } else {
+    setProviderModelWarning('');
+  }
+
+  for (const model of models) {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.label;
+    select.appendChild(option);
+  }
+
+  select.disabled = false;
+  select.value = savedStillAvailable ? savedModel : '';
+  if (!select.value && !hasSavedModel) select.selectedIndex = 0;
+  updateProviderSaveAvailability();
+}
+
+async function refreshProviderModels(provider = selectedProvider()): Promise<void> {
+  const apiKey = providerFormKey(provider).trim();
+  const selectedModel = loadProviderSettings().providers[provider].model || DEFAULT_PROVIDER_MODELS[provider];
+  const select = el<HTMLSelectElement>('providerModelSelect');
+  const refreshBtn = el<HTMLButtonElement>('refreshProviderModelsBtn');
+
+  if (!apiKey) {
+    renderProviderModelPlaceholder('Enter an API key, then load models');
+    setProviderModelWarning('Paste this provider API key before loading models.');
+    return;
+  }
+
+  const cached = providerModelCache.get(provider);
+  if (cached !== undefined && cached.apiKey === apiKey) {
+    renderProviderModelOptions(provider, cached.models, selectedModel);
+    return;
+  }
+
+  const requestId = ++providerModelRequestId;
+  setProviderModelWarning('Loading live model list...');
+  select.disabled = true;
+  refreshBtn.disabled = true;
+  try {
+    const models = await fetchProviderModels(provider, apiKey);
+    if (requestId !== providerModelRequestId || provider !== selectedProvider()) return;
+    providerModelCache.set(provider, { apiKey, models });
+    renderProviderModelOptions(provider, models, selectedModel);
+  } catch (e) {
+    if (requestId !== providerModelRequestId || provider !== selectedProvider()) return;
+    renderProviderModelPlaceholder('Could not load models');
+    setProviderModelWarning(e instanceof Error ? e.message : String(e));
+  } finally {
+    if (requestId === providerModelRequestId) {
+      refreshBtn.disabled = false;
+    }
+  }
+}
+
+function renderProviderHelp(provider: AiProvider): void {
+  const help = providerHelp[provider];
+  el('providerHelpTitle').textContent = help.title;
+  const steps = el<HTMLOListElement>('providerHelpSteps');
+  steps.textContent = '';
+  for (const step of help.steps) {
+    const li = document.createElement('li');
+    li.textContent = step;
+    steps.appendChild(li);
+  }
+  const links = el('providerHelpLinks');
+  links.textContent = '';
+  for (const link of help.links) {
+    const a = document.createElement('a');
+    a.href = link.href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = link.label;
+    links.appendChild(a);
+  }
+}
+
+function renderProviderSettings(providerOverride?: AiProvider): void {
+  const settings = loadProviderSettings();
+  const provider = providerOverride ?? settings.activeProvider;
+  const model = settings.providers[provider].model || DEFAULT_PROVIDER_MODELS[provider];
+  const apiKey = readProviderKey(provider);
+  el<HTMLSelectElement>('providerSelect').value = provider;
+  el<HTMLInputElement>('providerApiKey').value = apiKey;
+  el<HTMLInputElement>('rememberProviderKey').checked = settings.rememberKeys;
+  el('providerBtn').querySelector('span')!.textContent = PROVIDER_LABELS[settings.activeProvider];
+  renderProviderHelp(provider);
+  setProviderModelWarning('');
+  const cached = providerModelCache.get(provider);
+  if (apiKey && cached !== undefined && cached.apiKey === apiKey) {
+    renderProviderModelOptions(provider, cached.models, model);
+  } else {
+    renderProviderModelPlaceholder(apiKey ? 'Load models to choose' : 'Enter an API key, then load models', model);
+    if (apiKey) void refreshProviderModels(provider);
+  }
+}
+
+function saveProviderForm(): void {
+  const provider = selectedProvider();
+  const settings = loadProviderSettings();
+  const model = el<HTMLSelectElement>('providerModelSelect').value.trim();
+  const apiKey = el<HTMLInputElement>('providerApiKey').value.trim() || readProviderKey(provider);
+  const rememberKeys = el<HTMLInputElement>('rememberProviderKey').checked;
+  if (!apiKey) {
+    setProviderModelWarning('Paste this provider API key before saving.');
+    updateProviderSaveAvailability();
+    return;
+  }
+  if (!model) {
+    setProviderModelWarning('Pick an available model from the live provider list before saving.');
+    updateProviderSaveAvailability();
+    return;
+  }
+  settings.activeProvider = provider;
+  settings.rememberKeys = rememberKeys;
+  settings.providers[provider] = apiKey ? { model, apiKey } : { model };
+  saveProviderSettings(settings);
+  renderProviderSettings(provider);
+  el('providerStatus').textContent = apiKey
+    ? `Using ${PROVIDER_LABELS[provider]} with ${model}.`
+    : `Saved ${PROVIDER_LABELS[provider]} model. Paste an API key before chatting.`;
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────
@@ -174,15 +513,15 @@ function renderChapterStrip(): void {
   const meta = el('chapterMeta');
 
   if (progress === null) {
-    folio.textContent = 'Pg. —';
-    name.textContent = 'A blank page';
-    meta.textContent = `awaiting first ${lang.name} session`;
+    folio.textContent = 'Start';
+    name.textContent = 'Ready to begin';
+    meta.textContent = `No ${lang.name} progress yet`;
     return;
   }
 
   const idx = findCurrentTopicIndex(progress, lang);
   const topic = idx >= 0 ? lang.topics[idx] : undefined;
-  folio.textContent = topic !== undefined ? `Ch. ${pad2(idx + 1)}` : 'Pg. —';
+  folio.textContent = topic !== undefined ? `Topic ${pad2(idx + 1)}` : 'Progress';
   name.textContent = progress.currentTopic ?? topic?.title ?? 'In progress';
 
   const sessionN = progress.sessionCount ?? 1;
@@ -582,7 +921,7 @@ function showStartScreen(): void {
   screen.id = 'startScreen';
 
   const folio = div('start-folio');
-  folio.textContent = `vol. ${pad2(LANGUAGE_IDS.indexOf(lang.id) + 1)} · ${lang.name.toLowerCase()}`;
+  folio.textContent = `course ${pad2(LANGUAGE_IDS.indexOf(lang.id) + 1)} · ${lang.name.toLowerCase()}`;
   screen.appendChild(folio);
 
   const rule = div('start-rule');
@@ -594,17 +933,17 @@ function showStartScreen(): void {
 
   const title = document.createElement('h2');
   title.className = 'start-title';
-  title.textContent = `A new ${lang.name} reader.`;
+  title.textContent = `Start a new ${lang.name} session.`;
   screen.appendChild(title);
 
   const body = div('start-body');
-  body.textContent = `An interactive manual. Write code in the workshop, run it, and submit your work for review. The tutor adapts to where you are.`;
+  body.textContent = `Practice in the editor, run your code, and send your work to the tutor for review. The tutor adapts to your background and progress.`;
   screen.appendChild(body);
 
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'start-btn';
-  button.appendChild(document.createTextNode(`Open the book`));
+  button.appendChild(document.createTextNode(`Start session`));
   const arrow = document.createElement('i');
   arrow.className = 'ti ti-arrow-narrow-right';
   arrow.setAttribute('aria-hidden', 'true');
@@ -689,6 +1028,9 @@ const OPEN_TARGETS_BY_LANG: Record<LanguageId, readonly { id: OpenTarget; label:
 };
 
 function ensureOpenAvailability(): Promise<OpenAvailability> {
+  if (!canUseHostedTooling()) {
+    return Promise.resolve({ vscode: false, vs: false, explorer: false });
+  }
   if (openAvailabilityPromise === null) {
     openAvailabilityPromise = fetchOpenAvailability().then((a) => {
       openAvailability = a;
@@ -696,6 +1038,25 @@ function ensureOpenAvailability(): Promise<OpenAvailability> {
     });
   }
   return openAvailabilityPromise;
+}
+
+function renderProjectAuthRequired(lang: Language): void {
+  if (currentProjectUILang !== null || projectEditorInstance !== null || projectPreviewInstance !== null || projectFileTree !== null) {
+    destroyProjectUI();
+  }
+  el('projTree').textContent = 'Sign in to use hosted project files.';
+  el('projTabs').textContent = '';
+  el('projEditor').textContent = '';
+  el('projStatus').textContent = 'Sign in required';
+  el('projPreviewBody').textContent = `${lang.name} projects run on the hosted server and require an account.`;
+  el('projPreviewTabs').textContent = '';
+  el('projPreviewStatus').textContent = 'locked';
+  el('projReloadBtn').setAttribute('disabled', 'true');
+  el('projOpenExternalBtn').setAttribute('disabled', 'true');
+  el('projScreenshotBtn').setAttribute('disabled', 'true');
+  el('projConsoleRunBtn').setAttribute('disabled', 'true');
+  el('projRunBtn').setAttribute('disabled', 'true');
+  el('projRunLabel').textContent = 'Sign in';
 }
 
 function buildOpenInOptions(id: LanguageId): OpenInOption[] {
@@ -824,8 +1185,18 @@ function handleFsEvent(id: LanguageId, event: FsWatchEvent): void {
 
 function ensureProjectUI(id: LanguageId, lang: Language): void {
   if (lang.kind !== 'project') return;
+  if (!canUseHostedTooling()) {
+    renderProjectAuthRequired(lang);
+    return;
+  }
   if (currentProjectUILang === id) return;
   if (currentProjectUILang !== null) destroyProjectUI();
+
+  el('projReloadBtn').removeAttribute('disabled');
+  el('projOpenExternalBtn').removeAttribute('disabled');
+  el('projScreenshotBtn').removeAttribute('disabled');
+  el('projConsoleRunBtn').removeAttribute('disabled');
+  el('projRunBtn').removeAttribute('disabled');
 
   const state = projectStates.get(id) ?? loadProjectStateFromStorage(id);
   projectStates.set(id, state);
@@ -1072,6 +1443,7 @@ function loadProjectStateFromStorage(id: LanguageId): ProjectState {
 
 async function hydrateProjectState(id: LanguageId, lang: Language): Promise<void> {
   if (lang.kind !== 'project') return;
+  if (!canUseHostedTooling()) return;
   const langWhenStarted = id;
 
   try {
@@ -1879,6 +2251,52 @@ el('evalBtn').addEventListener('click', () => void evaluateCode());
 el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
 el('resetBtn').addEventListener('click', () => void resetCurrentLanguage());
 el('themeToggle').addEventListener('click', toggleTheme);
+el('providerBtn').addEventListener('click', () => {
+  renderProviderSettings();
+  el<HTMLDialogElement>('providerDialog').showModal();
+});
+el('accountBtn').addEventListener('click', () => {
+  renderAccountSummary();
+  renderAccountMode();
+  el('accountStatus').textContent = '';
+  el<HTMLDialogElement>('accountDialog').showModal();
+});
+el('authGateAccountBtn').addEventListener('click', () => {
+  renderAccountSummary();
+  renderAccountMode();
+  el('accountStatus').textContent = '';
+  el<HTMLDialogElement>('accountDialog').showModal();
+});
+el<HTMLSelectElement>('providerSelect').addEventListener('change', () => renderProviderSettings(selectedProvider()));
+el<HTMLSelectElement>('providerModelSelect').addEventListener('change', () => {
+  setProviderModelWarning('');
+  updateProviderSaveAvailability();
+});
+el<HTMLInputElement>('providerApiKey').addEventListener('input', () => {
+  providerModelRequestId++;
+  const provider = selectedProvider();
+  providerModelCache.delete(provider);
+  renderProviderModelPlaceholder('Load models with this API key');
+  setProviderModelWarning('');
+});
+el('refreshProviderModelsBtn').addEventListener('click', () => void refreshProviderModels());
+el('saveProviderBtn').addEventListener('click', saveProviderForm);
+el('signInModeBtn').addEventListener('click', () => {
+  accountMode = 'sign-in';
+  renderAccountMode();
+});
+el('registerModeBtn').addEventListener('click', () => {
+  accountMode = 'register';
+  renderAccountMode();
+});
+el('accountSubmitBtn').addEventListener('click', () => void submitAccount());
+el<HTMLInputElement>('accountPassword').addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    void submitAccount();
+  }
+});
+el('signOutBtn').addEventListener('click', () => void signOut());
 
 for (const tab of document.querySelectorAll<HTMLButtonElement>('.lang-tab')) {
   tab.addEventListener('click', () => {
@@ -1893,6 +2311,8 @@ initProjectPreviewResize();
 initProjectTreeResize();
 
 // ── Init ──────────────────────────────────────────────────────────────────
+renderProviderSettings();
+await initializeAuth();
 await hydrateStorageFromDisk();
 applyStoredTheme();
 migrateOldStorage();

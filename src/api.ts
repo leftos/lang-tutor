@@ -1,5 +1,5 @@
-import { CLAUDE_MODEL } from './constants';
-import type { ClaudeResponse, ContentBlock, Message, Progress, TextBlock, Topic } from './types';
+import { resolveProviderConfig } from './providerSettings';
+import type { ClaudeResponse, ContentBlock, ImageBlock, Message, Progress, ProviderConfig, TextBlock, Topic } from './types';
 
 /** Extract the plain-text content of a message, ignoring any image blocks. */
 function messageText(m: Message): string {
@@ -13,45 +13,6 @@ function messageText(m: Message): string {
 interface PostResult {
   ok: boolean;
   text: string;
-  raw: ClaudeResponse | null;
-}
-
-async function postMessages(body: object): Promise<PostResult> {
-  let r: Response;
-  try {
-    r = await fetch('/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error('[api] fetch /v1/messages threw:', e);
-    return { ok: false, text: `Network error: ${msg}. Is the dev server running and the proxy reachable?`, raw: null };
-  }
-
-  let parsed: ClaudeResponse | null = null;
-  let bodyText = '';
-  try {
-    bodyText = await r.text();
-    parsed = JSON.parse(bodyText) as ClaudeResponse;
-  } catch {
-    console.error(`[api] /v1/messages returned non-JSON (HTTP ${r.status}):`, bodyText.slice(0, 500));
-    return { ok: false, text: `API returned non-JSON (HTTP ${r.status}). Check the dev server / proxy.`, raw: null };
-  }
-
-  if (!r.ok) {
-    const apiMsg = parsed.error?.message ?? `HTTP ${r.status}`;
-    console.error(`[api] Anthropic API error (HTTP ${r.status}):`, parsed);
-    return { ok: false, text: `API error: ${apiMsg}`, raw: parsed };
-  }
-
-  const text = parsed.content?.find((b) => b.type === 'text')?.text;
-  if (text === undefined) {
-    console.error('[api] Unexpected response shape (no text content):', parsed);
-    return { ok: false, text: 'Response had no text content. See console for the raw payload.', raw: parsed };
-  }
-  return { ok: true, text, raw: parsed };
 }
 
 interface StreamUsage {
@@ -61,12 +22,21 @@ interface StreamUsage {
   cache_creation_input_tokens?: number;
 }
 
-interface StreamEvent {
+interface AnthropicStreamEvent {
   type: string;
   delta?: { type: string; text?: string };
   error?: { message: string };
   message?: { usage?: StreamUsage };
-  usage?: StreamUsage;
+}
+
+interface OpenAiStreamEvent {
+  error?: { message?: string };
+  choices?: Array<{ delta?: { content?: string | Array<{ text?: string }> } }>;
+}
+
+interface GeminiStreamEvent {
+  error?: { message?: string };
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 }
 
 export interface CallResult {
@@ -74,36 +44,59 @@ export interface CallResult {
   text: string;
 }
 
-/**
- * Stream a Claude completion. Calls `onDelta` with each text chunk as it arrives,
- * and resolves with `{ ok, text }`. On `ok: false`, `text` is a user-facing error
- * message and no deltas were emitted. Partial-stream-then-error is treated as a
- * success: callers see whatever text streamed, and the trailing error is logged.
- *
- * Prompt caching: marks the system block and the final message with
- * `cache_control: { type: 'ephemeral' }`. The next turn within the 5-minute TTL
- * reuses the entire prefix (system + every prior message including this one's
- * last) at ~10 % of the input-token cost. Cache misses on the first turn or
- * after the system text changes (language switch / progress refresh) — that's
- * billed at the normal write-cost (~125 % of input) once, then amortised
- * across subsequent reuse turns. cache_read / cache_creation token counts are
- * surfaced via console.info from `message_start`.
- *
- * Heads-up: Anthropic silently ignores cache_control when the cached prefix
- * is under the model's minimum (verified empirically as ~2048 tokens for
- * claude-sonnet-4-6 — between 1960 t and 2103 t in a binary search). For
- * most languages the first-session prompt is under that threshold, so
- * caching only kicks in after a few exchanges add enough history. The
- * markers themselves cost nothing — Anthropic just bills as normal input.
- */
-export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
-  // Convert the final message to block form so we can attach cache_control.
-  // Earlier messages stay as-is — Anthropic only needs the marker on the last
-  // block of the prefix we want cached. The final message's content may already
-  // be a ContentBlock[] (e.g. text + image attachment); in that case we attach
-  // the marker to its last text block, leaving image blocks untouched.
+function missingProviderResult(): CallResult {
+  return {
+    ok: false,
+    text:
+      'Add an AI provider API key before chatting. Open AI Provider, choose Anthropic Claude, OpenAI ChatGPT, or Google Gemini, then paste your key.',
+  };
+}
+
+async function parseError(response: Response): Promise<string> {
+  try {
+    const parsed = (await response.json()) as { error?: { message?: string } };
+    return parsed.error?.message ?? `HTTP ${response.status}`;
+  } catch {
+    return `HTTP ${response.status}`;
+  }
+}
+
+async function streamSse(response: Response, onData: (data: string) => void): Promise<void> {
+  if (response.body === null) throw new Error('API returned no response body.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf('\n\n');
+    while (sep !== -1) {
+      const block = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      for (const line of block.split('\n')) {
+        const trimmed = line.trimEnd();
+        if (!trimmed.startsWith('data: ')) continue;
+        const data = trimmed.slice(6);
+        if (data && data !== '[DONE]') onData(data);
+      }
+      sep = buffer.indexOf('\n\n');
+    }
+  }
+}
+
+function dataUrlFromImageBlock(block: ImageBlock): string {
+  return `data:${block.source.media_type};base64,${block.source.data}`;
+}
+
+function anthropicMessageContent(content: Message['content']): string | ContentBlock[] {
+  return content;
+}
+
+function withAnthropicCache(msgs: Message[]): Message[] {
   const lastIdx = msgs.length - 1;
-  const messagesPayload = msgs.map((m, i) => {
+  return msgs.map((m, i) => {
     if (i !== lastIdx) return m;
     if (typeof m.content === 'string') {
       return {
@@ -119,7 +112,6 @@ export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk:
       }
     }
     if (lastTextIdx === -1) {
-      // Image-only payload — append a 1-char text block to carry the marker.
       return {
         role: m.role,
         content: [...m.content, { type: 'text', text: ' ', cache_control: { type: 'ephemeral' } }],
@@ -127,103 +119,277 @@ export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk:
     }
     const newContent: ContentBlock[] = m.content.map((b, j) => {
       if (j !== lastTextIdx || b.type !== 'text') return b;
-      return { ...b, cache_control: { type: 'ephemeral' } } as TextBlock;
+      return { ...b, cache_control: { type: 'ephemeral' } };
     });
     return { role: m.role, content: newContent };
   });
+}
 
-  let r: Response;
+function toOpenAiContent(content: Message['content']): string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> {
+  if (typeof content === 'string') return content;
+  return content.map((block) => {
+    if (block.type === 'text') return { type: 'text', text: block.text };
+    return { type: 'image_url', image_url: { url: dataUrlFromImageBlock(block) } };
+  });
+}
+
+function toGeminiParts(content: Message['content']): Array<{ text: string } | { inline_data: { mime_type: string; data: string } }> {
+  if (typeof content === 'string') return [{ text: content }];
+  return content.map((block) => {
+    if (block.type === 'text') return { text: block.text };
+    return { inline_data: { mime_type: block.source.media_type, data: block.source.data } };
+  });
+}
+
+async function callAnthropic(config: ProviderConfig, msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
+  let response: Response;
   try {
-    r = await fetch('/v1/messages', {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
       body: JSON.stringify({
-        model: CLAUDE_MODEL,
+        model: config.model,
         max_tokens: 1000,
         system: [{ type: 'text', text: sys, cache_control: { type: 'ephemeral' } }],
-        messages: messagesPayload,
+        messages: withAnthropicCache(msgs).map((m) => ({ role: m.role, content: anthropicMessageContent(m.content) })),
         stream: true,
       }),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error('[api] streaming fetch threw:', e);
-    return { ok: false, text: `Network error: ${msg}. Is the dev server running and the proxy reachable?` };
+    return { ok: false, text: `Network error: ${msg}. Check that this browser can reach Anthropic's API.` };
   }
 
-  if (!r.ok) {
-    let errMsg = `HTTP ${r.status}`;
-    try {
-      const errBody = (await r.json()) as ClaudeResponse;
-      errMsg = errBody.error?.message ?? errMsg;
-      console.error(`[api] Anthropic API error (HTTP ${r.status}):`, errBody);
-    } catch {
-      console.error(`[api] Anthropic API error (HTTP ${r.status}), no JSON body.`);
-    }
-    return { ok: false, text: `API error: ${errMsg}` };
-  }
+  if (!response.ok) return { ok: false, text: `API error: ${await parseError(response)}` };
 
-  if (r.body === null) {
-    console.error('[api] streaming response had no body.');
-    return { ok: false, text: 'API returned no response body.' };
-  }
-
-  const reader = r.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let fullText = '';
   let streamError: string | null = null;
-
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      // Each SSE event ends with a blank line ("\n\n").
-      let sep = buffer.indexOf('\n\n');
-      while (sep !== -1) {
-        const block = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        for (const line of block.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          const dataStr = line.slice(6);
-          if (dataStr === '[DONE]') continue;
-          let event: StreamEvent;
-          try {
-            event = JSON.parse(dataStr) as StreamEvent;
-          } catch {
-            continue;
-          }
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
-            fullText += event.delta.text;
-            onDelta?.(event.delta.text);
-          } else if (event.type === 'message_start' && event.message?.usage !== undefined) {
-            // message_start carries the input-side numbers (input_tokens,
-            // cache_read_input_tokens, cache_creation_input_tokens). One log
-            // per turn so the user can confirm caching is hitting.
-            const u = event.message.usage;
-            const read = u.cache_read_input_tokens ?? 0;
-            const created = u.cache_creation_input_tokens ?? 0;
-            const fresh = u.input_tokens ?? 0;
-            const cacheStatus = read > 0 ? `HIT (${read}t cached)` : created > 0 ? `MISS (${created}t cached for next turn)` : 'no-cache';
-            console.info(`[api] cache: ${cacheStatus} · uncached input=${fresh}t`);
-          } else if (event.type === 'error' && event.error) {
-            streamError = event.error.message;
-            console.error('[api] stream error event:', event.error);
-          }
-        }
-        sep = buffer.indexOf('\n\n');
+    await streamSse(response, (data) => {
+      let event: AnthropicStreamEvent;
+      try {
+        event = JSON.parse(data) as AnthropicStreamEvent;
+      } catch {
+        return;
       }
-    }
+      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+        fullText += event.delta.text;
+        onDelta?.(event.delta.text);
+      } else if (event.type === 'message_start' && event.message?.usage !== undefined) {
+        const u = event.message.usage;
+        const read = u.cache_read_input_tokens ?? 0;
+        const created = u.cache_creation_input_tokens ?? 0;
+        const fresh = u.input_tokens ?? 0;
+        const cacheStatus = read > 0 ? `HIT (${read}t cached)` : created > 0 ? `MISS (${created}t cached for next turn)` : 'no-cache';
+        console.info(`[api] Anthropic cache: ${cacheStatus} · uncached input=${fresh}t`);
+      } else if (event.type === 'error' && event.error) {
+        streamError = event.error.message;
+      }
+    });
   } catch (e) {
-    console.error('[api] stream read error:', e);
     if (fullText === '') return { ok: false, text: `Stream error: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   if (streamError !== null && fullText === '') return { ok: false, text: `API error: ${streamError}` };
   if (fullText === '') return { ok: false, text: 'Stream produced no text. See console for details.' };
   return { ok: true, text: fullText };
+}
+
+async function callOpenAi(config: ProviderConfig, msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
+  let response: Response;
+  try {
+    response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_completion_tokens: 1000,
+        messages: [{ role: 'system', content: sys }, ...msgs.map((m) => ({ role: m.role, content: toOpenAiContent(m.content) }))],
+        stream: true,
+      }),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, text: `Network error: ${msg}. Check that this browser can reach OpenAI's API.` };
+  }
+
+  if (!response.ok) return { ok: false, text: `API error: ${await parseError(response)}` };
+
+  let fullText = '';
+  let streamError: string | null = null;
+  try {
+    await streamSse(response, (data) => {
+      let event: OpenAiStreamEvent;
+      try {
+        event = JSON.parse(data) as OpenAiStreamEvent;
+      } catch {
+        return;
+      }
+      if (event.error?.message) {
+        streamError = event.error.message;
+        return;
+      }
+      const delta = event.choices?.[0]?.delta?.content;
+      const chunk = typeof delta === 'string' ? delta : Array.isArray(delta) ? delta.map((part) => part.text ?? '').join('') : '';
+      if (chunk) {
+        fullText += chunk;
+        onDelta?.(chunk);
+      }
+    });
+  } catch (e) {
+    if (fullText === '') return { ok: false, text: `Stream error: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  if (streamError !== null && fullText === '') return { ok: false, text: `API error: ${streamError}` };
+  if (fullText === '') return { ok: false, text: 'Stream produced no text. See console for details.' };
+  return { ok: true, text: fullText };
+}
+
+async function callGemini(config: ProviderConfig, msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:streamGenerateContent?alt=sse`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': config.apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: sys }] },
+        contents: msgs.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: toGeminiParts(m.content) })),
+        generationConfig: { maxOutputTokens: 1000 },
+      }),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, text: `Network error: ${msg}. Check that this browser can reach Google's Gemini API.` };
+  }
+
+  if (!response.ok) return { ok: false, text: `API error: ${await parseError(response)}` };
+
+  let fullText = '';
+  let streamError: string | null = null;
+  try {
+    await streamSse(response, (data) => {
+      let event: GeminiStreamEvent;
+      try {
+        event = JSON.parse(data) as GeminiStreamEvent;
+      } catch {
+        return;
+      }
+      if (event.error?.message) {
+        streamError = event.error.message;
+        return;
+      }
+      const chunk = event.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
+      if (chunk) {
+        fullText += chunk;
+        onDelta?.(chunk);
+      }
+    });
+  } catch (e) {
+    if (fullText === '') return { ok: false, text: `Stream error: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  if (streamError !== null && fullText === '') return { ok: false, text: `API error: ${streamError}` };
+  if (fullText === '') return { ok: false, text: 'Stream produced no text. See console for details.' };
+  return { ok: true, text: fullText };
+}
+
+export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk: string) => void): Promise<CallResult> {
+  const config = resolveProviderConfig();
+  if (config === null) return missingProviderResult();
+
+  switch (config.provider) {
+    case 'anthropic':
+      return callAnthropic(config, msgs, sys, onDelta);
+    case 'openai':
+      return callOpenAi(config, msgs, sys, onDelta);
+    case 'gemini':
+      return callGemini(config, msgs, sys, onDelta);
+  }
+}
+
+async function postAnthropic(config: ProviderConfig, prompt: string): Promise<PostResult> {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': config.apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_tokens: 700,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!response.ok) return { ok: false, text: await parseError(response) };
+  const parsed = (await response.json()) as ClaudeResponse;
+  return { ok: true, text: parsed.content?.find((b) => b.type === 'text')?.text ?? '' };
+}
+
+async function postOpenAi(config: ProviderConfig, prompt: string): Promise<PostResult> {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_completion_tokens: 700,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!response.ok) return { ok: false, text: await parseError(response) };
+  const parsed = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  return { ok: true, text: parsed.choices?.[0]?.message?.content ?? '' };
+}
+
+async function postGemini(config: ProviderConfig, prompt: string): Promise<PostResult> {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': config.apiKey,
+    },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 700 },
+    }),
+  });
+  if (!response.ok) return { ok: false, text: await parseError(response) };
+  const parsed = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+  return { ok: true, text: parsed.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '' };
+}
+
+async function postCompletion(prompt: string): Promise<PostResult> {
+  const config = resolveProviderConfig();
+  if (config === null) return missingProviderResult();
+
+  try {
+    switch (config.provider) {
+      case 'anthropic':
+        return await postAnthropic(config, prompt);
+      case 'openai':
+        return await postOpenAi(config, prompt);
+      case 'gemini':
+        return await postGemini(config, prompt);
+    }
+  } catch (e) {
+    return { ok: false, text: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export async function fetchProgressExtraction(history: Message[], topics: readonly Topic[]): Promise<Progress | null> {
@@ -246,11 +412,7 @@ export async function fetchProgressExtraction(history: Message[], topics: readon
 
 Conversation:\n${snippet}`;
 
-  const result = await postMessages({
-    model: CLAUDE_MODEL,
-    max_tokens: 700,
-    messages: [{ role: 'user', content: prompt }],
-  });
+  const result = await postCompletion(prompt);
 
   if (!result.ok) {
     console.error('[api] Progress extraction failed:', result.text);
@@ -265,3 +427,4 @@ Conversation:\n${snippet}`;
     return null;
   }
 }
+

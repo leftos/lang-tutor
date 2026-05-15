@@ -10,11 +10,15 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getAccountStore } from './account-store.mjs';
+import { readAuthSession, requireCsrfToken } from './auth-routes.mjs';
+import { writeJson } from './http.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(__dirname);
 const STATE_FILE = join(REPO_ROOT, '.local', 'state', 'local-storage.json');
 const KEY_PREFIX = 'lang-tutor:';
+const SENSITIVE_KEYS = new Set(['lang-tutor:provider-settings']);
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -34,7 +38,7 @@ function sendJson(res, status, payload) {
 }
 
 function isStateKey(key) {
-  return typeof key === 'string' && key.startsWith(KEY_PREFIX) && key.length <= 256;
+  return typeof key === 'string' && key.startsWith(KEY_PREFIX) && key.length <= 256 && !SENSITIVE_KEYS.has(key);
 }
 
 function readState() {
@@ -97,7 +101,19 @@ export async function handleStateRequest(req, res) {
   }
 
   try {
+    const session = await readAuthSession(req);
+
     if (req.method === 'GET') {
+      if (session) {
+        sendJson(res, 200, { entries: (await getAccountStore()).readUserEntryState(session.user.id).entries });
+        return true;
+      }
+
+      if (process.env.LANG_TUTOR_REQUIRE_AUTH === 'true') {
+        writeJson(res, 401, { error: 'Sign in to load and save progress.' });
+        return true;
+      }
+
       sendJson(res, 200, { entries: readState().entries });
       return true;
     }
@@ -108,7 +124,13 @@ export async function handleStateRequest(req, res) {
     }
 
     const body = JSON.parse(await readBody(req));
-    const state = readState();
+    if (session && !requireCsrfToken(req, res)) return true;
+    if (!session && process.env.LANG_TUTOR_REQUIRE_AUTH === 'true') {
+      writeJson(res, 401, { error: 'Sign in to save progress.' });
+      return true;
+    }
+
+    const state = session ? (await getAccountStore()).readUserEntryState(session.user.id) : readState();
     switch (body.op) {
       case 'set':
         applySet(state, body.key, body.value);
@@ -122,7 +144,13 @@ export async function handleStateRequest(req, res) {
       default:
         throw new Error('expected op set, bulkSet, or delete');
     }
-    writeState(state);
+    if (session) {
+      const store = await getAccountStore();
+      store.writeUserEntryState(session.user.id, state);
+      await store.save();
+    } else {
+      writeState(state);
+    }
     sendJson(res, 200, { ok: true });
     return true;
   } catch (e) {

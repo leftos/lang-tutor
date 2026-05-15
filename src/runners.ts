@@ -1,3 +1,5 @@
+import { appUrl } from './appUrls';
+import { canUseHostedTooling } from './authClient';
 import type { RunResult, SingleBufferLanguageId } from './types';
 
 interface RunResponse {
@@ -7,8 +9,11 @@ interface RunResponse {
 }
 
 export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'python' | 'csharp', code: string): Promise<RunResult> {
+  if (!canUseHostedTooling()) {
+    return { ok: false, output: 'Sign in to run code on the hosted server.' };
+  }
   try {
-    const r = await fetch('/run', {
+    const r = await fetch(appUrl('/run'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lang, code }),

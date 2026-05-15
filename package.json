@@ -25,6 +25,7 @@
     "vite": "^7.0.0"
   },
   "dependencies": {
+    "@node-rs/argon2": "2.0.2",
     "@codemirror/autocomplete": "^6.20.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",
@@ -44,9 +45,11 @@
     "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-lang-csharp": "6.2.0",
     "chokidar": "^5.0.0",
+    "cookie": "1.1.1",
     "dompurify": "3.4.2",
     "html-to-image": "^1.11.13",
     "marked": "18.0.3",
+    "sql.js": "1.14.1",
     "ws": "8.20.0"
   }
 }

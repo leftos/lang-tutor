@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ─────────────────────────────────────────────────────────────
-   Lang · Tutor — a personal manual
+   Lang · Tutor — interactive coding tutor
    Typography:  Fraunces (display) · Inter Tight (body) · JetBrains Mono (code)
    Palette:     warm paper / matte ink + per-language signature colour
    ───────────────────────────────────────────────────────────── */
@@ -209,6 +209,63 @@
   min-height: 0;
 }
 
+.auth-required #chapterStrip,
+.auth-required #bodySplit {
+  display: none;
+}
+
+.auth-gate {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  border-top: 1px solid var(--rule);
+}
+
+.auth-gate[hidden] {
+  display: none;
+}
+
+.auth-gate-panel {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 30px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 18px 60px rgba(25, 17, 10, 0.12);
+}
+
+.auth-gate-kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sig);
+}
+
+.auth-gate h2 {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 0.95;
+  font-variation-settings:
+    "opsz" 72,
+    "SOFT" 70;
+}
+
+.auth-gate p {
+  max-width: 48ch;
+  color: var(--ink-2);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.auth-gate .primary-btn {
+  justify-self: start;
+}
+
 /* ─── Header ─────────────────────────────────────────────── */
 #manualHeader {
   display: grid;
@@ -346,6 +403,19 @@
   justify-content: end;
   gap: 8px;
   padding-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.auth-status {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  font-style: italic;
 }
 
 .ghost-btn {
@@ -415,6 +485,212 @@
 }
 .primary-btn .ti {
   font-size: 11px;
+}
+
+/* ─── Settings dialogs ───────────────────────────────────── */
+.settings-dialog {
+  width: min(880px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  padding: 0;
+  border: 1px solid var(--rule-3);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
+}
+#accountDialog {
+  width: min(520px, calc(100vw - 32px));
+}
+.settings-dialog::backdrop {
+  background: rgba(26, 24, 20, 0.38);
+}
+.settings-panel {
+  padding: 22px;
+  margin: 0;
+  overflow: auto;
+}
+.settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--rule);
+}
+.settings-heading h2 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 550;
+  line-height: 1.1;
+}
+.settings-heading p,
+.settings-note,
+.settings-status {
+  margin-top: 6px;
+  color: var(--ink-mute);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.settings-close {
+  flex: 0 0 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--rule-2);
+  color: var(--ink-mute);
+}
+.settings-close:hover {
+  color: var(--ink);
+  border-color: var(--rule-3);
+}
+.provider-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(280px, 1.1fr);
+  gap: 24px;
+  padding-top: 20px;
+}
+.provider-form,
+.provider-help,
+.signed-in-panel,
+.signed-out-panel {
+  min-width: 0;
+}
+.settings-field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 13px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.settings-field input,
+.settings-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rule-2);
+  border-radius: 1px;
+  background: var(--paper-2);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.settings-field input:focus,
+.settings-field select:focus {
+  outline: 2px solid var(--sig-soft);
+  border-color: var(--sig);
+}
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.settings-check input {
+  accent-color: var(--sig);
+}
+.settings-note {
+  margin-bottom: 14px;
+}
+.model-action-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: -3px 0 13px;
+}
+.settings-warning {
+  min-height: 18px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.settings-status {
+  min-height: 18px;
+}
+.provider-help {
+  border-left: 1px solid var(--rule);
+  padding-left: 24px;
+}
+.provider-help h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 550;
+  margin-bottom: 10px;
+}
+.provider-help ol {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.provider-help li {
+  margin-bottom: 7px;
+}
+.settings-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.settings-link-row a {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--rule-2);
+  color: var(--sig);
+  text-decoration: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.settings-link-row a:hover {
+  border-color: var(--sig);
+}
+.account-panel {
+  width: min(520px, calc(100vw - 32px));
+}
+.signed-in-panel {
+  display: grid;
+  gap: 10px;
+  padding-top: 18px;
+}
+.settings-note-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.account-mode-tabs {
+  display: inline-flex;
+  border: 1px solid var(--rule-2);
+  margin: 18px 0 14px;
+}
+.account-mode-tabs button {
+  padding: 7px 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  border-right: 1px solid var(--rule-2);
+}
+.account-mode-tabs button:last-child {
+  border-right: 0;
+}
+.account-mode-tabs button.is-active {
+  background: var(--ink);
+  color: var(--paper);
 }
 
 /* ─── Chapter strip ──────────────────────────────────────── */
@@ -1884,4 +2160,28 @@
 .tree-action:hover {
   background: color-mix(in srgb, var(--ink) 12%, transparent);
   color: var(--ink);
+}
+
+@media (max-width: 920px) {
+  #manualHeader {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 10px;
+  }
+  .language-rail {
+    overflow-x: auto;
+    max-width: 100%;
+    align-items: end;
+  }
+  .header-tools {
+    justify-content: start;
+  }
+  .provider-grid {
+    grid-template-columns: 1fr;
+  }
+  .provider-help {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    padding: 18px 0 0;
+  }
 }

@@ -9,13 +9,13 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
-const RUN_ROOT = join(REPO_ROOT, '.tmp', 'runs');
+const RUN_ROOT = resolve(process.env.LANG_TUTOR_RUN_ROOT ?? join(REPO_ROOT, '.tmp', 'runs'));
 
 const TOOLCHAIN_IMAGE = process.env.LANG_TUTOR_TOOLCHAIN_IMAGE ?? 'lang-tutor-toolchains:latest';
 const RUN_TIMEOUT_MS = 15_000;
@@ -29,40 +29,49 @@ const LANG_CONFIG = Object.freeze({
 });
 
 function dockerProblem() {
+  const hosted = process.env.LANG_TUTOR_REQUIRE_AUTH === 'true';
   const version = spawnSync('docker', ['--version'], { encoding: 'utf8', timeout: 5_000 });
   if (version.error !== undefined && version.error !== null) {
-    return 'docker not found on PATH. Install Docker Desktop, start it, then run .\\lt.ps1 toolchain.';
+    return hosted
+      ? 'Hosted code runner is not configured: docker was not found on the server.'
+      : 'docker not found on PATH. Install Docker Desktop, start it, then run .\\lt.ps1 toolchain.';
   }
 
   const info = spawnSync('docker', ['info'], { stdio: 'ignore', timeout: 10_000 });
   if (info.status !== 0) {
-    return 'Docker is installed but the engine is not reachable. Start Docker Desktop, then run .\\lt.ps1 toolchain.';
+    return hosted
+      ? 'Hosted code runner is not configured: docker is installed, but the server cannot reach the docker engine.'
+      : 'Docker is installed but the engine is not reachable. Start Docker Desktop, then run .\\lt.ps1 toolchain.';
   }
 
   const image = spawnSync('docker', ['image', 'inspect', TOOLCHAIN_IMAGE], { stdio: 'ignore', timeout: 10_000 });
   if (image.status !== 0) {
-    return `Local toolchain image ${TOOLCHAIN_IMAGE} was not found. Run .\\lt.ps1 toolchain before running code.`;
+    return hosted
+      ? `Hosted code runner is not configured: server image ${TOOLCHAIN_IMAGE} was not found.`
+      : `Local toolchain image ${TOOLCHAIN_IMAGE} was not found. Run .\\lt.ps1 toolchain before running code.`;
   }
 
   return null;
 }
 
-function assertRepoChild(path) {
-  const root = REPO_ROOT.endsWith(sep) ? REPO_ROOT : REPO_ROOT + sep;
+function assertRunRootChild(path) {
+  const root = RUN_ROOT.endsWith(sep) ? RUN_ROOT : RUN_ROOT + sep;
   const resolved = resolve(path);
-  if (!resolved.startsWith(root)) {
-    throw new Error(`refusing to use path outside repo: ${resolved}`);
+  if (!resolved.startsWith(root) || resolved === RUN_ROOT) {
+    throw new Error(`refusing to use path outside run root: ${resolved}`);
   }
   return resolved;
 }
 
 function createWorkspace(lang) {
   mkdirSync(RUN_ROOT, { recursive: true });
-  return mkdtempSync(join(RUN_ROOT, `${lang}-`));
+  const workspace = mkdtempSync(join(RUN_ROOT, `${lang}-`));
+  chmodSync(workspace, 0o755);
+  return workspace;
 }
 
 function removeWorkspace(path) {
-  const target = assertRepoChild(path);
+  const target = assertRunRootChild(path);
   if (existsSync(target)) {
     rmSync(target, { recursive: true, force: true });
   }

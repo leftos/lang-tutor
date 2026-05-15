@@ -1,6 +1,6 @@
 # Lang tutor
 
-A single-page, multi-language programming tutor. You chat with Claude (via the Anthropic API), write code in an inline editor with full IDE features (syntax highlighting, autocomplete, multi-cursor, alt+up/down line moves, Ctrl+F search, Ctrl+S format-on-save, live error checking via local toolchains), run it through a language-appropriate runtime, and submit code+output for evaluation. Lesson progress is extracted by a second LLM call into structured JSON and persisted in `localStorage`, **independently per language**.
+A single-page, multi-language programming tutor. You chat with your chosen AI provider (Anthropic Claude, OpenAI ChatGPT, or Google Gemini), write code in an inline editor with full IDE features (syntax highlighting, autocomplete, multi-cursor, alt+up/down line moves, Ctrl+F search, Ctrl+S format-on-save, live error checking via local toolchains), run it through a language-appropriate runtime, and submit code+output for evaluation. Lesson progress is extracted by a second LLM call into structured JSON and persisted independently per language.
 
 Switch language at any time from the topbar — each language has its own conversation history, lesson progress, and saved editor content.
 
@@ -12,7 +12,7 @@ One-shot setup that installs all runtimes via winget, fetches dependencies, and 
 .\scripts\setup.ps1
 ```
 
-It's idempotent — checks each tool first and only installs what's missing. First run takes 5–10 minutes (downloads); subsequent runs are seconds. After it finishes installing it'll prompt you for `ANTHROPIC_API_KEY` if `.env` isn't set, then start the dev server and open `http://localhost:5173`.
+It's idempotent — checks each tool first and only installs what's missing. First run takes 5–10 minutes (downloads); subsequent runs are seconds. After it finishes installing it'll start the dev server and open `http://localhost:5173`.
 After setup, use `.\lt.ps1 dev` as the root dev-server entrypoint.
 
 ## Languages
@@ -41,10 +41,10 @@ Reset wipes the active language's progress + chat history. For project workspace
 The lesson plan for each language is in `src/constants.ts`. Edit it freely.
 
 Progress, chat history, editor buffers, and UI state are mirrored to
-`.local/state/local-storage.json` through the local backend. Browser
-`localStorage` is still used as a cache, but the repo-local file is what keeps
-state available when you switch between `localhost`, `127.0.0.1`, LAN IPs, or
-different Vite ports.
+`.local/state/local-storage.json` through the local backend in development, or to
+the signed-in account database in hosted mode. Browser `localStorage` is still
+used as a cache, but provider API keys are explicitly excluded from the server
+mirror and account sync.
 
 ## Stack
 
@@ -65,7 +65,7 @@ Optional local toolchains (auto-detected; gracefully disabled if missing):
 - **Node 20.6+** (uses `--env-file` flag)
 - **pnpm** — install with `npm install -g pnpm` if you don't have it
 - **Docker Desktop** running Linux containers for local sandboxed code execution
-- An **Anthropic API key**
+- A provider API key for **Anthropic Claude**, **OpenAI ChatGPT**, or **Google Gemini**
 
 ## Setup
 
@@ -73,14 +73,36 @@ Optional local toolchains (auto-detected; gracefully disabled if missing):
 # 1. Install dependencies
 pnpm install
 
-# 2. Create your .env from the example, then fill in your key
+# 2. Optional: create runtime config
 copy .env.example .env
-# edit .env and set ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+Open the app, click **AI Provider**, choose a provider, and paste your API key.
+The key stays in the browser on that device; it is not stored in `.env`, SQLite,
+or any server-side state. After a key is entered, use **Load models** to fetch
+that provider's currently available chat/generation models and choose one from
+the dropdown.
+
+## Provider Accounts
+
+The AI Provider dialog includes setup links and basic funding guidance:
+
+- **Anthropic Claude**: create an Anthropic Console account, buy usage credits
+  from Billing, then create an API key. Start with about **$20** and keep
+  auto-reload conservative until usage is predictable.
+- **OpenAI ChatGPT**: create an OpenAI platform account, add prepaid credits in
+  Billing, then create an API key. Start with about **$20** and set a project
+  budget or usage limit.
+- **Google Gemini**: create a Google AI Studio key. Gemini may start on free-tier
+  usage; paid quota uses Google Cloud Billing rather than prepaid credits, so set
+  a budget or alert around **$20**.
 
 ## Development
 
-The Vite dev server proxies `/v1/messages` to `https://api.anthropic.com`, injecting your API key from `.env` so it never reaches the browser. HMR is on for `.ts` and `.css` changes.
+The Vite dev server hosts the app and local toolchain endpoints. AI provider
+requests are made directly from the browser with the user's own key, so the
+local server and hosted droplet do not store provider credentials. HMR is on for
+`.ts` and `.css` changes.
 
 ```powershell
 .\lt.ps1 dev
@@ -96,10 +118,56 @@ Build the static bundle, then run the Node proxy server which serves `dist/` and
 
 ```powershell
 .\lt.ps1 build      # type-checks, then builds to dist/
-.\lt.ps1 serve      # node --env-file=.env server.mjs
+.\lt.ps1 serve      # node server.mjs (uses .env if present)
 ```
 
 Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`).
+
+When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so
+asset URLs and internal API calls include that prefix:
+
+```powershell
+$env:LANG_TUTOR_BASE_PATH = "/lang-tutor/"
+.\lt.ps1 build
+.\lt.ps1 serve
+```
+
+`server.mjs` accepts requests with or without that prefix, so either
+`handle_path`-style prefix stripping or plain forwarding works.
+
+### Deploy to projects.leftos.dev
+
+The production shortcut is:
+
+```powershell
+.\lt.ps1 deploy
+```
+
+That command runs the local type-check/build gate, pushes the current branch,
+archives `HEAD`, uploads an immutable release to the droplet, builds with
+`LANG_TUTOR_BASE_PATH` derived from `-DeployUrl`, restarts
+`lang-tutor.service`, and smoke-tests both `/lang-tutor` and `/lang-tutor/`.
+It also verifies hosted auth is required before account-specific state or
+toolchain endpoints are reachable. The deploy also ensures the host has the
+checker/LSP binaries used by live diagnostics and format-on-save, then builds
+and verifies the hosted `lang-tutor-toolchains:latest` Docker image used by
+Rust, C++, Python, and C# console runs.
+
+For a new droplet or a host rebuild, follow [docs/deployment.md](docs/deployment.md)
+first. It records the one-time Node, Docker, Caddy, systemd, app-user, and
+runtime-env setup that the deploy command assumes.
+
+Useful deploy arguments:
+
+- `-Worktree` deploys local tracked and untracked non-ignored files instead of
+  `HEAD`; use it for staging uncommitted changes. It automatically skips
+  `git push`.
+- `-DeployHost <ssh-target>` changes the SSH target; default is
+  `root@146.190.172.94`.
+- `-DeployUrl <url>` changes the hosted base URL and build base path; default is
+  `https://projects.leftos.dev/lang-tutor`.
+- `-SkipCheck`, `-SkipPush`, and `-SkipSmoke` skip the local gate, branch push,
+  or hosted smoke checks respectively.
 
 ## Other commands
 
@@ -118,7 +186,7 @@ Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`
 │   ├── main.ts        Entry: state, session control, language switching, event wiring
 │   ├── editor.ts      CodeMirror 6 setup (theme, syntax highlight, lint, format-on-save)
 │   ├── lint.ts        Frontend client for /check + /format
-│   ├── api.ts         Claude API calls (chat + progress extraction, streaming)
+│   ├── api.ts         Provider API calls (chat + progress extraction, streaming)
 │   ├── runners.ts     Code execution dispatch (/run local sandbox endpoint)
 │   ├── render.ts      Markdown rendering, message DOM construction
 │   ├── storage.ts     localStorage wrapper
@@ -137,9 +205,9 @@ Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`
 ├── vite.config.ts     Dev server proxy + Tailwind plugin + /check + /format middleware
 ├── tsconfig.json      Strict TypeScript config
 ├── biome.json         Lint + format config
-├── server.mjs         Production server (serves dist/ + /v1/messages + /run + /check + /format)
+├── server.mjs         Production server (serves dist/ + account/state APIs + /run + /check + /format)
 ├── lt.ps1             Root helper for dev/build/serve/check workflows
-└── .env               ANTHROPIC_API_KEY (gitignored)
+└── .env               Optional runtime config (gitignored)
 ```
 
 ## How it works
@@ -158,7 +226,7 @@ Switching language saves the current editor content, then loads everything for t
 
 ### Two LLM call sites
 
-Both POST to the local `/v1/messages` proxy:
+Both use the selected browser-side provider:
 
 1. `callClaude()` — the tutoring conversation. Uses a system prompt built from the active language's `systemPromptIntro`, lesson plan, strengths, struggles, and resume context.
 2. `fetchProgressExtraction()` — fires after each `evaluateCode()`. Sends the last 14 messages with a strict JSON-output prompt; the result is merged with prior progress and persisted under the active language's key.
@@ -184,8 +252,10 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
 
 ## Notes
 
-- The `.env` file is gitignored. Never commit a real key.
-- The Anthropic model ID is in `src/constants.ts` as `CLAUDE_MODEL`.
+- The `.env` file is gitignored. Do not put provider API keys in it.
+- Provider models are loaded live from the selected provider after an API key is
+  entered. If a saved model disappears from that provider's model list, the app
+  warns the user and requires a new selection.
 - Resetting progress only affects the **active** language. Switch first if you want to reset a different one.
 - Rust, C++, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
 - The XSS-safe DOM construction means you can paste arbitrary content from the AI without risk.
