@@ -749,6 +749,16 @@ function scrollMessageToTop(block: HTMLElement): void {
   msgList.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
 }
 
+function scrollMessageTowardTopBoundary(block: HTMLElement): void {
+  const msgList = el('msgList');
+  const topDelta = block.getBoundingClientRect().top - msgList.getBoundingClientRect().top;
+  if (topDelta <= 1) return;
+
+  const maxTop = Math.max(0, msgList.scrollHeight - msgList.clientHeight);
+  const nextTop = Math.min(maxTop, msgList.scrollTop + topDelta);
+  msgList.scrollTo({ top: nextTop, behavior: 'auto' });
+}
+
 function addTutorBackToTop(block: HTMLElement): void {
   const actions = div('msg-actions');
   const btn = document.createElement('button');
@@ -907,7 +917,7 @@ function appendMsgStreaming(): StreamingBubble {
   const render = (): void => {
     body.textContent = '';
     body.appendChild(renderMarkdown(accumulated));
-    msgList.scrollTop = msgList.scrollHeight;
+    scrollMessageTowardTopBoundary(bl);
   };
 
   return {
