@@ -876,6 +876,21 @@
 .msg-ai p:last-child {
   margin-bottom: 0;
 }
+.msg-ai h1,
+.msg-ai h2,
+.msg-ai h3,
+.msg-ai h4,
+.msg-ai h5,
+.msg-ai h6 {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  font-variation-settings:
+    "opsz" 18,
+    "SOFT" 30;
+  line-height: 1.25;
+  margin: 12px 0 6px;
+}
 .msg-ai ul,
 .msg-ai ol {
   margin: 6px 0 8px;
@@ -899,6 +914,38 @@
   font-variation-settings:
     "opsz" 14,
     "SOFT" 30;
+}
+.msg-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 10px 0 12px;
+}
+.msg-ai table {
+  width: max-content;
+  min-width: min(100%, 360px);
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.msg-ai th,
+.msg-ai td {
+  border: 1px solid var(--rule-2);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.msg-ai th {
+  background: var(--paper-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+.msg-ai blockquote {
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--rule-3);
+  color: var(--ink-2);
 }
 
 .msg-actions {
@@ -1010,6 +1057,10 @@
   border: 1px solid var(--rule);
   border-radius: 1px;
   color: var(--ink);
+}
+.code-fence code {
+  font: inherit;
+  color: inherit;
 }
 
 .thinking {

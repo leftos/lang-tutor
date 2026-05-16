@@ -1,3 +1,8 @@
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+
+marked.setOptions({ gfm: true, breaks: false });
+
 export function setInline(el: HTMLElement, text: string): void {
   text.split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\n)/g).forEach((chunk) => {
     if (chunk === '\n') {
@@ -22,85 +27,28 @@ export function setInline(el: HTMLElement, text: string): void {
 }
 
 export function renderMarkdown(text: string): DocumentFragment {
-  const frag = document.createDocumentFragment();
-
-  text.split(/(```[\s\S]*?```)/g).forEach((part) => {
-    if (part.startsWith('```')) {
-      const inner = part.slice(3);
-      const nlIdx = inner.indexOf('\n');
-      const code = (nlIdx >= 0 ? inner.slice(nlIdx + 1) : inner).replace(/```\s*$/, '').trimEnd();
-      const pre = document.createElement('pre');
-      pre.className = 'code-fence';
-      pre.textContent = code;
-      frag.appendChild(pre);
-      return;
-    }
-
-    const lines = part.split('\n');
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i] ?? '';
-
-      const hm = line.match(/^(#{1,3}) (.*)/);
-      if (hm) {
-        const level = (hm[1] ?? '').length;
-        const headingEl = document.createElement('strong');
-        headingEl.style.cssText = `display:block;font-size:${14 - level * 0.5}px;margin:9px 0 3px`;
-        setInline(headingEl, hm[2] ?? '');
-        frag.appendChild(headingEl);
-        i++;
-        continue;
-      }
-
-      if (line.match(/^[-*] /)) {
-        const ul = document.createElement('ul');
-        while (i < lines.length) {
-          const l = lines[i] ?? '';
-          const m = l.match(/^[-*] (.*)/);
-          if (!m) break;
-          const li = document.createElement('li');
-          setInline(li, m[1] ?? '');
-          ul.appendChild(li);
-          i++;
-        }
-        frag.appendChild(ul);
-        continue;
-      }
-
-      if (line.match(/^\d+\. /)) {
-        const ol = document.createElement('ol');
-        while (i < lines.length) {
-          const l = lines[i] ?? '';
-          const m = l.match(/^\d+\. (.*)/);
-          if (!m) break;
-          const li = document.createElement('li');
-          setInline(li, m[1] ?? '');
-          ol.appendChild(li);
-          i++;
-        }
-        frag.appendChild(ol);
-        continue;
-      }
-
-      if (!line.trim()) {
-        i++;
-        continue;
-      }
-
-      const p = document.createElement('p');
-      const buf: string[] = [];
-      while (i < lines.length) {
-        const l = lines[i] ?? '';
-        if (!l.trim() || l.match(/^#{1,3} /) || l.match(/^[-*] /) || l.match(/^\d+\. /)) break;
-        buf.push(l);
-        i++;
-      }
-      setInline(p, buf.join('\n'));
-      frag.appendChild(p);
-    }
+  const rawHtml = marked.parse(text, { async: false }) as string;
+  const template = document.createElement('template');
+  template.innerHTML = DOMPurify.sanitize(rawHtml, {
+    USE_PROFILES: { html: true },
   });
 
-  return frag;
+  for (const code of template.content.querySelectorAll('code')) {
+    if (code.closest('pre') === null) code.classList.add('inline-code');
+  }
+
+  for (const pre of template.content.querySelectorAll('pre')) {
+    pre.classList.add('code-fence');
+  }
+
+  for (const table of template.content.querySelectorAll('table')) {
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-table-scroll';
+    table.replaceWith(wrap);
+    wrap.appendChild(table);
+  }
+
+  return template.content;
 }
 
 export function renderPlainWithFences(text: string): DocumentFragment {
