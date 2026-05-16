@@ -320,6 +320,39 @@ const BOOTSTRAP_INNER = `(() => {
     img.src = dataUrl;
   });
 
+  // A sandboxed iframe without allow-same-origin protects the parent app's
+  // storage from student-authored preview code, but it also gives the document
+  // an opaque origin. html-to-image cannot read cssRules from linked sheets in
+  // that state, so for capture only we fetch linked stylesheets through the
+  // same preview proxy, insert equivalent <style> tags, and temporarily disable
+  // the links. Everything is restored after rasterisation.
+  const prepareStylesForCapture = async () => {
+    const cleanups = [];
+    const links = Array.from(document.querySelectorAll('link[rel~="stylesheet"][href]'));
+    await Promise.all(links.map(async (link) => {
+      try {
+        const href = link.href;
+        if (!href) return;
+        const response = await fetch(href, { credentials: 'omit' });
+        if (!response.ok) return;
+        const css = await response.text();
+        const style = document.createElement('style');
+        style.setAttribute('data-lang-tutor-capture-style', '');
+        style.textContent = css;
+        link.after(style);
+        const wasDisabled = link.disabled;
+        link.disabled = true;
+        cleanups.push(() => {
+          style.remove();
+          link.disabled = wasDisabled;
+        });
+      } catch {}
+    }));
+    return () => {
+      for (let i = cleanups.length - 1; i >= 0; i -= 1) cleanups[i]();
+    };
+  };
+
   window.addEventListener('message', async (event) => {
     const data = event.data;
     if (!data || typeof data !== 'object') return;
@@ -359,7 +392,13 @@ const BOOTSTRAP_INNER = `(() => {
         // walks the full layout tree, but the <html> element's serialised
         // bounding box is sometimes 0×0 on documents with quirky styling.
         const target = document.body || document.documentElement;
-        const rawDataUrl = await window.htmlToImage.toPng(target, { pixelRatio: 1, cacheBust: false });
+        const cleanupStyles = await prepareStylesForCapture();
+        let rawDataUrl;
+        try {
+          rawDataUrl = await window.htmlToImage.toPng(target, { pixelRatio: 1, cacheBust: false });
+        } finally {
+          cleanupStyles();
+        }
         const fullDataUrl = await resizeDataUrl(rawDataUrl, 1568);
         const thumbDataUrl = await resizeDataUrl(rawDataUrl, 256);
         reply({ type: 'lang-tutor:screenshot-reply', requestId, fullDataUrl, thumbDataUrl });

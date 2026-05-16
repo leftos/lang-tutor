@@ -49,6 +49,17 @@ import {
 } from './projects.mjs';
 
 const PROJECT_PATHS = ['/fs/', '/proj/'];
+const PREVIEW_CONTENT_SECURITY_POLICY = [
+  "default-src 'self' data: blob: http: https:",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http: https:",
+  "style-src 'self' 'unsafe-inline' http: https:",
+  "img-src 'self' data: blob: http: https:",
+  "font-src 'self' data: blob: http: https:",
+  "connect-src 'self' http: https: ws: wss:",
+  "frame-src 'self' data: blob: http: https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+].join('; ');
 
 export function isProjectRoute(urlPath) {
   return PROJECT_PATHS.some((p) => urlPath === p.slice(0, -1) || urlPath.startsWith(p));
@@ -357,12 +368,17 @@ function proxyHeaders(headers, targetPort) {
 function responseHeaders(headers) {
   const next = { ...headers };
   delete next.connection;
+  delete next['content-security-policy'];
+  delete next['content-security-policy-report-only'];
   delete next['keep-alive'];
   delete next['proxy-authenticate'];
   delete next['proxy-authorization'];
   delete next.te;
   delete next.trailer;
   delete next.upgrade;
+  next['access-control-allow-origin'] = '*';
+  next['access-control-allow-methods'] = 'GET, HEAD, OPTIONS';
+  next['content-security-policy'] = PREVIEW_CONTENT_SECURITY_POLICY;
   return next;
 }
 
@@ -385,6 +401,7 @@ function handlePreviewProxy(scope, route, req, res) {
       headers: proxyHeaders(req.headers, target.port),
     },
     (proxyRes) => {
+      res.removeHeader('Content-Security-Policy');
       res.writeHead(proxyRes.statusCode ?? 502, proxyRes.statusMessage, responseHeaders(proxyRes.headers));
       proxyRes.pipe(res);
     }

@@ -200,6 +200,8 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   let starting = false;
   let vitePort = runtime.port;
   let statusPoll: number | null = null;
+  let iframeLoaded = false;
+  const iframeLoadWaiters = new Set<(loaded: boolean) => void>();
   // Tracks why the dev server stopped — drives friendly pill / placeholder
   // text. 'port-in-use' is set via log scan (Vite logs EADDRINUSE on stderr
   // before exiting); 'crashed' is inferred from the status poll seeing
@@ -212,7 +214,16 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   const iframe = document.createElement('iframe');
   iframe.className = 'proj-preview-iframe';
   iframe.title = 'Project preview';
-  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups');
+  iframe.addEventListener(
+    'load',
+    () => {
+      iframeLoaded = true;
+      for (const resolve of iframeLoadWaiters) resolve(true);
+      iframeLoadWaiters.clear();
+    },
+    { signal: ctrl.signal }
+  );
 
   const logsPane = div('proj-preview-logs');
   const errorsPane = div('proj-preview-errors');
@@ -298,6 +309,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
     if (isRunning) {
       // Coming back up: clear any stale failure state.
       failureKind = 'none';
+      iframeLoaded = false;
       iframe.src = urlForPort();
       setStatusPill(`running on :${vitePort}`, 'running');
       setRunButton('Stop', 'stop');
@@ -306,6 +318,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
       opts.screenshotBtn.disabled = false;
     } else {
       // About:blank rather than empty src so the previous page doesn't linger.
+      iframeLoaded = false;
       iframe.src = 'about:blank';
       if (failureKind === 'port-in-use') {
         setStatusPill(`port :${vitePort} in use`, 'error');
@@ -449,7 +462,10 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   opts.reloadBtn.addEventListener(
     'click',
     () => {
-      if (running) iframe.src = urlForPort();
+      if (running) {
+        iframeLoaded = false;
+        iframe.src = urlForPort();
+      }
     },
     { signal: ctrl.signal }
   );
@@ -527,8 +543,36 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   setStatusPill('stopped', 'stopped');
   setRunButton('Run', 'run');
 
-  function requestSnapshot(): Promise<DomSnapshot | null> {
-    if (!running || iframe.contentWindow === null) return Promise.resolve(null);
+  function iframeDocumentReady(): boolean {
+    try {
+      const doc = iframe.contentDocument;
+      if (doc === null) return false;
+      return doc.readyState === 'complete' && doc.location.href !== 'about:blank';
+    } catch {
+      return false;
+    }
+  }
+
+  function waitForIframeLoad(timeoutMs: number): Promise<boolean> {
+    if (!running || iframe.contentWindow === null) return Promise.resolve(false);
+    if (iframeLoaded || iframeDocumentReady()) {
+      iframeLoaded = true;
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      const finish = (loaded: boolean): void => {
+        window.clearTimeout(timer);
+        iframeLoadWaiters.delete(finish);
+        resolve(loaded);
+      };
+      const timer = window.setTimeout(() => finish(false), timeoutMs);
+      iframeLoadWaiters.add(finish);
+    });
+  }
+
+  async function requestSnapshot(): Promise<DomSnapshot | null> {
+    if (!running || iframe.contentWindow === null) return null;
+    if (!(await waitForIframeLoad(5000))) return null;
     const requestId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return new Promise((resolveSnap) => {
       let settled = false;
@@ -557,12 +601,13 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
           window.removeEventListener('message', onMessage);
           resolveSnap(null);
         }
-      }, 1500);
+      }, 3000);
     });
   }
 
-  function requestScreenshot(): Promise<ScreenshotPair | null> {
-    if (!running || iframe.contentWindow === null) return Promise.resolve(null);
+  async function requestScreenshot(): Promise<ScreenshotPair | null> {
+    if (!running || iframe.contentWindow === null) return null;
+    if (!(await waitForIframeLoad(5000))) return null;
     const requestId = `shot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return new Promise((resolveShot) => {
       let settled = false;
@@ -598,7 +643,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
           window.removeEventListener('message', onMessage);
           resolveShot(null);
         }
-      }, 5000);
+      }, 12_000);
     });
   }
 

@@ -32,6 +32,7 @@ import {
   writeFile as apiWriteFile,
   ensureScaffold,
   type FsWatchEvent,
+  fetchFile,
   fetchOpenAvailability,
   fetchRecentLogs,
   fetchTree,
@@ -64,6 +65,7 @@ import type {
   LanguageId,
   Message,
   Progress,
+  ProjectLanguage,
   ProjectState,
   SingleBufferLanguageId,
   TextBlock,
@@ -2224,13 +2226,215 @@ function fenceLangFromPath(path: string): string {
   }
 }
 
+const PROJECT_CONTEXT_MAX_FILES = 18;
+const PROJECT_CONTEXT_MAX_CHARS = 70_000;
+const PROJECT_CONTEXT_MAX_FILE_CHARS = 24_000;
+const PROJECT_CONTEXT_OMITTED_PREVIEW = 12;
+const BOOTSTRAP_START = '<!-- lang-tutor:bootstrap-start -->';
+const BOOTSTRAP_END = '<!-- lang-tutor:bootstrap-end -->';
+
+interface ProjectContextFile {
+  path: string;
+  content: string;
+  dirty: boolean;
+  source: 'open' | 'workspace';
+  truncatedFrom?: number;
+}
+
+interface ProjectContextResult {
+  files: ProjectContextFile[];
+  omitted: string[];
+  failed: string[];
+}
+
+function normalizeProjectPath(path: string): string {
+  return path.replaceAll('\\', '/');
+}
+
+function stripGeneratedProjectContext(path: string, content: string): string {
+  if (normalizeProjectPath(path).toLowerCase() !== 'index.html') return content;
+  const startIdx = content.indexOf(BOOTSTRAP_START);
+  const endIdx = content.indexOf(BOOTSTRAP_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return content;
+  const before = content.slice(0, startIdx).replace(/\s+$/, '');
+  const after = content.slice(endIdx + BOOTSTRAP_END.length).replace(/^\s+/, '');
+  return `${before}\n${after}`;
+}
+
+function isProjectContextPath(lang: ProjectLanguage, path: string): boolean {
+  const normalized = normalizeProjectPath(path);
+  const lower = normalized.toLowerCase();
+  const segments = lower.split('/');
+  if (segments.some((part) => ['node_modules', '.git', 'dist', '.vite', '.vite-temp', 'bin', 'obj', '.vs'].includes(part))) return false;
+  if (lower.endsWith('.map') || lower.endsWith('.lock') || lower.endsWith('pnpm-lock.yaml') || lower.endsWith('package-lock.json')) return false;
+
+  const dot = lower.lastIndexOf('.');
+  const ext = dot === -1 ? '' : lower.slice(dot + 1);
+  if (lang.id === 'web') {
+    return ['html', 'htm', 'css', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json'].includes(ext);
+  }
+  if (lang.id === 'csharp') {
+    return ['cs', 'xaml', 'csproj', 'sln'].includes(ext);
+  }
+  return false;
+}
+
+function projectContextRank(lang: ProjectLanguage, path: string): number {
+  const normalized = normalizeProjectPath(path);
+  const lower = normalized.toLowerCase();
+  if (lang.id === 'web') {
+    const primary = ['index.html', 'app.js', 'style.css', 'package.json', 'vite.config.js', 'jsconfig.json', 'biome.json'];
+    const idx = primary.indexOf(lower);
+    if (idx !== -1) return idx;
+    if (lower.endsWith('.html') || lower.endsWith('.htm')) return 20;
+    if (lower.endsWith('.css')) return 30;
+    if (/\.(js|mjs|cjs|jsx|ts|tsx)$/.test(lower)) return 40;
+    if (lower.endsWith('.json')) return 80;
+  }
+  if (lang.id === 'csharp') {
+    const primary = [
+      'LangTutor.Console/Program.cs',
+      'LangTutor.Wpf/MainWindow.xaml',
+      'LangTutor.Wpf/MainWindow.xaml.cs',
+      'LangTutor.Wpf/App.xaml',
+      'LangTutor.Wpf/App.xaml.cs',
+      'LangTutor.Wpf/LangTutor.Wpf.csproj',
+      'LangTutor.Console/LangTutor.Console.csproj',
+      'LangTutor.sln',
+    ].map((p) => p.toLowerCase());
+    const idx = primary.indexOf(lower);
+    if (idx !== -1) return idx;
+    if (lower.endsWith('.cs')) return 20;
+    if (lower.endsWith('.xaml')) return 30;
+    if (lower.endsWith('.csproj')) return 50;
+    if (lower.endsWith('.sln')) return 60;
+  }
+  return 100;
+}
+
+async function projectTreeForContext(lang: ProjectLanguage): Promise<import('./types').FsNode | null> {
+  const cached = projectStates.get(lang.id);
+  if (cached?.tree !== null && cached?.tree !== undefined) return cached.tree;
+
+  let response = await fetchTree(lang.id);
+  if (!response.scaffolded) {
+    await ensureScaffold(lang.id);
+    response = await fetchTree(lang.id);
+  }
+
+  const state = projectStates.get(lang.id) ?? loadProjectStateFromStorage(lang.id);
+  state.tree = response.tree;
+  state.scaffolded = response.scaffolded;
+  projectStates.set(lang.id, state);
+  projectFileTree?.render(response.tree);
+  return response.tree;
+}
+
+async function collectProjectContextFiles(
+  lang: ProjectLanguage,
+  openFiles: Array<{ path: string; content: string; dirty: boolean }>
+): Promise<ProjectContextResult> {
+  const openByPath = new Map(openFiles.map((file) => [normalizeProjectPath(file.path), file]));
+  let candidatePaths: string[] = [];
+
+  try {
+    const tree = await projectTreeForContext(lang);
+    candidatePaths = flattenFiles(tree)
+      .map(normalizeProjectPath)
+      .filter((path) => isProjectContextPath(lang, path))
+      .sort((a, b) => projectContextRank(lang, a) - projectContextRank(lang, b) || a.localeCompare(b));
+  } catch (e) {
+    console.warn('[project] failed to collect workspace file context', e);
+  }
+
+  const openPaths = [...openByPath.keys()];
+  const autoSlots = Math.max(0, PROJECT_CONTEXT_MAX_FILES - openPaths.length);
+  const autoPaths = candidatePaths.filter((path) => !openByPath.has(path));
+  const selectedPaths = [...openPaths, ...autoPaths.slice(0, autoSlots)];
+  const omitted = autoPaths.slice(autoSlots);
+  const failed: string[] = [];
+  const files: ProjectContextFile[] = [];
+  let totalChars = 0;
+
+  for (const path of selectedPaths) {
+    const openFile = openByPath.get(path);
+    let content: string;
+    let dirty = false;
+    let source: ProjectContextFile['source'] = 'workspace';
+    try {
+      if (openFile !== undefined) {
+        content = openFile.content;
+        dirty = openFile.dirty;
+        source = 'open';
+      } else {
+        content = await fetchFile(lang.id, path);
+      }
+    } catch {
+      failed.push(path);
+      continue;
+    }
+
+    content = stripGeneratedProjectContext(path, content);
+    const truncatedFrom = content.length > PROJECT_CONTEXT_MAX_FILE_CHARS ? content.length : undefined;
+    if (truncatedFrom !== undefined) {
+      content = content.slice(0, PROJECT_CONTEXT_MAX_FILE_CHARS);
+    }
+
+    if (files.length > 0 && totalChars + content.length > PROJECT_CONTEXT_MAX_CHARS) {
+      omitted.push(path);
+      continue;
+    }
+
+    totalChars += content.length;
+    const contextFile: ProjectContextFile = { path, content, dirty, source };
+    if (truncatedFrom !== undefined) contextFile.truncatedFrom = truncatedFrom;
+    files.push(contextFile);
+  }
+
+  return { files, omitted, failed };
+}
+
+function formatProjectFilesBlock(context: ProjectContextResult): string {
+  if (context.files.length === 0) {
+    const suffix = context.failed.length > 0 ? `\n(unable to read: ${context.failed.slice(0, PROJECT_CONTEXT_OMITTED_PREVIEW).join(', ')})` : '';
+    return `[FILES]\n(no relevant project files found${suffix})`;
+  }
+
+  const fileBlock = context.files
+    .map((file) => {
+      const flags = [
+        file.dirty ? 'unsaved' : null,
+        file.source === 'workspace' ? 'auto-included' : null,
+        file.truncatedFrom !== undefined ? `truncated from ${file.truncatedFrom} chars` : null,
+      ].filter((flag): flag is string => flag !== null);
+      const label = flags.length > 0 ? ` (${flags.join(', ')})` : '';
+      return `--- ${file.path}${label} ---\n\`\`\`${fenceLangFromPath(file.path)}\n${file.content}\n\`\`\``;
+    })
+    .join('\n\n');
+
+  const notes: string[] = [];
+  if (context.omitted.length > 0) {
+    const preview = context.omitted.slice(0, PROJECT_CONTEXT_OMITTED_PREVIEW).join(', ');
+    const more =
+      context.omitted.length > PROJECT_CONTEXT_OMITTED_PREVIEW ? `, +${context.omitted.length - PROJECT_CONTEXT_OMITTED_PREVIEW} more` : '';
+    notes.push(`omitted: ${preview}${more}`);
+  }
+  if (context.failed.length > 0) {
+    const preview = context.failed.slice(0, PROJECT_CONTEXT_OMITTED_PREVIEW).join(', ');
+    const more = context.failed.length > PROJECT_CONTEXT_OMITTED_PREVIEW ? `, +${context.failed.length - PROJECT_CONTEXT_OMITTED_PREVIEW} more` : '';
+    notes.push(`unable to read: ${preview}${more}`);
+  }
+
+  return notes.length > 0 ? `[FILES]\n${fileBlock}\n\n(${notes.join('; ')})` : `[FILES]\n${fileBlock}`;
+}
+
 async function evaluateProjectCode(): Promise<void> {
   if (projectEditorInstance === null) return;
   const langWhenStarted = activeLang;
   const lang = getLanguage(langWhenStarted);
   if (lang.kind !== 'project') return;
 
-  const files = projectEditorInstance.getOpenFiles();
+  const openFiles = projectEditorInstance.getOpenFiles();
   const preview = projectPreviewInstance;
   const isWeb = lang.runtime.kind === 'web-vite';
   const noteBlock = draftNoteBlock();
@@ -2241,26 +2445,19 @@ async function evaluateProjectCode(): Promise<void> {
   const logsPromise = fetchRecentLogs(langWhenStarted, 60).catch(() => ({ lines: [] as { stream: string; line: string; ts: number }[] }));
   // Auto-capture a screenshot in parallel with the other prep. Either runtime
   // (web-vite or desktop-process) can supply one through requestScreenshot().
-  // Hard-cap at 6 s so a stuck capture never blocks the evaluate forever.
+  // Hard-cap so a stuck capture never blocks the evaluate forever.
   const screenshotPromise: Promise<ScreenshotPair | null> =
     preview?.isRunning() === true
-      ? Promise.race([preview.requestScreenshot(), new Promise<null>((res) => window.setTimeout(() => res(null), 6000))])
+      ? Promise.race([preview.requestScreenshot(), new Promise<null>((res) => window.setTimeout(() => res(null), 15_000))])
       : Promise.resolve(null);
 
-  const [snapshot, logs, screenshot] = await Promise.all([snapshotPromise, logsPromise, screenshotPromise]);
+  const filesPromise = collectProjectContextFiles(lang, openFiles);
+  const [snapshot, logs, screenshot, fileContext] = await Promise.all([snapshotPromise, logsPromise, screenshotPromise, filesPromise]);
   if (langWhenStarted !== activeLang) return;
 
   const blocks: string[] = [];
   if (noteBlock !== null) blocks.push(noteBlock);
-
-  if (files.length > 0) {
-    const fileBlock = files
-      .map((f) => `--- ${f.path}${f.dirty ? ' (unsaved)' : ''} ---\n\`\`\`${fenceLangFromPath(f.path)}\n${f.content}\n\`\`\``)
-      .join('\n\n');
-    blocks.push(`[FILES]\n${fileBlock}`);
-  } else {
-    blocks.push('[FILES]\n(no files open — open a file in the tree first so the tutor can see what you are working on)');
-  }
+  blocks.push(formatProjectFilesBlock(fileContext));
 
   if (isWeb) {
     if (snapshot !== null) {
@@ -2270,7 +2467,8 @@ async function evaluateProjectCode(): Promise<void> {
       if (snapshot.hmrOverlay !== null) {
         blocks.push(`[BUILD]\n\`\`\`\n${snapshot.hmrOverlay}\n\`\`\``);
       }
-      blocks.push(`[DOM] (rendered at ${snapshot.url})\n\`\`\`html\n${snapshot.dom}\n\`\`\``);
+      const cleanDom = stripGeneratedProjectContext('index.html', snapshot.dom);
+      blocks.push(`[DOM] (rendered at ${snapshot.url})\n\`\`\`html\n${cleanDom}\n\`\`\``);
       if (snapshot.consoleBuffer.length > 0) {
         const consoleBlock = snapshot.consoleBuffer.map((c) => `${c.level}: ${c.line}`).join('\n');
         blocks.push(`[CONSOLE]\n\`\`\`\n${consoleBlock}\n\`\`\``);
