@@ -306,6 +306,16 @@
           </button>
         </div>
         <pre id="outputPre" class="output-pre" role="tabpanel" aria-labelledby="outputTabBtn"><span class="muted">Run the program to capture its output here.</span></pre>
+        <div id="dasmOutputView" class="dasm-output-view" role="tabpanel" aria-labelledby="outputTabBtn" hidden>
+          <section class="dasm-result-pane dasm-program-pane">
+            <div class="dasm-pane-title">Program output</div>
+            <pre id="dasmProgramPre" class="output-pre dasm-program-pre"></pre>
+          </section>
+          <section class="dasm-result-pane dasm-asm-pane">
+            <div class="dasm-pane-title">Disassembly</div>
+            <pre id="dasmAsmPre" class="dasm-asm-pre"></pre>
+          </section>
+        </div>
         <div id="errorListPane" class="output-error-list" role="tabpanel" aria-labelledby="problemsTabBtn" hidden>
           <span class="muted">No file or line references detected.</span>
         </div>

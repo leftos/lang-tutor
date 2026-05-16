@@ -104,6 +104,8 @@ let dasmAutoTimer: number | null = null;
 let dasmAutoRevision = 0;
 let dasmAutoRunning = false;
 let dasmAutoQueued = false;
+let lastSingleOutputText = '';
+let suppressDasmAutoRun = false;
 
 // ── DOM helpers ───────────────────────────────────────────────────────────
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -634,6 +636,18 @@ function renderDasmFlagsControl(): void {
   syncDasmPreset(flags);
 }
 
+function setDasmAutoStatus(text: string): void {
+  lastSingleOutputText = '';
+  const runPre = el<HTMLPreElement>('dasmProgramPre');
+  const asmPre = el<HTMLPreElement>('dasmAsmPre');
+  runPre.textContent = '';
+  runPre.appendChild(span(text, 'muted'));
+  asmPre.textContent = '';
+  asmPre.appendChild(span('Disassembly will appear after the sandbox finishes.', 'muted'));
+  syncSingleOutputPanes();
+  renderSingleOutputTabs();
+}
+
 function saveDasmFlags(flags: string): void {
   const normalized = normalizeDasmFlags(flags);
   el<HTMLInputElement>('dasmFlagsInput').value = normalized;
@@ -661,6 +675,7 @@ function scheduleDasmAutoRun(): void {
 
 async function runDasmAutoDisassembly(): Promise<void> {
   if (activeLang !== 'dasm') return;
+  if (!canUseHostedTooling()) return;
   if (dasmAutoRunning) {
     dasmAutoQueued = true;
     return;
@@ -671,7 +686,7 @@ async function runDasmAutoDisassembly(): Promise<void> {
   const code = editor.getContent();
   const flags = currentDasmFlags();
   singleOutputTab = 'output';
-  renderSingleOutput(`Updating disassembly with ${flags}…`, true);
+  setDasmAutoStatus(`Updating disassembly with ${flags}...`);
 
   try {
     const result = await runCode(
@@ -1237,6 +1252,16 @@ interface LocatedText {
   matchText: string;
 }
 
+interface DasmOutputParts {
+  run: string;
+  asm: string;
+}
+
+interface AsmRenderState {
+  nextGroup: number;
+  currentGroup: number | null;
+}
+
 const OUTPUT_PLACEHOLDER = 'Run the program to capture its output here.';
 const CSHARP_LOCATION_RE = /(^|[\s([{'"])((?:[A-Za-z]:)?[^\s()\r\n]+?\.\w+)\((\d+),(\d+)\)/g;
 const PYTHON_LOCATION_RE = /File "([^"]+)", line (\d+)/g;
@@ -1426,11 +1451,15 @@ function singleProblemCounts(): { errors: number; warnings: number } {
 
 function syncSingleOutputPanes(): void {
   const outputPre = el<HTMLPreElement>('outputPre');
+  const dasmOutput = el('dasmOutputView');
   const errorList = el('errorListPane');
   const outputActive = singleOutputTab === 'output';
-  outputPre.hidden = !outputActive;
+  const dasmActive = outputActive && activeLang === 'dasm';
+  outputPre.hidden = !outputActive || dasmActive;
+  dasmOutput.hidden = !dasmActive;
   errorList.hidden = outputActive;
-  outputPre.setAttribute('aria-hidden', outputActive ? 'false' : 'true');
+  outputPre.setAttribute('aria-hidden', outputActive && !dasmActive ? 'false' : 'true');
+  dasmOutput.setAttribute('aria-hidden', dasmActive ? 'false' : 'true');
   errorList.setAttribute('aria-hidden', outputActive ? 'true' : 'false');
 }
 
@@ -1466,8 +1495,8 @@ function jumpToSingleProblem(problem: SingleProblem): void {
   editor.revealAt(problem.line, problem.col);
 }
 
-function renderLinkedOutput(text: string, failed: boolean, placeholder = false): void {
-  const outputPre = el<HTMLPreElement>('outputPre');
+function renderLinkedOutput(text: string, failed: boolean, placeholder = false, host?: HTMLPreElement): void {
+  const outputPre = host ?? el<HTMLPreElement>('outputPre');
   outputPre.textContent = '';
   outputPre.classList.toggle('is-error', failed);
 
@@ -1502,6 +1531,157 @@ function renderLinkedOutput(text: string, failed: boolean, placeholder = false):
     if (cursor < line.length) outputPre.appendChild(document.createTextNode(line.slice(cursor)));
     if (index < lines.length - 1) outputPre.appendChild(document.createTextNode('\n'));
   });
+}
+
+function splitDasmOutput(text: string): DasmOutputParts {
+  const marker = '\n[disassembly:';
+  const markerIdx = text.indexOf(marker);
+  if (markerIdx === -1) return { run: text.trimEnd(), asm: '' };
+
+  const run = text.slice(0, markerIdx).trimEnd();
+  const asmWithHeader = text.slice(markerIdx + 1);
+  const firstBreak = asmWithHeader.indexOf('\n');
+  const asm = firstBreak === -1 ? '' : asmWithHeader.slice(firstBreak + 1).trimEnd();
+  return { run, asm };
+}
+
+function appendAsmText(host: HTMLElement, text: string, className: string): void {
+  const s = document.createElement('span');
+  s.className = className;
+  s.textContent = text;
+  host.appendChild(s);
+}
+
+function appendHighlightedAsmOperands(host: HTMLElement, operands: string): void {
+  const tokenRe = /\b(?:r(?:[abcd]x|[sb]p|[sd]i|[0-9]{1,2}[bwd]?)|e(?:[abcd]x|[sb]p|[sd]i)|[abcd][lh]|[er]?ip|xmm\d+|ymm\d+|zmm\d+)\b|0x[0-9a-f]+|\b\d+\b|#.*$/gi;
+  let cursor = 0;
+  for (const m of operands.matchAll(tokenRe)) {
+    if (m.index === undefined) continue;
+    if (m.index > cursor) host.appendChild(document.createTextNode(operands.slice(cursor, m.index)));
+    const token = m[0];
+    const cls = token.startsWith('#') ? 'asm-comment' : /^0x|\d/.test(token) ? 'asm-number' : 'asm-register';
+    appendAsmText(host, token, cls);
+    cursor = m.index + token.length;
+  }
+  if (cursor < operands.length) host.appendChild(document.createTextNode(operands.slice(cursor)));
+}
+
+function groupClass(group: number): string {
+  return `asm-group-${group % 6}`;
+}
+
+function appendHighlightedAsmLine(host: HTMLElement, line: string, state: AsmRenderState): void {
+  const lineEl = document.createElement('span');
+  lineEl.className = 'asm-line';
+
+  const label = /^([0-9a-f]+)\s+<([^>]+)>:$/i.exec(line);
+  if (label !== null) {
+    lineEl.classList.add('asm-label-line');
+    appendAsmText(lineEl, label[1] ?? '', 'asm-address');
+    lineEl.appendChild(document.createTextNode(' <'));
+    appendAsmText(lineEl, label[2] ?? '', 'asm-label');
+    lineEl.appendChild(document.createTextNode('>:'));
+    host.appendChild(lineEl);
+    return;
+  }
+
+  const insn = /^(\s*)([0-9a-f]+):\s+([a-z][a-z0-9._]*)\s*(.*)$/i.exec(line);
+  if (insn !== null) {
+    lineEl.classList.add('asm-instruction-line');
+    if (state.currentGroup !== null) {
+      lineEl.dataset.asmGroup = String(state.currentGroup);
+      lineEl.classList.add(groupClass(state.currentGroup));
+    }
+    lineEl.appendChild(document.createTextNode(insn[1] ?? ''));
+    appendAsmText(lineEl, insn[2] ?? '', 'asm-address');
+    lineEl.appendChild(document.createTextNode(':  '));
+    appendAsmText(lineEl, insn[3] ?? '', 'asm-mnemonic');
+    const operands = insn[4] ?? '';
+    if (operands.length > 0) {
+      lineEl.appendChild(document.createTextNode('   '));
+      appendHighlightedAsmOperands(lineEl, operands);
+    }
+    host.appendChild(lineEl);
+    return;
+  }
+
+  if (/\bR_X86_64_/.test(line)) {
+    lineEl.classList.add('asm-relocation-line');
+    if (state.currentGroup !== null) {
+      lineEl.dataset.asmGroup = String(state.currentGroup);
+      lineEl.classList.add(groupClass(state.currentGroup));
+    }
+    appendAsmText(lineEl, line, 'asm-relocation');
+    host.appendChild(lineEl);
+    return;
+  }
+
+  if (/^\s*(Disassembly of section|\/tmp\/|main\.cpp:|\.\.\.)/.test(line)) {
+    lineEl.classList.add('asm-meta-line');
+    appendAsmText(lineEl, line, 'asm-meta');
+    host.appendChild(lineEl);
+    return;
+  }
+
+  if (line.trim().length === 0) {
+    appendAsmText(lineEl, line, 'asm-blank');
+    host.appendChild(lineEl);
+    return;
+  }
+
+  state.currentGroup = state.nextGroup;
+  state.nextGroup += 1;
+  lineEl.dataset.asmGroup = String(state.currentGroup);
+  lineEl.classList.add('asm-source-line', groupClass(state.currentGroup));
+  appendAsmText(lineEl, line, 'asm-source');
+  host.appendChild(lineEl);
+}
+
+function attachAsmHover(host: HTMLElement): void {
+  const lines = [...host.querySelectorAll<HTMLElement>('.asm-line[data-asm-group]')];
+  const setHover = (group: string, hover: boolean): void => {
+    for (const line of lines) {
+      if (line.dataset.asmGroup === group) line.classList.toggle('is-hovered', hover);
+    }
+  };
+  for (const line of lines) {
+    const group = line.dataset.asmGroup;
+    if (group === undefined) continue;
+    line.addEventListener('mouseenter', () => setHover(group, true));
+    line.addEventListener('mouseleave', () => setHover(group, false));
+  }
+}
+
+function renderHighlightedAsm(text: string): void {
+  const asmPre = el<HTMLPreElement>('dasmAsmPre');
+  asmPre.textContent = '';
+
+  if (text.trim().length === 0) {
+    asmPre.appendChild(span('No disassembly captured yet.', 'muted'));
+    return;
+  }
+
+  const lines = text.split(/\r?\n/);
+  const state: AsmRenderState = { nextGroup: 0, currentGroup: null };
+  lines.forEach((line) => {
+    appendHighlightedAsmLine(asmPre, line, state);
+  });
+  attachAsmHover(asmPre);
+}
+
+function renderDasmOutput(text: string, ok: boolean, placeholder = false): DasmOutputParts {
+  const runPre = el<HTMLPreElement>('dasmProgramPre');
+  if (placeholder) {
+    renderLinkedOutput(OUTPUT_PLACEHOLDER, false, true, runPre);
+    renderHighlightedAsm('');
+    return { run: '', asm: '' };
+  }
+
+  const parts = splitDasmOutput(text);
+  const runText = parts.run.trim().length > 0 ? parts.run : '(program produced no stdout/stderr)';
+  renderLinkedOutput(runText, !ok, false, runPre);
+  renderHighlightedAsm(parts.asm);
+  return parts;
 }
 
 function renderProblemSection(title: string, problems: SingleProblem[], host: HTMLElement): void {
@@ -1543,8 +1723,15 @@ function renderSingleProblemList(): void {
 }
 
 function renderSingleOutput(text: string, ok: boolean, opts: { placeholder?: boolean; autoSelect?: boolean } = {}): void {
-  outputProblems = opts.placeholder ? [] : parseOutputProblems(text);
-  renderLinkedOutput(text, !ok, opts.placeholder ?? false);
+  lastSingleOutputText = opts.placeholder ? '' : text;
+  const dasmMode = activeLang === 'dasm';
+  const problemText = dasmMode && !opts.placeholder ? splitDasmOutput(text).run : text;
+  outputProblems = opts.placeholder ? [] : parseOutputProblems(problemText);
+  if (dasmMode) {
+    renderDasmOutput(text, ok, opts.placeholder ?? false);
+  } else {
+    renderLinkedOutput(text, !ok, opts.placeholder ?? false);
+  }
   renderSingleProblemList();
 
   if (opts.placeholder) {
@@ -2251,7 +2438,11 @@ async function runActiveCode(): Promise<void> {
   runBtn.disabled = true;
   el('runLabel').textContent = 'Running…';
   singleOutputTab = 'output';
-  renderSingleOutput('', true);
+  if (lang.id === 'dasm') {
+    setDasmAutoStatus(`Running with ${currentDasmFlags()}...`);
+  } else {
+    renderSingleOutput('', true);
+  }
 
   const langAtStart = activeLang;
   const options = lang.id === 'dasm' ? { compilerFlags: currentDasmFlags() } : undefined;
@@ -2280,8 +2471,13 @@ async function evaluateCode(): Promise<void> {
   if (!isSingleBufferLanguage(lang)) return;
 
   const code = editor.getContent().trim();
-  const out = el<HTMLPreElement>('outputPre').textContent ?? '';
-  const hasOut = out && !out.includes('Run the program') && out !== 'Compiling…' && out !== 'Running…';
+  const out = lastSingleOutputText || (el<HTMLPreElement>('outputPre').textContent ?? '');
+  const hasOut =
+    out.trim().length > 0 &&
+    !out.includes('Run the program') &&
+    !out.startsWith('Updating disassembly') &&
+    out !== 'Compiling…' &&
+    out !== 'Running…';
   const noteBlock = draftNoteBlock();
   const lspBlock = await buildLspBlock();
   const blocks = [
@@ -2929,11 +3125,12 @@ function loadLanguageState(id: LanguageId): void {
     el('fileLabel').textContent = lang.fileName;
 
     const storedCode = storageGet<string>(codeKey(activeLang));
+    suppressDasmAutoRun = activeLang === 'dasm';
     editor.setContent(storedCode ?? lang.starterCode);
+    suppressDasmAutoRun = false;
     editor.setLanguage(lang.id as SingleBufferLanguageId);
 
     clearOutput();
-    if (lang.id === 'dasm') scheduleDasmAutoRun();
   } else {
     setWorkshopMode('project');
     ensureProjectUI(id, lang);
@@ -3121,7 +3318,7 @@ function makeDebouncedCodeSaver(): (doc: string) => void {
         storageSet(codeKey(activeLang), doc);
       }
     }, 400);
-    if (activeLang === 'dasm') scheduleDasmAutoRun();
+    if (activeLang === 'dasm' && !suppressDasmAutoRun) scheduleDasmAutoRun();
   };
 }
 
