@@ -54,8 +54,7 @@ export interface CallResult {
 function missingProviderResult(): CallResult {
   return {
     ok: false,
-    text:
-      'Add an AI provider API key before chatting. Open AI Provider, choose Anthropic Claude, OpenAI ChatGPT, or Google Gemini, then paste your key.',
+    text: 'Add an AI provider API key before chatting. Open AI Provider, choose Anthropic Claude, OpenAI ChatGPT, or Google Gemini, then paste your key.',
   };
 }
 
@@ -132,7 +131,9 @@ function withAnthropicCache(msgs: Message[]): Message[] {
   });
 }
 
-function toOpenAiContent(content: Message['content']): string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> {
+function toOpenAiContent(
+  content: Message['content']
+): string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> {
   if (typeof content === 'string') return content;
   return content.map((block) => {
     if (block.type === 'text') return { type: 'text', text: block.text };
@@ -490,4 +491,3 @@ ${snippet}`;
     return null;
   }
 }
-

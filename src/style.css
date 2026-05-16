@@ -231,8 +231,7 @@
   min-height: 0;
 }
 
-.auth-required #chapterStrip,
-.auth-required #bodySplit {
+.auth-required #chapterStrip {
   display: none;
 }
 
@@ -282,10 +281,6 @@
   color: var(--ink-2);
   font-size: 1rem;
   line-height: 1.55;
-}
-
-.auth-gate .primary-btn {
-  justify-self: start;
 }
 
 /* ─── Header ─────────────────────────────────────────────── */
@@ -507,6 +502,9 @@
 }
 .primary-btn .ti {
   font-size: 11px;
+}
+.auth-gate .primary-btn {
+  justify-self: start;
 }
 
 .danger-btn {
@@ -806,6 +804,9 @@
   overflow: hidden;
   min-height: 0;
 }
+.auth-required #bodySplit {
+  display: none;
+}
 
 .aside {
   flex: 0 0 38%;
@@ -829,9 +830,6 @@
 .focus-mode .aside,
 .focus-mode .aside-resize {
   display: none;
-}
-.focus-mode .main {
-  flex-basis: 100%;
 }
 
 /* ─── Aside tabs ─────────────────────────────────────────── */
@@ -1604,6 +1602,9 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+.focus-mode .main {
+  flex-basis: 100%;
 }
 
 .main-toolbar,

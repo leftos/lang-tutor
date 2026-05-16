@@ -20,8 +20,7 @@ const csrfCookieName = 'lang_tutor_csrf';
 let authRequired = false;
 let sessionActive = false;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const readJson = async (response: Response): Promise<unknown> => {
   try {

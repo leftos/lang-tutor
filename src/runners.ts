@@ -33,7 +33,12 @@ export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' |
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────
-export async function runCode(lang: SingleBufferLanguageId, code: string, onProgress?: (msg: string) => void, options?: RunOptions): Promise<RunResult> {
+export async function runCode(
+  lang: SingleBufferLanguageId,
+  code: string,
+  onProgress?: (msg: string) => void,
+  options?: RunOptions
+): Promise<RunResult> {
   switch (lang) {
     case 'rust':
       onProgress?.('Running in local sandbox…');

@@ -131,16 +131,24 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
 
+/** Replace the text of the first child `<span>` inside a button. Used for buttons
+ *  whose template is `<button><i …></i><span>…</span></button>` — `<i>` icons stay
+ *  intact, the visible label updates. No-ops if no span child is present. */
+function setButtonLabel(button: HTMLElement, text: string): void {
+  const sp = button.querySelector('span');
+  if (sp !== null) sp.textContent = text;
+}
+
 // ── Account / provider settings ──────────────────────────────────────────
 function renderAccountSummary(): void {
   const status = el('authStatus');
   const accountBtn = el<HTMLButtonElement>('accountBtn');
   if (authSession !== null) {
     status.textContent = authSession.user.email;
-    accountBtn.querySelector('span')!.textContent = 'Account';
+    setButtonLabel(accountBtn, 'Account');
   } else {
     status.textContent = isAuthRequired() ? 'Sign in required' : 'Local progress';
-    accountBtn.querySelector('span')!.textContent = 'Sign in';
+    setButtonLabel(accountBtn, 'Sign in');
   }
 
   const signedIn = el('signedInPanel');
@@ -166,7 +174,7 @@ function renderAccountMode(): void {
   el('signInModeBtn').classList.toggle('is-active', accountMode === 'sign-in');
   el('registerModeBtn').classList.toggle('is-active', accountMode === 'register');
   el<HTMLInputElement>('accountPassword').autocomplete = accountMode === 'sign-in' ? 'current-password' : 'new-password';
-  el('accountSubmitBtn').querySelector('span')!.textContent = accountMode === 'sign-in' ? 'Sign in' : 'Create account';
+  setButtonLabel(el('accountSubmitBtn'), accountMode === 'sign-in' ? 'Sign in' : 'Create account');
 }
 
 async function initializeAuth(): Promise<void> {
@@ -410,7 +418,7 @@ function renderProviderSettings(providerOverride?: AiProvider): void {
   el<HTMLSelectElement>('providerSelect').value = provider;
   el<HTMLInputElement>('providerApiKey').value = apiKey;
   el<HTMLInputElement>('rememberProviderKey').checked = settings.rememberKeys;
-  el('providerBtn').querySelector('span')!.textContent = PROVIDER_LABELS[settings.activeProvider];
+  setButtonLabel(el('providerBtn'), PROVIDER_LABELS[settings.activeProvider]);
   renderProviderHelp(provider);
   setProviderModelWarning('');
   const cached = providerModelCache.get(provider);

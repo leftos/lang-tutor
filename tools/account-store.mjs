@@ -77,7 +77,7 @@ export class AccountStore {
     this.db.run(
       `insert into accounts (id, email, password_hash, created_at, updated_at)
        values (?, ?, ?, ?, ?)`,
-      [id, normalized, passwordHash, createdAt, createdAt],
+      [id, normalized, passwordHash, createdAt, createdAt]
     );
     return rowToUser({ id, email: normalized, created_at: createdAt });
   }
@@ -92,7 +92,7 @@ export class AccountStore {
     this.db.run(
       `insert into sessions (id, user_id, token_hash, created_at, expires_at)
        values (?, ?, ?, ?, ?)`,
-      [randomUUID(), userId, sessionTokenHash(token), createdAt, expiresAt],
+      [randomUUID(), userId, sessionTokenHash(token), createdAt, expiresAt]
     );
     return { expiresAt };
   }
@@ -103,7 +103,7 @@ export class AccountStore {
        from sessions
        join accounts on accounts.id = sessions.user_id
        where sessions.token_hash = ?`,
-      [sessionTokenHash(token)],
+      [sessionTokenHash(token)]
     );
     if (!row || Date.parse(row.expires_at) <= now.getTime()) return null;
     return {
@@ -134,7 +134,7 @@ export class AccountStore {
        on conflict(user_id) do update set
          state_json = excluded.state_json,
          updated_at = excluded.updated_at`,
-      [userId, JSON.stringify(savedState), savedState.updatedAt],
+      [userId, JSON.stringify(savedState), savedState.updatedAt]
     );
     return savedState;
   }
@@ -195,4 +195,3 @@ export function getAccountStore() {
   accountStore ??= AccountStore.open();
   return accountStore;
 }
-

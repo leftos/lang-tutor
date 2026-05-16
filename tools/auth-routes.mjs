@@ -11,8 +11,7 @@ const sessionMaxAgeSeconds = 60 * 60 * 24 * 30;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const secureCookies =
-  process.env.LANG_TUTOR_SECURE_COOKIES === 'true' ||
-  (process.env.LANG_TUTOR_SECURE_COOKIES !== 'false' && process.env.NODE_ENV === 'production');
+  process.env.LANG_TUTOR_SECURE_COOKIES === 'true' || (process.env.LANG_TUTOR_SECURE_COOKIES !== 'false' && process.env.NODE_ENV === 'production');
 const requireAuth = process.env.LANG_TUTOR_REQUIRE_AUTH === 'true';
 
 function sessionCookie(token, maxAge = sessionMaxAgeSeconds) {
