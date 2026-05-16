@@ -171,6 +171,33 @@
     </form>
   </dialog>
 
+  <dialog id="projectResetDialog" class="settings-dialog project-reset-dialog">
+    <form method="dialog" class="settings-panel">
+      <div class="settings-heading">
+        <div>
+          <h2>Reset Project Files</h2>
+          <p id="projectResetCopy">
+            Restore this project from the starter template.
+          </p>
+        </div>
+        <button type="submit" class="settings-close" aria-label="Close">
+          <i class="ti ti-x" aria-hidden="true"></i>
+        </button>
+      </div>
+      <p class="project-reset-warning">
+        This deletes your edited project files and stops the running project. Your tutor conversation, lesson progress, account, and API-provider settings are not reset.
+      </p>
+      <div class="settings-action-row">
+        <button type="submit" class="ghost-btn">Cancel</button>
+        <button type="button" id="confirmProjectResetBtn" class="danger-btn">
+          <i class="ti ti-rotate-2" aria-hidden="true"></i>
+          <span>Reset files</span>
+        </button>
+      </div>
+      <p id="projectResetStatus" class="settings-status" role="status"></p>
+    </form>
+  </dialog>
+
   <!-- ─── Chapter strip ───────────────────────────────────── -->
   <div id="chapterStrip" class="chapter-strip">
     <span class="folio" id="folio">Start</span>
@@ -279,6 +306,10 @@
             <div class="toolbar-spacer"></div>
             <button type="button" id="projConsoleRunBtn" class="ghost-btn icon-btn" title="Run the active C# file as a console snippet" disabled>
               <i class="ti ti-terminal-2" aria-hidden="true"></i>
+            </button>
+            <button type="button" id="projResetFilesBtn" class="ghost-btn" title="Reset project files to the starter template">
+              <i class="ti ti-rotate-2" aria-hidden="true"></i>
+              <span>Reset files</span>
             </button>
             <button type="button" id="projEvalBtn" class="ghost-btn" title="Send your note, open files, output, diagnostics, and preview context to the tutor">
               <span>Send to tutor</span>

@@ -487,6 +487,35 @@
   font-size: 11px;
 }
 
+.danger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--danger);
+  border-radius: 1px;
+  background: var(--danger);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    filter 120ms ease,
+    transform 80ms ease;
+}
+.danger-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.danger-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.danger-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ─── Settings dialogs ───────────────────────────────────── */
 .settings-dialog {
   width: min(880px, calc(100vw - 32px));
@@ -499,6 +528,9 @@
 }
 #accountDialog {
   width: min(520px, calc(100vw - 32px));
+}
+.project-reset-dialog {
+  width: min(560px, calc(100vw - 32px));
 }
 .settings-dialog::backdrop {
   background: rgba(26, 24, 20, 0.38);
@@ -614,6 +646,18 @@
 }
 .settings-status {
   min-height: 18px;
+}
+.project-reset-warning {
+  margin: 16px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settings-action-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
 }
 .provider-help {
   border-left: 1px solid var(--rule);

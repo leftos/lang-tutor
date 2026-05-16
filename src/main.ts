@@ -1458,6 +1458,7 @@ function renderProjectAuthRequired(lang: Language): void {
   el('projOpenExternalBtn').setAttribute('disabled', 'true');
   el('projScreenshotBtn').setAttribute('disabled', 'true');
   el('projConsoleRunBtn').setAttribute('disabled', 'true');
+  el('projResetFilesBtn').setAttribute('disabled', 'true');
   el('projRunBtn').setAttribute('disabled', 'true');
   el('projRunLabel').textContent = 'Sign in';
 }
@@ -1599,6 +1600,7 @@ function ensureProjectUI(id: LanguageId, lang: Language): void {
   el('projOpenExternalBtn').removeAttribute('disabled');
   el('projScreenshotBtn').removeAttribute('disabled');
   el('projConsoleRunBtn').removeAttribute('disabled');
+  el('projResetFilesBtn').removeAttribute('disabled');
   el('projRunBtn').removeAttribute('disabled');
 
   const state = projectStates.get(id) ?? loadProjectStateFromStorage(id);
@@ -2639,6 +2641,59 @@ async function resetCurrentLanguage(): Promise<void> {
   location.reload();
 }
 
+let projectResetLang: LanguageId | null = null;
+
+function openProjectResetDialog(): void {
+  const lang = getLanguage(activeLang);
+  if (lang.kind !== 'project') return;
+
+  projectResetLang = activeLang;
+  el('projectResetCopy').textContent = `Restore projects/${lang.scaffoldDir}/ for ${lang.name} from the starter template?`;
+  el('projectResetStatus').textContent = '';
+  const confirmBtn = el<HTMLButtonElement>('confirmProjectResetBtn');
+  confirmBtn.disabled = false;
+  const label = confirmBtn.querySelector('span');
+  if (label !== null) label.textContent = 'Reset files';
+  el<HTMLDialogElement>('projectResetDialog').showModal();
+}
+
+async function resetCurrentProjectFiles(): Promise<void> {
+  const id = projectResetLang;
+  if (id === null) return;
+  const lang = getLanguage(id);
+  if (lang.kind !== 'project') return;
+
+  const dialog = el<HTMLDialogElement>('projectResetDialog');
+  const status = el('projectResetStatus');
+  const confirmBtn = el<HTMLButtonElement>('confirmProjectResetBtn');
+  confirmBtn.disabled = true;
+  const label = confirmBtn.querySelector('span');
+  if (label !== null) label.textContent = 'Resetting…';
+  status.textContent = `Resetting projects/${lang.scaffoldDir}/…`;
+
+  try {
+    await resetProject(id);
+    storageDelete(openTabsKey(id));
+    storageDelete(activeTabKey(id));
+    projectStates.delete(id);
+
+    if (activeLang === id) {
+      destroyProjectUI();
+      const nextState = loadProjectStateFromStorage(id);
+      projectStates.set(id, nextState);
+      ensureProjectUI(id, lang);
+      await hydrateProjectState(id, lang);
+    }
+
+    status.textContent = 'Project files reset.';
+    dialog.close();
+  } catch (e) {
+    status.textContent = `Reset failed: ${(e as Error).message}`;
+    confirmBtn.disabled = false;
+    if (label !== null) label.textContent = 'Reset files';
+  }
+}
+
 // ── Language switching ────────────────────────────────────────────────────
 function loadLanguageState(id: LanguageId): void {
   activeLang = id;
@@ -2869,6 +2924,11 @@ el('evalBtn').addEventListener('click', () => void evaluateCode());
 el('outputTabBtn').addEventListener('click', () => setSingleOutputTab('output'));
 el('problemsTabBtn').addEventListener('click', () => setSingleOutputTab('errors'));
 el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
+el('projResetFilesBtn').addEventListener('click', openProjectResetDialog);
+el('confirmProjectResetBtn').addEventListener('click', () => void resetCurrentProjectFiles());
+el('projectResetDialog').addEventListener('close', () => {
+  projectResetLang = null;
+});
 el('resetBtn').addEventListener('click', () => void resetCurrentLanguage());
 el('themeToggle').addEventListener('click', toggleTheme);
 el('providerBtn').addEventListener('click', () => {
