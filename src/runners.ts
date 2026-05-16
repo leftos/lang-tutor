@@ -8,7 +8,11 @@ interface RunResponse {
   error?: string;
 }
 
-export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' | 'csharp', code: string): Promise<RunResult> {
+export interface RunOptions {
+  compilerFlags?: string;
+}
+
+export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' | 'csharp', code: string, options?: RunOptions): Promise<RunResult> {
   if (!canUseHostedTooling()) {
     return { ok: false, output: 'Sign in to run code on the hosted server.' };
   }
@@ -16,7 +20,7 @@ export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' |
     const r = await fetch(appUrl('/run'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lang, code }),
+      body: JSON.stringify({ lang, code, options }),
     });
     const d = (await r.json()) as RunResponse;
     if (!r.ok) {
@@ -29,7 +33,7 @@ export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' |
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────
-export async function runCode(lang: SingleBufferLanguageId, code: string, onProgress?: (msg: string) => void): Promise<RunResult> {
+export async function runCode(lang: SingleBufferLanguageId, code: string, onProgress?: (msg: string) => void, options?: RunOptions): Promise<RunResult> {
   switch (lang) {
     case 'rust':
       onProgress?.('Running in local sandbox…');
@@ -39,7 +43,7 @@ export async function runCode(lang: SingleBufferLanguageId, code: string, onProg
       return runLocalSnippet('cpp', code);
     case 'dasm':
       onProgress?.('Compiling and disassembling with Clang/objdump…');
-      return runLocalSnippet('dasm', code);
+      return runLocalSnippet('dasm', code, options);
     case 'python':
       onProgress?.('Running Python in local sandbox…');
       return runLocalSnippet('python', code);

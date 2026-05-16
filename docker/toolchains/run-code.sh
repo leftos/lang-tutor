@@ -23,7 +23,10 @@ case "$lang" in
     fi
     cp /workspace/main.cpp "$run_dir/main.cpp"
     cd "$run_dir"
-    clang++ -std=c++23 -Wall -Wextra -pedantic -O2 -g -fno-pie -no-pie main.cpp -o /tmp/main 2>&1
+    read -r -a dasm_flags <<< "${DASM_COMPILER_FLAGS:--O0 -fno-omit-frame-pointer}"
+    printf '[compiler]\nclang++ -std=c++23 -Wall -Wextra -pedantic -fno-pie %s -c main.cpp\n\n' "${dasm_flags[*]}"
+    clang++ -std=c++23 -Wall -Wextra -pedantic -fno-pie "${dasm_flags[@]}" -c main.cpp -o /tmp/main.o 2>&1
+    clang++ -no-pie /tmp/main.o -o /tmp/main 2>&1
     set +e
     program_output="$(/tmp/main 2>&1)"
     program_status=$?
@@ -37,9 +40,26 @@ case "$lang" in
     if [[ "$program_status" -ne 0 ]]; then
       printf '[program exited with code %s]\n' "$program_status"
     fi
-    printf '\n[disassembly: objdump -d -Mintel -C --no-show-raw-insn /tmp/main]\n'
-    objdump -d -Mintel -C --no-show-raw-insn /tmp/main | awk '/Disassembly of section \.text:/{flag=1} flag {print; count++} count >= 260 {exit}'
-    exit "$program_status"
+    printf '\n[disassembly: main.cpp object file, Intel syntax]\n'
+    mapfile -t student_symbols < <(
+      nm --defined-only /tmp/main.o \
+        | awk '$2 ~ /^[TtWw]$/ { print $3 }' \
+        | awk '
+            $0 == "" { next }
+            $0 ~ /^(_GLOBAL__|__|_init$|_fini$|_start$|frame_dummy$|deregister_tm_clones$|register_tm_clones$)/ { next }
+            { print }
+          '
+    )
+    if [[ "${#student_symbols[@]}" -eq 0 ]]; then
+      printf '(no user-defined text symbols survived optimization; showing the object text section)\n'
+      objdump -dr -Mintel -C --no-show-raw-insn -S /tmp/main.o | awk '/Disassembly of section \.text/{flag=1} flag {print; count++} count >= 220 {exit}'
+    else
+      for sym in "${student_symbols[@]}"; do
+        printf -- '\n--- %s ---\n' "$(c++filt "$sym")"
+        objdump -dr -Mintel -C --no-show-raw-insn -S --disassemble="$sym" /tmp/main.o | awk 'count < 140 { print; count++ }'
+      done
+    fi
+    exit 0
     ;;
   rust)
     if [[ ! -f main.rs ]]; then

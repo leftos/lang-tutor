@@ -98,7 +98,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'POST' && (req.url === '/check' || req.url === '/format' || req.url === '/run')) {
     try {
       const body = await readBody(req);
-      const { lang, code } = JSON.parse(body);
+      const { lang, code, options } = JSON.parse(body);
       if (!lang || typeof code !== 'string') {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'expected { lang, code }' }));
@@ -110,7 +110,7 @@ const server = createServer(async (req, res) => {
       } else if (req.url === '/format') {
         result = await formatCode(lang, code);
       } else {
-        result = await runSnippet(lang, code);
+        result = await runSnippet(lang, code, options);
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));

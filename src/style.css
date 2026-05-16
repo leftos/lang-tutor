@@ -816,6 +816,14 @@
   background: var(--sig);
 }
 
+.focus-mode .aside,
+.focus-mode .aside-resize {
+  display: none;
+}
+.focus-mode .main {
+  flex-basis: 100%;
+}
+
 /* ─── Aside tabs ─────────────────────────────────────────── */
 .aside-tabs {
   display: flex;
@@ -1552,6 +1560,48 @@
 }
 .toolbar-spacer {
   flex: 1;
+}
+
+.dasm-flags-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 1px solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.dasm-flags-control[hidden] {
+  display: none;
+}
+.dasm-flags-control select,
+.dasm-flags-control input {
+  height: 28px;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.dasm-flags-control select {
+  width: 74px;
+  padding: 0 6px;
+}
+.dasm-flags-control input {
+  width: min(280px, 24vw);
+  min-width: 160px;
+  padding: 0 8px;
+  text-transform: none;
+}
+.dasm-flags-control input:focus,
+.dasm-flags-control select:focus {
+  outline: 2px solid var(--sig-soft);
+  border-color: var(--sig);
 }
 
 .badge {
@@ -2498,5 +2548,19 @@
     border-left: 0;
     border-top: 1px solid var(--rule);
     padding: 18px 0 0;
+  }
+  .main-toolbar {
+    flex-wrap: wrap;
+  }
+  .dasm-flags-control {
+    order: 5;
+    flex: 1 0 100%;
+    padding-left: 0;
+    border-left: 0;
+  }
+  .dasm-flags-control input {
+    width: auto;
+    min-width: 0;
+    flex: 1;
   }
 }

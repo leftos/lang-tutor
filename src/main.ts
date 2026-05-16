@@ -76,6 +76,14 @@ import type {
 import { isSingleBufferLanguage } from './types';
 
 const THEME_KEY = 'lang-tutor:theme';
+const DASM_FLAGS_KEY = 'lang-tutor:dasm:compiler-flags';
+const FOCUS_MODE_KEY = 'lang-tutor:focus-mode';
+const DEFAULT_DASM_FLAGS = '-O0 -fno-omit-frame-pointer';
+const DASM_FLAG_PRESETS = [
+  { label: '-O0', flags: DEFAULT_DASM_FLAGS },
+  { label: '-O1', flags: '-O1 -fno-omit-frame-pointer' },
+  { label: '-O2', flags: '-O2 -fno-omit-frame-pointer' },
+] as const;
 
 // ── State ─────────────────────────────────────────────────────────────────
 let activeLang: LanguageId = DEFAULT_LANGUAGE;
@@ -85,12 +93,17 @@ let learnerProfile: LearnerProfile | null = null;
 let currentSystemPrompt = '';
 let extractionQueued = false;
 let isSending = false;
+let focusMode = false;
 let editor: TutorEditor;
 let authSession: AccountSession | null = null;
 let accountMode: 'sign-in' | 'register' = 'sign-in';
 // Per-language project state. Project-kind languages (e.g. 'web') own
 // files on disk; this map caches the tree + tab UI state in memory.
 const projectStates = new Map<LanguageId, ProjectState>();
+let dasmAutoTimer: number | null = null;
+let dasmAutoRevision = 0;
+let dasmAutoRunning = false;
+let dasmAutoQueued = false;
 
 // ── DOM helpers ───────────────────────────────────────────────────────────
 function el<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -592,6 +605,112 @@ function renderFileSpec(): void {
     web: `vite · http://${window.location.hostname || 'localhost'}:5180`,
   };
   spec.textContent = map[lang.id];
+}
+
+function normalizeDasmFlags(flags: string): string {
+  const normalized = flags.trim().replace(/\s+/g, ' ');
+  return normalized || DEFAULT_DASM_FLAGS;
+}
+
+function currentDasmFlags(): string {
+  return normalizeDasmFlags(el<HTMLInputElement>('dasmFlagsInput').value);
+}
+
+function syncDasmPreset(flags: string): void {
+  const preset = el<HTMLSelectElement>('dasmFlagsPreset');
+  const match = DASM_FLAG_PRESETS.find((p) => p.flags === flags);
+  preset.value = match?.flags ?? 'custom';
+}
+
+function renderDasmFlagsControl(): void {
+  const control = el<HTMLDivElement>('dasmFlagsControl');
+  const input = el<HTMLInputElement>('dasmFlagsInput');
+  const visible = activeLang === 'dasm';
+  control.hidden = !visible;
+  if (!visible) return;
+
+  const flags = normalizeDasmFlags(storageGet<string>(DASM_FLAGS_KEY) ?? DEFAULT_DASM_FLAGS);
+  input.value = flags;
+  syncDasmPreset(flags);
+}
+
+function saveDasmFlags(flags: string): void {
+  const normalized = normalizeDasmFlags(flags);
+  el<HTMLInputElement>('dasmFlagsInput').value = normalized;
+  syncDasmPreset(normalized);
+  storageSet(DASM_FLAGS_KEY, normalized);
+  scheduleDasmAutoRun();
+}
+
+function cancelDasmAutoRun(): void {
+  if (dasmAutoTimer !== null) {
+    window.clearTimeout(dasmAutoTimer);
+    dasmAutoTimer = null;
+  }
+}
+
+function scheduleDasmAutoRun(): void {
+  if (activeLang !== 'dasm') return;
+  dasmAutoRevision += 1;
+  if (dasmAutoTimer !== null) window.clearTimeout(dasmAutoTimer);
+  dasmAutoTimer = window.setTimeout(() => {
+    dasmAutoTimer = null;
+    void runDasmAutoDisassembly();
+  }, 900);
+}
+
+async function runDasmAutoDisassembly(): Promise<void> {
+  if (activeLang !== 'dasm') return;
+  if (dasmAutoRunning) {
+    dasmAutoQueued = true;
+    return;
+  }
+
+  dasmAutoRunning = true;
+  const revision = dasmAutoRevision;
+  const code = editor.getContent();
+  const flags = currentDasmFlags();
+  singleOutputTab = 'output';
+  renderSingleOutput(`Updating disassembly with ${flags}…`, true);
+
+  try {
+    const result = await runCode(
+      'dasm',
+      code,
+      (msg) => {
+        if (activeLang === 'dasm' && revision === dasmAutoRevision) renderSingleOutput(msg, true);
+      },
+      { compilerFlags: flags }
+    );
+    if (activeLang === 'dasm' && revision === dasmAutoRevision) {
+      renderSingleOutput(result.output, result.ok, { autoSelect: true });
+    }
+  } finally {
+    dasmAutoRunning = false;
+    if (dasmAutoQueued) {
+      dasmAutoQueued = false;
+      scheduleDasmAutoRun();
+    }
+  }
+}
+
+function setFocusMode(next: boolean): void {
+  focusMode = next;
+  document.documentElement.classList.toggle('focus-mode', focusMode);
+  storageSet(FOCUS_MODE_KEY, focusMode);
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-focus-mode-toggle]')) {
+    button.setAttribute('aria-pressed', focusMode ? 'true' : 'false');
+    button.title = focusMode ? 'Show tutor panel' : 'Collapse tutor panel';
+    const icon = button.querySelector('i');
+    if (icon !== null) icon.className = focusMode ? 'ti ti-layout-sidebar-left-expand' : 'ti ti-layout-sidebar-left-collapse';
+    const label = button.querySelector('span');
+    if (label !== null) label.textContent = focusMode ? 'Tutor' : 'Focus';
+  }
+}
+
+function applyStoredFocusMode(): void {
+  setFocusMode(storageGet<boolean>(FOCUS_MODE_KEY) === true);
 }
 
 // ── Progress badge ────────────────────────────────────────────────────────
@@ -2124,6 +2243,10 @@ async function runActiveCode(): Promise<void> {
   if (!isSingleBufferLanguage(lang)) return;
 
   const code = editor.getContent();
+  if (lang.id === 'dasm') {
+    cancelDasmAutoRun();
+    dasmAutoRevision += 1;
+  }
   const runBtn = el<HTMLButtonElement>('runBtn');
   runBtn.disabled = true;
   el('runLabel').textContent = 'Running…';
@@ -2131,9 +2254,15 @@ async function runActiveCode(): Promise<void> {
   renderSingleOutput('', true);
 
   const langAtStart = activeLang;
-  const result = await runCode(lang.id as SingleBufferLanguageId, code, (msg) => {
-    if (activeLang === langAtStart) renderSingleOutput(msg, true);
-  });
+  const options = lang.id === 'dasm' ? { compilerFlags: currentDasmFlags() } : undefined;
+  const result = await runCode(
+    lang.id as SingleBufferLanguageId,
+    code,
+    (msg) => {
+      if (activeLang === langAtStart) renderSingleOutput(msg, true);
+    },
+    options
+  );
 
   if (activeLang !== langAtStart) {
     runBtn.disabled = false;
@@ -2157,6 +2286,7 @@ async function evaluateCode(): Promise<void> {
   const lspBlock = await buildLspBlock();
   const blocks = [
     noteBlock,
+    lang.id === 'dasm' ? `[COMPILER FLAGS]\n${currentDasmFlags()}` : null,
     `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\``,
     `[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\``,
     lspBlock,
@@ -2788,6 +2918,8 @@ function loadLanguageState(id: LanguageId): void {
   currentSystemPrompt = buildSystem(progress, lang, learnerProfile);
 
   renderFileSpec();
+  renderDasmFlagsControl();
+  if (activeLang !== 'dasm') cancelDasmAutoRun();
 
   lspProblems = [];
   updateSingleDiagnostics([]);
@@ -2801,6 +2933,7 @@ function loadLanguageState(id: LanguageId): void {
     editor.setLanguage(lang.id as SingleBufferLanguageId);
 
     clearOutput();
+    if (lang.id === 'dasm') scheduleDasmAutoRun();
   } else {
     setWorkshopMode('project');
     ensureProjectUI(id, lang);
@@ -2988,6 +3121,7 @@ function makeDebouncedCodeSaver(): (doc: string) => void {
         storageSet(codeKey(activeLang), doc);
       }
     }, 400);
+    if (activeLang === 'dasm') scheduleDasmAutoRun();
   };
 }
 
@@ -3003,6 +3137,15 @@ el<HTMLTextAreaElement>('chatInput').addEventListener('keydown', (e: KeyboardEve
 });
 el('runBtn').addEventListener('click', () => void runActiveCode());
 el('evalBtn').addEventListener('click', () => void evaluateCode());
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-focus-mode-toggle]')) {
+  button.addEventListener('click', () => setFocusMode(!focusMode));
+}
+el<HTMLSelectElement>('dasmFlagsPreset').addEventListener('change', () => {
+  const selected = el<HTMLSelectElement>('dasmFlagsPreset').value;
+  if (selected !== 'custom') saveDasmFlags(selected);
+});
+el<HTMLInputElement>('dasmFlagsInput').addEventListener('change', () => saveDasmFlags(el<HTMLInputElement>('dasmFlagsInput').value));
+el<HTMLInputElement>('dasmFlagsInput').addEventListener('input', () => syncDasmPreset(normalizeDasmFlags(el<HTMLInputElement>('dasmFlagsInput').value)));
 el('outputTabBtn').addEventListener('click', () => setSingleOutputTab('output'));
 el('problemsTabBtn').addEventListener('click', () => setSingleOutputTab('errors'));
 el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
@@ -3078,6 +3221,7 @@ renderProviderSettings();
 await initializeAuth();
 await hydrateStorageFromDisk();
 applyStoredTheme();
+applyStoredFocusMode();
 migrateOldStorage();
 learnerProfile = storageGet<LearnerProfile>(LEARNER_PROFILE_KEY);
 const initialLang = loadInitialActiveLang();

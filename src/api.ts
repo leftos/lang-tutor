@@ -13,7 +13,7 @@ function messageText(m: Message): string {
 function learnerProfileText(m: Message): string {
   const text = messageText(m);
   return text
-    .replace(/\n?\[(?:CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|SCREENSHOT)\][\s\S]*?(?=\n\n\[[A-Z]+\]|\s*$)/g, '')
+    .replace(/\n?\[(?:COMPILER FLAGS|CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|SCREENSHOT)\][\s\S]*?(?=\n\n\[[A-Z ]+\]|\s*$)/g, '')
     .trim();
 }
 

@@ -29,6 +29,30 @@ const LANG_CONFIG = Object.freeze({
   csharp: { file: 'main.cs' },
 });
 
+const DASM_DEFAULT_FLAGS = '-O0 -fno-omit-frame-pointer';
+const DASM_ALLOWED_FLAGS = new Set([
+  '-O0',
+  '-O1',
+  '-O2',
+  '-O3',
+  '-Og',
+  '-Os',
+  '-Oz',
+  '-g',
+  '-g0',
+  '-g1',
+  '-g2',
+  '-g3',
+  '-fomit-frame-pointer',
+  '-fno-omit-frame-pointer',
+  '-fno-inline',
+  '-fno-exceptions',
+  '-fno-rtti',
+  '-DNDEBUG',
+  '-Wall',
+  '-Wextra',
+]);
+
 function dockerProblem() {
   const hosted = process.env.LANG_TUTOR_REQUIRE_AUTH === 'true';
   const version = spawnSync('docker', ['--version'], { encoding: 'utf8', timeout: 5_000 });
@@ -99,7 +123,27 @@ function formatOutput(stdout, stderr, exitCode, timedOut) {
   return output || '(no output)';
 }
 
-function runDocker(lang, workspace) {
+function dasmCompilerFlags(options) {
+  const raw = options?.compilerFlags;
+  if (raw === undefined || raw === null || raw === '') return { ok: true, flags: DASM_DEFAULT_FLAGS };
+  if (typeof raw !== 'string') return { ok: false, error: 'DASM compiler flags must be a string.' };
+
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { ok: true, flags: DASM_DEFAULT_FLAGS };
+  if (tokens.length > 12) return { ok: false, error: 'DASM compiler flags are limited to 12 tokens.' };
+
+  const unknown = tokens.find((token) => !DASM_ALLOWED_FLAGS.has(token));
+  if (unknown !== undefined) {
+    return {
+      ok: false,
+      error: `Unsupported DASM compiler flag: ${unknown}. Use safe compile-only flags such as -O0, -O1, -O2, -g, -fno-omit-frame-pointer, or -fno-inline.`,
+    };
+  }
+
+  return { ok: true, flags: tokens.join(' ') };
+}
+
+function runDocker(lang, workspace, env = {}) {
   return new Promise((resolveResult) => {
     const name = `lang-tutor-run-${process.pid}-${randomBytes(4).toString('hex')}`;
     const args = [
@@ -134,9 +178,11 @@ function runDocker(lang, workspace) {
       '/tmp:rw,exec,nosuid,nodev,size=512m',
       '--mount',
       `type=bind,source=${workspace},target=/workspace,readonly`,
-      TOOLCHAIN_IMAGE,
-      lang,
     ];
+    for (const [key, value] of Object.entries(env)) {
+      args.push('-e', `${key}=${value}`);
+    }
+    args.push(TOOLCHAIN_IMAGE, lang);
 
     let stdout = '';
     let stderr = '';
@@ -170,13 +216,19 @@ function runDocker(lang, workspace) {
   });
 }
 
-export async function runSnippet(lang, code) {
+export async function runSnippet(lang, code, options = undefined) {
   const config = LANG_CONFIG[lang];
   if (config === undefined) {
     return { ok: false, output: `Unsupported run language: ${lang}` };
   }
   if (typeof code !== 'string') {
     return { ok: false, output: 'Expected code to be a string.' };
+  }
+  const env = {};
+  if (lang === 'dasm') {
+    const flags = dasmCompilerFlags(options);
+    if (!flags.ok) return { ok: false, output: flags.error };
+    env.DASM_COMPILER_FLAGS = flags.flags;
   }
 
   const problem = dockerProblem();
@@ -187,7 +239,7 @@ export async function runSnippet(lang, code) {
   const workspace = createWorkspace(lang);
   try {
     writeFileSync(join(workspace, config.file), code, 'utf8');
-    return await runDocker(lang, workspace);
+    return await runDocker(lang, workspace, env);
   } finally {
     removeWorkspace(workspace);
   }

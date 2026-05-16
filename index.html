@@ -263,8 +263,22 @@
       <div class="main-toolbar">
         <span id="fileLabel" class="file-label">main.rs</span>
         <span class="file-spec" id="fileSpec">edition 2021 · debug</span>
+        <div id="dasmFlagsControl" class="dasm-flags-control" hidden>
+          <label for="dasmFlagsInput">Flags</label>
+          <select id="dasmFlagsPreset" aria-label="DASM compiler flag preset">
+            <option value="-O0 -fno-omit-frame-pointer">-O0</option>
+            <option value="-O1 -fno-omit-frame-pointer">-O1</option>
+            <option value="-O2 -fno-omit-frame-pointer">-O2</option>
+            <option value="custom">Custom</option>
+          </select>
+          <input id="dasmFlagsInput" type="text" value="-O0 -fno-omit-frame-pointer" spellcheck="false" autocomplete="off" aria-label="DASM compiler flags" />
+        </div>
         <span id="progBadge" class="badge" style="display:none"></span>
         <div class="toolbar-spacer"></div>
+        <button type="button" id="focusModeBtn" class="ghost-btn" data-focus-mode-toggle title="Collapse tutor panel" aria-pressed="false">
+          <i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i>
+          <span>Focus</span>
+        </button>
         <button type="button" id="evalBtn" class="ghost-btn" title="Send your note, code, last run output, and diagnostics to the tutor" disabled>
           <span>Send to tutor</span>
           <i class="ti ti-arrow-narrow-right" aria-hidden="true"></i>
@@ -309,6 +323,10 @@
             <span class="file-label">project</span>
             <span class="file-spec">workspace</span>
             <div class="toolbar-spacer"></div>
+            <button type="button" id="projFocusModeBtn" class="ghost-btn" data-focus-mode-toggle title="Collapse tutor panel" aria-pressed="false">
+              <i class="ti ti-layout-sidebar-left-collapse" aria-hidden="true"></i>
+              <span>Focus</span>
+            </button>
             <button type="button" id="projConsoleRunBtn" class="ghost-btn icon-btn" title="Run the active C# file as a console snippet" disabled>
               <i class="ti ti-terminal-2" aria-hidden="true"></i>
             </button>

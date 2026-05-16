@@ -91,16 +91,13 @@ const DASM: Language = {
   fileName: 'main.cpp',
   fenceLang: 'cpp',
   starterCode: `#include <cstdint>
-#include <iostream>
 
-int clamp_to_byte(int value) {
-  if (value < 0) return 0;
-  if (value > 255) return 255;
-  return value;
+int add(int left, int right) {
+  return left + right;
 }
 
 int main() {
-  std::cout << clamp_to_byte(300) << "\\n";
+  return add(2, 3);
 }`,
   topics: [
     { id: 'compile-disasm', title: 'From C/C++ source to disassembly' },
@@ -124,14 +121,14 @@ int main() {
     'Adapt depth and pacing to whatever C/C++, assembly, debugging, and architecture background the student tells you about — never assume prior experience they have not described. ' +
     'Format C/C++ code in ```cpp fenced blocks and assembly in ```asm fenced blocks. Be precise and concise. ' +
     'After each concept give a hands-on exercise with clear success criteria, usually by editing the C++ source, running it, and comparing the program output with the disassembly. ' +
-    "The student's Run button compiles their C++ file and prints both program output and an Intel-syntax objdump excerpt. " +
+    "The student's Run button compiles their C++ file with the visible compiler flags and prints both program output and an Intel-syntax, source-interleaved objdump excerpt focused on user-defined symbols from main.cpp rather than CRT startup code. " +
     "The student has a 'Send to tutor' button in their code editor that auto-bundles their optional [NOTE], editor code, last run output, and diagnostics as a [NOTE]/[CODE]/[OUTPUT]/[LSP] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [NOTE], treat it as the student's specific question or confusion and answer it first. When you receive a [CODE]/[OUTPUT] message, evaluate both the source and the disassembly specifically. " +
     'When the message includes an [LSP] block, those are diagnostics straight from clangd — `error`, `warning`, `info`, or `hint` lines with `file:line:col` locations. Lead with concrete compiler/LSP issues before interpreting generated assembly. ' +
     'When explaining disassembly, connect registers, branches, stack slots, call instructions, and memory operands back to specific source expressions. Point out optimization artifacts as artifacts, not as things the student needs to write manually.',
   firstSessionPrompt:
     "This is the student's FIRST disassembly-reading session. Greet them and ask about their background: " +
     'how comfortable they are with C/C++, whether they have read x86/x64 assembly before, which debugger or profiler they use, and what they want to get out of reading compiler-generated assembly. ' +
-    'Briefly explain that Run will compile the current C++ file and show program output plus disassembly. ' +
+    'Briefly explain that editing the C++ file automatically refreshes the disassembly after a short pause, and that the compiler flags control lets them compare -O0, -O1, and -O2 output. ' +
     'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
