@@ -743,6 +743,28 @@ function renderImageAttachment(block: ImageBlock): HTMLElement {
   return a;
 }
 
+function scrollMessageToTop(block: HTMLElement): void {
+  const msgList = el('msgList');
+  const top = msgList.scrollTop + block.getBoundingClientRect().top - msgList.getBoundingClientRect().top;
+  msgList.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+}
+
+function addTutorBackToTop(block: HTMLElement): void {
+  const actions = div('msg-actions');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'msg-top-btn';
+  btn.title = 'Scroll to the start of this response';
+  btn.appendChild(span('Back to top'));
+  const icon = document.createElement('i');
+  icon.className = 'ti ti-arrow-up';
+  icon.setAttribute('aria-hidden', 'true');
+  btn.appendChild(icon);
+  btn.addEventListener('click', () => scrollMessageToTop(block));
+  actions.appendChild(btn);
+  block.appendChild(actions);
+}
+
 function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[]): void {
   const msgList = el('msgList');
   const bl = div('msg-block');
@@ -762,6 +784,7 @@ function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[])
   }
   bl.appendChild(lbl);
   bl.appendChild(body);
+  if (role === 'assistant') addTutorBackToTop(bl);
   msgList.appendChild(bl);
   msgList.scrollTop = msgList.scrollHeight;
 }
@@ -900,6 +923,7 @@ function appendMsgStreaming(): StreamingBubble {
     },
     finalize(): void {
       render();
+      addTutorBackToTop(bl);
     },
   };
 }

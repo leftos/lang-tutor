@@ -901,6 +901,38 @@
     "SOFT" 30;
 }
 
+.msg-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.msg-top-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rule-2);
+  border-radius: 1px;
+  background: transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: italic;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+}
+
+.msg-top-btn:hover {
+  border-color: var(--sig);
+  color: var(--sig);
+}
+
+.msg-top-btn:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 2px;
+}
+
 .msg-error {
   font-family: var(--font-body);
   font-size: 13.5px;
