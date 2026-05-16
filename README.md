@@ -151,7 +151,7 @@ It also verifies hosted auth is required before account-specific state or
 toolchain endpoints are reachable. The deploy also ensures the host has the
 checker/LSP binaries used by live diagnostics and format-on-save, then builds
 and verifies the hosted `lang-tutor-toolchains:latest` Docker image used by
-Rust, C++, Python, and C# console runs.
+Rust, C++, DASM, Python, and C# console runs.
 
 For a new droplet or a host rebuild, follow [docs/deployment.md](docs/deployment.md)
 first. It records the one-time Node, Docker, Caddy, systemd, app-user, and
@@ -257,5 +257,5 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
   entered. If a saved model disappears from that provider's model list, the app
   warns the user and requires a new selection.
 - Resetting progress only affects the **active** language. Switch first if you want to reset a different one.
-- Rust, C++, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
+- Rust, C++, DASM, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
 - The XSS-safe DOM construction means you can paste arbitrary content from the AI without risk.

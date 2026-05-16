@@ -18,7 +18,7 @@
       typecheck  Run tsc --noEmit.
       lint       Run biome check --write .
       format     Run biome format --write .
-      toolchain  Build the local Docker sandbox image for Rust/C++/Python/C# snippets.
+      toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
       install    Run pnpm install.
       deploy     Deploy an immutable release to projects.leftos.dev/lang-tutor/.
       setup      Run scripts/setup.ps1.
@@ -659,7 +659,7 @@ function Invoke-Deploy {
     Write-Step 'Building hosted toolchain Docker image on droplet'
     Invoke-Native -FilePath 'ssh' -Arguments @(
         $DeployHost,
-        "cd /opt/lang-tutor/app && docker build -t lang-tutor-toolchains:latest -f docker/toolchains/Dockerfile docker/toolchains && docker run --rm --entrypoint python3 lang-tutor-toolchains:latest --version && docker run --rm --entrypoint rustc lang-tutor-toolchains:latest --version && docker run --rm --entrypoint clang++ lang-tutor-toolchains:latest --version >/dev/null && docker run --rm --entrypoint dotnet lang-tutor-toolchains:latest --version"
+        "cd /opt/lang-tutor/app && docker build -t lang-tutor-toolchains:latest -f docker/toolchains/Dockerfile docker/toolchains && docker run --rm --entrypoint python3 lang-tutor-toolchains:latest --version && docker run --rm --entrypoint rustc lang-tutor-toolchains:latest --version && docker run --rm --entrypoint clang++ lang-tutor-toolchains:latest --version >/dev/null && docker run --rm --entrypoint objdump lang-tutor-toolchains:latest --version >/dev/null && docker run --rm --entrypoint dotnet lang-tutor-toolchains:latest --version"
     )
 
     Write-Step 'Ensuring hosted workspace runtime config'
@@ -698,7 +698,7 @@ Commands:
   typecheck  Run tsc --noEmit.
   lint       Run biome check --write .
   format     Run biome format --write .
-  toolchain  Build the local Docker sandbox image for Rust/C++/Python/C# snippets.
+  toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
   install    Run pnpm install.
   deploy     Deploy to the droplet, restart lang-tutor.service, and smoke test.
   setup      Run scripts/setup.ps1.

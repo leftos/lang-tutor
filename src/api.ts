@@ -1,5 +1,5 @@
 import { resolveProviderConfig } from './providerSettings';
-import type { ClaudeResponse, ContentBlock, ImageBlock, Message, Progress, ProviderConfig, TextBlock, Topic } from './types';
+import type { ClaudeResponse, ContentBlock, ImageBlock, LearnerProfile, Message, Progress, ProviderConfig, TextBlock, Topic } from './types';
 
 /** Extract the plain-text content of a message, ignoring any image blocks. */
 function messageText(m: Message): string {
@@ -8,6 +8,13 @@ function messageText(m: Message): string {
     .filter((b): b is TextBlock => b.type === 'text')
     .map((b) => b.text)
     .join('\n');
+}
+
+function learnerProfileText(m: Message): string {
+  const text = messageText(m);
+  return text
+    .replace(/\n?\[(?:CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|SCREENSHOT)\][\s\S]*?(?=\n\n\[[A-Z]+\]|\s*$)/g, '')
+    .trim();
 }
 
 interface PostResult {
@@ -424,6 +431,62 @@ Conversation:\n${snippet}`;
     return JSON.parse(raw) as Progress;
   } catch (e) {
     console.error('[api] Progress extraction JSON parse failed:', e, 'raw:', raw);
+    return null;
+  }
+}
+
+export async function fetchLearnerProfileExtraction(
+  history: Message[],
+  languageName: string,
+  previous: LearnerProfile | null
+): Promise<LearnerProfile | null> {
+  const snippet = history
+    .slice(-16)
+    .map((m) => {
+      const text = learnerProfileText(m);
+      return text === '' ? null : `${m.role.toUpperCase()}: ${text.slice(0, 420)}`;
+    })
+    .filter((line): line is string => line !== null)
+    .join('\n\n');
+
+  const previousJson = previous === null ? '{}' : JSON.stringify(previous, null, 2);
+  const prompt = `Analyze this ${languageName} tutoring conversation and update a language-independent learner profile.
+
+Return ONLY valid JSON (no markdown, no other text) with this schema:
+
+{
+  "summary": "2-4 sentence stable learner profile useful across all programming courses",
+  "knownLanguages": ["language or ecosystem the learner knows, with short qualifier if useful"],
+  "experienceNotes": ["stable learning-relevant background fact"],
+  "goals": ["stable learning goal or project interest"],
+  "preferences": ["teaching preference or comparison style that helps future tutors"],
+  "strengths": ["cross-language strength observed"],
+  "struggles": ["cross-language struggle or recurring confusion observed"],
+  "recentSignals": ["brief recent observation that may help the next session"]
+}
+
+Merge the previous profile with the new conversation. Preserve useful stable facts unless the conversation clearly contradicts them.
+Do NOT store API keys, passwords, access tokens, emails, billing details, private URLs, or unrelated personal data.
+Avoid inventing facts. If a field has no evidence, return an empty array or omit it.
+
+Previous profile:
+${previousJson}
+
+Conversation:
+${snippet}`;
+
+  const result = await postCompletion(prompt);
+
+  if (!result.ok) {
+    console.error('[api] Learner profile extraction failed:', result.text);
+    return null;
+  }
+
+  const raw = result.text.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(raw) as LearnerProfile;
+  } catch (e) {
+    console.error('[api] Learner profile extraction JSON parse failed:', e, 'raw:', raw);
     return null;
   }
 }

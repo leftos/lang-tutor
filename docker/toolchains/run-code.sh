@@ -16,6 +16,31 @@ case "$lang" in
     clang++ -std=c++23 -Wall -Wextra -pedantic -O0 -g main.cpp -o /tmp/main 2>&1
     /tmp/main 2>&1
     ;;
+  dasm)
+    if [[ ! -f main.cpp ]]; then
+      echo "main.cpp not found in sandbox workspace" >&2
+      exit 64
+    fi
+    cp /workspace/main.cpp "$run_dir/main.cpp"
+    cd "$run_dir"
+    clang++ -std=c++23 -Wall -Wextra -pedantic -O2 -g -fno-pie -no-pie main.cpp -o /tmp/main 2>&1
+    set +e
+    program_output="$(/tmp/main 2>&1)"
+    program_status=$?
+    set -e
+    printf '[program output]\n'
+    if [[ -n "$program_output" ]]; then
+      printf '%s\n' "$program_output"
+    else
+      printf '(no output)\n'
+    fi
+    if [[ "$program_status" -ne 0 ]]; then
+      printf '[program exited with code %s]\n' "$program_status"
+    fi
+    printf '\n[disassembly: objdump -d -Mintel -C --no-show-raw-insn /tmp/main]\n'
+    objdump -d -Mintel -C --no-show-raw-insn /tmp/main | awk '/Disassembly of section \.text:/{flag=1} flag {print; count++} count >= 260 {exit}'
+    exit "$program_status"
+    ;;
   rust)
     if [[ ! -f main.rs ]]; then
       echo "main.rs not found in sandbox workspace" >&2

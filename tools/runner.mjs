@@ -23,6 +23,7 @@ const MAX_OUTPUT = 512 * 1024;
 
 const LANG_CONFIG = Object.freeze({
   cpp: { file: 'main.cpp' },
+  dasm: { file: 'main.cpp' },
   rust: { file: 'main.rs' },
   python: { file: 'main.py' },
   csharp: { file: 'main.cs' },

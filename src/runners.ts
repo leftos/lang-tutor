@@ -8,7 +8,7 @@ interface RunResponse {
   error?: string;
 }
 
-export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'python' | 'csharp', code: string): Promise<RunResult> {
+export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' | 'csharp', code: string): Promise<RunResult> {
   if (!canUseHostedTooling()) {
     return { ok: false, output: 'Sign in to run code on the hosted server.' };
   }
@@ -37,6 +37,9 @@ export async function runCode(lang: SingleBufferLanguageId, code: string, onProg
     case 'cpp':
       onProgress?.('Compiling with Clang in local sandbox…');
       return runLocalSnippet('cpp', code);
+    case 'dasm':
+      onProgress?.('Compiling and disassembling with Clang/objdump…');
+      return runLocalSnippet('dasm', code);
     case 'python':
       onProgress?.('Running Python in local sandbox…');
       return runLocalSnippet('python', code);

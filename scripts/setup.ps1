@@ -427,7 +427,7 @@ if (Test-DockerReady) {
     if ($LASTEXITCODE -ne 0) { throw "toolchain image build failed (exit $LASTEXITCODE)" }
 } else {
     Write-Warn-Local "Skipping image build because Docker Desktop is not running."
-    Write-Warn-Local "Start Docker Desktop, then run .\lt.ps1 toolchain before using Run for Rust/C++/Python or C# console snippets."
+    Write-Warn-Local "Start Docker Desktop, then run .\lt.ps1 toolchain before using Run for Rust/C++/DASM/Python or C# console snippets."
 }
 
 # ── Phase 3: optional .env bootstrap ────────────────────────────────────────

@@ -1,8 +1,9 @@
 import type { Language, LanguageId } from './types';
 export const ACTIVE_LANG_KEY = 'lang-tutor:active';
+export const LEARNER_PROFILE_KEY = 'lang-tutor:learner-profile';
 export const MAX_HISTORY = 30;
 
-export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'python', 'csharp', 'web'] as const;
+export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'dasm', 'python', 'csharp', 'web'] as const;
 export const DEFAULT_LANGUAGE: LanguageId = 'rust';
 
 const RUST: Language = {
@@ -80,6 +81,57 @@ int main() {
     "This is the student's FIRST modern-C++ session. Greet them and ask about their background: " +
     'how comfortable they are with core C++ (pointers, references, classes, templates), how much exposure they have had to the standard library / STL (vector, string, iterators, algorithms, smart pointers), ' +
     "and whether they've used any modern features (C++11 onwards). Also ask what they want to use C++ for. " +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
+};
+
+const DASM: Language = {
+  kind: 'single',
+  id: 'dasm',
+  name: 'Disassembly',
+  fileName: 'main.cpp',
+  fenceLang: 'cpp',
+  starterCode: `#include <cstdint>
+#include <iostream>
+
+int clamp_to_byte(int value) {
+  if (value < 0) return 0;
+  if (value > 255) return 255;
+  return value;
+}
+
+int main() {
+  std::cout << clamp_to_byte(300) << "\\n";
+}`,
+  topics: [
+    { id: 'compile-disasm', title: 'From C/C++ source to disassembly' },
+    { id: 'registers-abi', title: 'Registers, calling conventions & return values' },
+    { id: 'stack-frames', title: 'Stack frames, locals & parameters' },
+    { id: 'branches', title: 'Conditionals, comparisons & branches' },
+    { id: 'loops', title: 'Loops, induction variables & bounds checks' },
+    { id: 'memory-layout', title: 'Pointers, arrays, structs & layout' },
+    { id: 'functions', title: 'Calls, inlining & tail calls' },
+    { id: 'objects', title: 'Classes, vtables & virtual dispatch' },
+    { id: 'templates', title: 'Templates, overloads & name demangling' },
+    { id: 'optimization', title: 'Debug vs optimized builds' },
+    { id: 'debugging', title: 'Reading crashes and bad state from assembly' },
+    { id: 'undefined-behavior', title: 'Undefined behavior signatures' },
+    { id: 'simd', title: 'SIMD and compiler idioms' },
+    { id: 'reverse-map', title: 'Mapping assembly back to source intent' },
+  ],
+  systemPromptIntro:
+    'You are an expert, friendly teacher for C/C++ disassembly literacy. ' +
+    'The goal is not to teach hand-written assembly first; it is to help the student read compiler-generated x86-64 disassembly from C/C++ so they can debug, reason about performance, and understand what the compiler did. ' +
+    'Adapt depth and pacing to whatever C/C++, assembly, debugging, and architecture background the student tells you about — never assume prior experience they have not described. ' +
+    'Format C/C++ code in ```cpp fenced blocks and assembly in ```asm fenced blocks. Be precise and concise. ' +
+    'After each concept give a hands-on exercise with clear success criteria, usually by editing the C++ source, running it, and comparing the program output with the disassembly. ' +
+    "The student's Run button compiles their C++ file and prints both program output and an Intel-syntax objdump excerpt. " +
+    "The student has a 'Send to tutor' button in their code editor that auto-bundles their optional [NOTE], editor code, last run output, and diagnostics as a [NOTE]/[CODE]/[OUTPUT]/[LSP] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [NOTE], treat it as the student's specific question or confusion and answer it first. When you receive a [CODE]/[OUTPUT] message, evaluate both the source and the disassembly specifically. " +
+    'When the message includes an [LSP] block, those are diagnostics straight from clangd — `error`, `warning`, `info`, or `hint` lines with `file:line:col` locations. Lead with concrete compiler/LSP issues before interpreting generated assembly. ' +
+    'When explaining disassembly, connect registers, branches, stack slots, call instructions, and memory operands back to specific source expressions. Point out optimization artifacts as artifacts, not as things the student needs to write manually.',
+  firstSessionPrompt:
+    "This is the student's FIRST disassembly-reading session. Greet them and ask about their background: " +
+    'how comfortable they are with C/C++, whether they have read x86/x64 assembly before, which debugger or profiler they use, and what they want to get out of reading compiler-generated assembly. ' +
+    'Briefly explain that Run will compile the current C++ file and show program output plus disassembly. ' +
     'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
@@ -231,6 +283,7 @@ const WEB: Language = {
 export const LANGUAGES: Record<LanguageId, Language> = {
   rust: RUST,
   cpp: CPP,
+  dasm: DASM,
   python: PYTHON,
   csharp: CSHARP,
   web: WEB,

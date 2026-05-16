@@ -272,6 +272,7 @@ const LSP_CONFIG = {
  */
 const LANG_SERVERS = {
   cpp: ['cpp'],
+  dasm: ['cpp'],
   rust: ['rust'],
   python: ['python'],
   // Roslyn first, OmniSharp fallback. Whichever starts wins; the other never spawns.

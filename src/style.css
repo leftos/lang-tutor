@@ -117,6 +117,10 @@
   --sig: #2a64b3;
   --sig-soft: rgba(42, 100, 179, 0.1);
 }
+[data-lang="dasm"] {
+  --sig: #6f6a2d;
+  --sig-soft: rgba(111, 106, 45, 0.12);
+}
 [data-lang="python"] {
   --sig: #3a7a3a;
   --sig-soft: rgba(58, 122, 58, 0.1);
@@ -129,6 +133,10 @@
 [data-theme="dark"][data-lang="cpp"] {
   --sig: #6a9ce3;
   --sig-soft: rgba(106, 156, 227, 0.16);
+}
+[data-theme="dark"][data-lang="dasm"] {
+  --sig: #cbd26a;
+  --sig-soft: rgba(203, 210, 106, 0.16);
 }
 [data-theme="dark"][data-lang="python"] {
   --sig: #6caf6c;
@@ -143,6 +151,10 @@
   :root:not([data-theme="light"])[data-lang="cpp"] {
     --sig: #6a9ce3;
     --sig-soft: rgba(106, 156, 227, 0.16);
+  }
+  :root:not([data-theme="light"])[data-lang="dasm"] {
+    --sig: #cbd26a;
+    --sig-soft: rgba(203, 210, 106, 0.16);
   }
   :root:not([data-theme="light"])[data-lang="python"] {
     --sig: #6caf6c;

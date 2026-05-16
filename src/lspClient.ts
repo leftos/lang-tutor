@@ -262,6 +262,7 @@ export interface LspClient {
  */
 const LSP_LANGUAGE_IDS: Partial<Record<LanguageId, string>> = {
   cpp: 'cpp',
+  dasm: 'cpp',
   rust: 'rust',
   python: 'python',
   csharp: 'csharp',

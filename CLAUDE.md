@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-page, multi-language programming tutor (Rust, C++, Python, C#, Web). Two workspace shapes:
+A single-page, multi-language programming tutor (Rust, C++, DASM, Python, C#, Web). Two workspace shapes:
 
-- **Single-buffer** (`rust` / `cpp` / `python`): one editor, one Run, one output pane. Code runs in the local Docker sandbox image (`lang-tutor-toolchains:latest`).
+- **Single-buffer** (`rust` / `cpp` / `dasm` / `python`): one editor, one Run, one output pane. Code runs in the local Docker sandbox image (`lang-tutor-toolchains:latest`).
 - **Project workspace** (`csharp` / `web`): on-disk project under `projects/<lang>/` with sidebar file tree, multi-tab editor, Run / Send controls above the code, supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Run/Stop wired to the supervisor; logs streamed via SSE.
 
-The user chats with Claude (via the Anthropic API), writes code, runs it, and submits code+output (single-buffer) or files+output/dom (project) for evaluation. Lesson progress is extracted by a second LLM call into structured JSON and persisted in `localStorage`, **independently per language**. Switching language is non-destructive — each language has its own conversation history, lesson progress, and saved editor / tab state.
+The user chats with Claude (via the Anthropic API), writes code, runs it, and submits code+output (single-buffer) or files+output/dom (project) for evaluation. Lesson progress is extracted by a second LLM call into structured JSON and persisted in `localStorage`, independently per language. A shared learner profile is also extracted and mirrored across languages so tutors can reuse stable background, goals, preferences, and learning trends. Switching language is non-destructive — each language has its own conversation history, lesson progress, and saved editor / tab state.
 
 `localStorage` is mirrored into `.local/state/local-storage.json` by the local
 `/state/local-storage` endpoint. This keeps progress portable across dev-server
@@ -21,7 +21,7 @@ origins such as `localhost`, `127.0.0.1`, LAN IPs, and port changes.
 - **CodeMirror 6** for the editor (syntax highlight, autocomplete, search, lint, multi-cursor, fold gutter)
 - **Vite 7** for dev server, HMR, and production builds
 - **Tailwind CSS 4** via `@tailwindcss/vite` plugin (config-in-CSS via `@theme`)
-- **Docker Desktop** for local sandboxed Rust / C++ / Python / C# console runs
+- **Docker Desktop** for local sandboxed Rust / C++ / DASM / Python / C# console runs
 - **Biome** for linting and formatting
 - **pnpm** for package management
 - **Node 20+** runtime for the production proxy (`server.mjs`) and for the local `/run` + `/check` + `/format` toolchain endpoints

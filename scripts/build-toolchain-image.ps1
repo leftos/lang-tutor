@@ -1,12 +1,12 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Build the local sandbox image used to run Rust, C++, Python, and C# snippets.
+    Build the local sandbox image used to run Rust, C++, DASM, Python, and C# snippets.
 
 .DESCRIPTION
     Produces lang-tutor-toolchains:latest from docker/toolchains/. The image
-    contains Clang/LLVM for C++, rustc/rustfmt/rust-analyzer, Python 3.13
-    with black/basedpyright, and the .NET SDK for C# console snippets.
+    contains Clang/LLVM/binutils for C++ and DASM, rustc/rustfmt/rust-analyzer,
+    Python 3.13 with black/basedpyright, and the .NET SDK for C# console snippets.
 #>
 [CmdletBinding()]
 param(
@@ -42,6 +42,10 @@ Write-Host "==> Verifying toolchain image ..." -ForegroundColor Cyan
 & docker run --rm --entrypoint clang++ $Tag --version *> $null
 if ($LASTEXITCODE -ne 0) {
     throw 'clang++ verification failed inside the toolchain image.'
+}
+& docker run --rm --entrypoint objdump $Tag --version *> $null
+if ($LASTEXITCODE -ne 0) {
+    throw 'objdump verification failed inside the toolchain image.'
 }
 & docker run --rm --entrypoint rustc $Tag --version *> $null
 if ($LASTEXITCODE -ne 0) {

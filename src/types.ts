@@ -1,4 +1,4 @@
-export type LanguageId = 'rust' | 'cpp' | 'python' | 'csharp' | 'web';
+export type LanguageId = 'rust' | 'cpp' | 'dasm' | 'python' | 'csharp' | 'web';
 
 export interface Topic {
   readonly id: string;
@@ -22,6 +22,18 @@ export interface Progress {
   overallNotes?: string;
   sessionCount?: number;
   lastSeen?: string;
+}
+
+export interface LearnerProfile {
+  summary?: string;
+  knownLanguages?: string[];
+  experienceNotes?: string[];
+  goals?: string[];
+  preferences?: string[];
+  strengths?: string[];
+  struggles?: string[];
+  recentSignals?: string[];
+  updatedAt?: string;
 }
 
 export interface TextBlock {

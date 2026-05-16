@@ -48,6 +48,7 @@ import type { SingleBufferLanguageId } from './types';
 const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
   rust: () => rust(),
   cpp: () => cpp(),
+  dasm: () => cpp(),
   python: () => python(),
   csharp: () => csharp(),
 };

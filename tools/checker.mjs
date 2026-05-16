@@ -210,6 +210,7 @@ export async function checkCode(lang, code) {
     case 'rust':
       return rustCheck(code);
     case 'cpp':
+    case 'dasm':
       return cppCheck(code);
     case 'python':
       return pythonCheck(code);
@@ -223,6 +224,7 @@ export async function formatCode(lang, code) {
     case 'rust':
       return rustFormat(code);
     case 'cpp':
+    case 'dasm':
       return cppFormat(code);
     case 'python':
       return pythonFormat(code);

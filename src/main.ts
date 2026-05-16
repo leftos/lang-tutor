@@ -1,5 +1,5 @@
 import './style.css';
-import { callClaude, fetchProgressExtraction } from './api';
+import { callClaude, fetchLearnerProfileExtraction, fetchProgressExtraction } from './api';
 import {
   type AccountSession,
   canUseHostedTooling,
@@ -16,6 +16,7 @@ import {
   DEFAULT_LANGUAGE,
   getLanguage,
   historyKey,
+  LEARNER_PROFILE_KEY,
   LANGUAGE_IDS,
   LANGUAGES,
   MAX_HISTORY,
@@ -63,6 +64,7 @@ import type {
   ImageBlock,
   Language,
   LanguageId,
+  LearnerProfile,
   Message,
   Progress,
   ProjectLanguage,
@@ -79,6 +81,7 @@ const THEME_KEY = 'lang-tutor:theme';
 let activeLang: LanguageId = DEFAULT_LANGUAGE;
 let history: Message[] = [];
 let progress: Progress | null = null;
+let learnerProfile: LearnerProfile | null = null;
 let currentSystemPrompt = '';
 let extractionQueued = false;
 let isSending = false;
@@ -459,8 +462,37 @@ function toggleTheme(): void {
 }
 
 // ── System prompt builder ─────────────────────────────────────────────────
-function buildSystem(prog: Progress | null, lang: Language): string {
-  if (prog === null) return `${lang.systemPromptIntro}\n\n${lang.firstSessionPrompt}`;
+function listProfileItems(items: readonly string[] | undefined, limit = 6): string {
+  if (items === undefined || items.length === 0) return '  (none recorded)';
+  return items.slice(0, limit).map((item) => `  - ${item}`).join('\n');
+}
+
+function learnerProfileBlock(profile: LearnerProfile | null): string {
+  if (profile === null) return '';
+  return (
+    '\n\nGLOBAL LEARNER PROFILE — use across all language courses.\n' +
+    `Summary: ${profile.summary ?? 'No summary recorded yet.'}\n` +
+    `Known languages:\n${listProfileItems(profile.knownLanguages)}\n` +
+    `Experience notes:\n${listProfileItems(profile.experienceNotes)}\n` +
+    `Goals:\n${listProfileItems(profile.goals)}\n` +
+    `Teaching preferences:\n${listProfileItems(profile.preferences)}\n` +
+    `Cross-language strengths:\n${listProfileItems(profile.strengths)}\n` +
+    `Cross-language struggles:\n${listProfileItems(profile.struggles)}\n` +
+    'Do not re-ask for background already captured here. Ask only missing course-specific context, and update your assumptions when the student corrects you.'
+  );
+}
+
+function buildSystem(prog: Progress | null, lang: Language, profile: LearnerProfile | null): string {
+  const profileText = learnerProfileBlock(profile);
+  if (prog === null) {
+    const profileGuidance =
+      profile === null
+        ? ''
+        : '\n\nIf the global learner profile already answers any background question above, do not ask that question again; use the recorded answer and ask only for missing details specific to this course.';
+    return (
+      `${lang.systemPromptIntro}${profileText}\n\n${lang.firstSessionPrompt}${profileGuidance}`
+    );
+  }
 
   const topicLines = lang.topics
     .map((t) => {
@@ -473,7 +505,7 @@ function buildSystem(prog: Progress | null, lang: Language): string {
   const struggles = prog.struggles && prog.struggles.length > 0 ? prog.struggles.map((s) => `  ! ${s}`).join('\n') : '  (none yet)';
 
   return (
-    `${lang.systemPromptIntro}\n\n` +
+    `${lang.systemPromptIntro}${profileText}\n\n` +
     `RETURNING STUDENT — ${prog.sessionCount ?? 1} session(s) so far.\n` +
     `Experience: ${prog.experienceLevel ?? 'unknown'}\n` +
     `Current topic: ${prog.currentTopic ?? 'beginning'}\n\n` +
@@ -554,6 +586,7 @@ function renderFileSpec(): void {
   const map: Record<LanguageId, string> = {
     rust: 'edition 2021 · stable',
     cpp: 'clang · c++23',
+    dasm: 'clang · objdump · x86-64',
     python: 'local python · 3.13',
     csharp: 'dotnet 8 · c# 12',
     web: `vite · http://${window.location.hostname || 'localhost'}:5180`,
@@ -591,16 +624,50 @@ function progSectionLabel(text: string): HTMLDivElement {
   return d;
 }
 
+function appendLearnerProfileSection(scroll: HTMLElement): void {
+  if (learnerProfile === null) return;
+
+  const section = div('prog-section');
+  section.appendChild(progSectionLabel('Cross-language profile'));
+
+  if (learnerProfile.summary) {
+    const notesText = div('prog-notes');
+    notesText.textContent = learnerProfile.summary;
+    section.appendChild(notesText);
+  }
+
+  const chips = div('note-row');
+  const items = [
+    ...(learnerProfile.knownLanguages ?? []).slice(0, 4),
+    ...(learnerProfile.goals ?? []).slice(0, 2),
+    ...(learnerProfile.preferences ?? []).slice(0, 2),
+  ];
+
+  if (items.length === 0) {
+    chips.appendChild(span('No cross-language notes recorded yet', 'muted'));
+  } else {
+    for (const item of items) {
+      const pill = div('note-pill');
+      pill.appendChild(document.createTextNode(item));
+      chips.appendChild(pill);
+    }
+  }
+
+  section.appendChild(chips);
+  scroll.appendChild(section);
+}
+
 function renderProgressTab(): void {
   const lang = getLanguage(activeLang);
   const scroll = el('progressScroll');
   scroll.textContent = '';
+  appendLearnerProfileSection(scroll);
 
   if (progress === null) {
     const empty = div('prog-empty');
     const glyph = span('§', 'empty-glyph');
     empty.appendChild(glyph);
-    empty.appendChild(document.createTextNode(`No ${lang.name} progress recorded yet.\nFinish an evaluation to begin tracking.`));
+    empty.appendChild(document.createTextNode(`No ${lang.name} progress recorded yet.\nSend a tutor message or evaluation to begin tracking.`));
     scroll.appendChild(empty);
     return;
   }
@@ -1418,6 +1485,7 @@ let openAvailabilityPromise: Promise<OpenAvailability> | null = null;
 const OPEN_TARGETS_BY_LANG: Record<LanguageId, readonly { id: OpenTarget; label: string }[]> = {
   rust: [],
   cpp: [],
+  dasm: [],
   python: [],
   csharp: [
     { id: 'vscode', label: 'VS Code' },
@@ -1897,28 +1965,42 @@ async function extractProgress(): Promise<void> {
 
   const lang = getLanguage(activeLang);
   const langWhenStarted = activeLang;
+  const profileWhenStarted = learnerProfile;
 
   try {
     const extracted = await fetchProgressExtraction(history, lang.topics);
-    if (extracted === null) return;
+    const extractedProfile = await fetchLearnerProfileExtraction(history, lang.name, profileWhenStarted);
     if (langWhenStarted !== activeLang) return;
 
-    const mergedTopics: TopicStatus[] = lang.topics.map((t) => {
-      const found = extracted.topics?.find((p) => p.id === t.id);
-      const prev = progress?.topics?.find((p) => p.id === t.id);
-      return { id: t.id, title: t.title, status: found?.status ?? prev?.status ?? 'not-started' };
-    });
-
     const [datePart] = new Date().toISOString().split('T');
-    progress = {
-      ...extracted,
-      topics: mergedTopics,
-      sessionCount: (progress?.sessionCount ?? 0) + (progress !== null ? 0 : 1),
-      lastSeen: datePart ?? '',
-    };
+    const date = datePart ?? '';
 
-    storageSet(progressKey(activeLang), progress);
-    currentSystemPrompt = buildSystem(progress, getLanguage(activeLang));
+    if (extractedProfile !== null) {
+      learnerProfile = {
+        ...extractedProfile,
+        updatedAt: date,
+      };
+      storageSet(LEARNER_PROFILE_KEY, learnerProfile);
+    }
+
+    if (extracted !== null) {
+      const mergedTopics: TopicStatus[] = lang.topics.map((t) => {
+        const found = extracted.topics?.find((p) => p.id === t.id);
+        const prev = progress?.topics?.find((p) => p.id === t.id);
+        return { id: t.id, title: t.title, status: found?.status ?? prev?.status ?? 'not-started' };
+      });
+
+      progress = {
+        ...extracted,
+        topics: mergedTopics,
+        sessionCount: (progress?.sessionCount ?? 0) + (progress !== null ? 0 : 1),
+        lastSeen: date,
+      };
+
+      storageSet(progressKey(activeLang), progress);
+    }
+
+    currentSystemPrompt = buildSystem(progress, getLanguage(activeLang), learnerProfile);
     renderProgressTab();
     renderChapterStrip();
     renderLanguageRail();
@@ -1961,7 +2043,7 @@ async function streamReply(lastMessageOverride?: Message): Promise<{ ok: boolean
   return result;
 }
 
-async function deliverReply(lastMessageOverride?: Message): Promise<void> {
+async function deliverReply(lastMessageOverride?: Message): Promise<boolean> {
   setSendingState(true);
   showThinking();
   const result = await streamReply(lastMessageOverride);
@@ -1971,6 +2053,7 @@ async function deliverReply(lastMessageOverride?: Message): Promise<void> {
   }
   setSendingState(false);
   el<HTMLTextAreaElement>('chatInput').focus();
+  return result.ok;
 }
 
 async function startSession(): Promise<void> {
@@ -2026,7 +2109,8 @@ async function sendMessage(text: string, attachment?: ScreenshotPair | null): Pr
   appendMsg('user', storedContent);
   if (consumePending && pendingAttachment !== null) setChatAttachment(null);
 
-  await deliverReply(apiOverride);
+  const ok = await deliverReply(apiOverride);
+  if (ok) void extractProgress();
 }
 
 function draftNoteBlock(): string | null {
@@ -2078,7 +2162,6 @@ async function evaluateCode(): Promise<void> {
     lspBlock,
   ].filter((block): block is string => block !== null);
   await sendMessage(blocks.join('\n\n'));
-  void extractProgress();
 }
 
 const LSP_SEVERITY_RANK = (s: number | undefined): number => (s === 1 ? 0 : s === 2 ? 1 : s === 3 ? 2 : 3);
@@ -2535,7 +2618,6 @@ async function evaluateProjectCode(): Promise<void> {
   }
 
   await sendMessage(blocks.join('\n\n'), screenshot);
-  void extractProgress();
 }
 
 /**
@@ -2703,7 +2785,7 @@ function loadLanguageState(id: LanguageId): void {
   history = storageGet<Message[]>(historyKey(activeLang)) ?? [];
   progress = storageGet<Progress>(progressKey(activeLang));
   const lang = getLanguage(activeLang);
-  currentSystemPrompt = buildSystem(progress, lang);
+  currentSystemPrompt = buildSystem(progress, lang, learnerProfile);
 
   renderFileSpec();
 
@@ -2997,6 +3079,7 @@ await initializeAuth();
 await hydrateStorageFromDisk();
 applyStoredTheme();
 migrateOldStorage();
+learnerProfile = storageGet<LearnerProfile>(LEARNER_PROFILE_KEY);
 const initialLang = loadInitialActiveLang();
 const initialLangObj = getLanguage(initialLang);
 

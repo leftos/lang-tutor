@@ -16,7 +16,7 @@ becomes worth automating as a separate bootstrap command.
 - Shared project tool cache: `/var/lib/lang-tutor/cache`
 - Node service port: `5190`
 - Systemd unit: `lang-tutor.service`
-- Docker image built by deploy: `lang-tutor-toolchains:latest`
+- Docker image built by deploy: `lang-tutor-toolchains:latest` (Rust/C++/DASM/Python/C# single-file runs)
 
 Provider API keys are entered by users in the browser. They are not stored in
 the droplet environment, SQLite account database, or mirrored app state.
@@ -159,6 +159,7 @@ serve the same app entry point.
 systemctl status lang-tutor.service --no-pager
 journalctl -u lang-tutor.service --since "30 minutes ago" --no-pager
 docker image inspect lang-tutor-toolchains:latest >/dev/null
+docker run --rm --entrypoint objdump lang-tutor-toolchains:latest --version >/dev/null
 sudo -u lang-tutor env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin rustc --version
 sudo -u lang-tutor env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin basedpyright --version
 ```
