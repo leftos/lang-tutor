@@ -1620,6 +1620,11 @@ async function sendMessage(text: string, attachment?: ScreenshotPair | null): Pr
   await deliverReply(apiOverride);
 }
 
+function draftNoteBlock(): string | null {
+  const note = el<HTMLTextAreaElement>('chatInput').value.trim();
+  return note ? `[NOTE]\n${note}` : null;
+}
+
 // ── Code panel ────────────────────────────────────────────────────────────
 async function runActiveCode(): Promise<void> {
   const lang = getLanguage(activeLang);
@@ -1657,12 +1662,15 @@ async function evaluateCode(): Promise<void> {
   const code = editor.getContent().trim();
   const out = el<HTMLPreElement>('outputPre').textContent ?? '';
   const hasOut = out && !out.includes('Run the program') && out !== 'Compiling…' && out !== 'Running…';
+  const noteBlock = draftNoteBlock();
   const lspBlock = await buildLspBlock();
-  const msg =
-    `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\`\n\n` +
-    `[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\`` +
-    (lspBlock !== null ? `\n\n${lspBlock}` : '');
-  await sendMessage(msg);
+  const blocks = [
+    noteBlock,
+    `[CODE]\n\`\`\`${lang.fenceLang}\n${code}\n\`\`\``,
+    `[OUTPUT]\n\`\`\`\n${hasOut ? out : '(not run yet)'}\n\`\`\``,
+    lspBlock,
+  ].filter((block): block is string => block !== null);
+  await sendMessage(blocks.join('\n\n'));
   void extractProgress();
 }
 
@@ -1843,6 +1851,7 @@ async function evaluateProjectCode(): Promise<void> {
   const files = projectEditorInstance.getOpenFiles();
   const preview = projectPreviewInstance;
   const isWeb = lang.runtime.kind === 'web-vite';
+  const noteBlock = draftNoteBlock();
 
   // The DOM/console snapshot only exists for web-vite (iframe-based). Desktop
   // projects skip it — there is no rendered page to capture.
@@ -1860,6 +1869,7 @@ async function evaluateProjectCode(): Promise<void> {
   if (langWhenStarted !== activeLang) return;
 
   const blocks: string[] = [];
+  if (noteBlock !== null) blocks.push(noteBlock);
 
   if (files.length > 0) {
     const fileBlock = files

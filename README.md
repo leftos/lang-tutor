@@ -1,6 +1,6 @@
 # Lang tutor
 
-A single-page, multi-language programming tutor. You chat with your chosen AI provider (Anthropic Claude, OpenAI ChatGPT, or Google Gemini), write code in an inline editor with full IDE features (syntax highlighting, autocomplete, multi-cursor, alt+up/down line moves, Ctrl+F search, Ctrl+S format-on-save, live error checking via local toolchains), run it through a language-appropriate runtime, and submit code+output for evaluation. Lesson progress is extracted by a second LLM call into structured JSON and persisted independently per language.
+A single-page, multi-language programming tutor. You chat with your chosen AI provider (Anthropic Claude, OpenAI ChatGPT, or Google Gemini), write code in an inline editor with full IDE features (syntax highlighting, autocomplete, multi-cursor, alt+up/down line moves, Ctrl+F search, Ctrl+S format-on-save, live error checking via local toolchains), run it through a language-appropriate runtime, and submit code+output for evaluation with an optional note about what is confusing you. Lesson progress is extracted by a second LLM call into structured JSON and persisted independently per language.
 
 Switch language at any time from the topbar — each language has its own conversation history, lesson progress, and saved editor content.
 

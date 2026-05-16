@@ -213,7 +213,7 @@
         <div id="msgList" class="msg-list"></div>
         <div id="chatAttachment" class="chat-attachment" style="display:none"></div>
         <div id="inputRow" class="input-row" style="display:none">
-          <textarea id="chatInput" class="chat-input" placeholder="Ask the tutor… &nbsp;(↵ to send · ⇧↵ for newline)"></textarea>
+          <textarea id="chatInput" class="chat-input" placeholder="Ask the tutor, or add a note before Send to tutor… &nbsp;(↵ to send · ⇧↵ for newline)"></textarea>
           <button type="button" id="sendBtn" class="send-btn" aria-label="Send">
             <i class="ti ti-arrow-up" aria-hidden="true"></i>
           </button>
@@ -233,7 +233,7 @@
         <span class="file-spec" id="fileSpec">edition 2021 · debug</span>
         <span id="progBadge" class="badge" style="display:none"></span>
         <div class="toolbar-spacer"></div>
-        <button type="button" id="evalBtn" class="ghost-btn" title="Send your code + last run output to the tutor for review" disabled>
+        <button type="button" id="evalBtn" class="ghost-btn" title="Send your note, code, last run output, and diagnostics to the tutor" disabled>
           <span>Send to tutor</span>
           <i class="ti ti-arrow-narrow-right" aria-hidden="true"></i>
         </button>
@@ -267,7 +267,7 @@
             <button type="button" id="projConsoleRunBtn" class="ghost-btn icon-btn" title="Run the active C# file as a console snippet" disabled>
               <i class="ti ti-terminal-2" aria-hidden="true"></i>
             </button>
-            <button type="button" id="projEvalBtn" class="ghost-btn" title="Send open files + rendered page + console + server logs to the tutor">
+            <button type="button" id="projEvalBtn" class="ghost-btn" title="Send your note, open files, output, diagnostics, and preview context to the tutor">
               <span>Send to tutor</span>
               <i class="ti ti-arrow-narrow-right" aria-hidden="true"></i>
             </button>
