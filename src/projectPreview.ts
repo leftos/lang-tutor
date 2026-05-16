@@ -32,6 +32,7 @@ const MAX_LOG_LINES = 1000;
 const STATUS_POLL_INTERVAL_MS = 2000;
 
 const WEB_ERROR_PATTERNS = [/\bERROR\b/i, /^✘/, /\bFAILED\b/, /Error:/];
+const CHECKER_SUCCESS_SUMMARY_RE = /^\[[^\]]+\]\s+Found\s+0\s+errors?(?:\s+and\s+0\s+warnings?)?(?:\.\s+Watching.*)?\.?$/i;
 // CS = C# compiler, MC = XAML markup compiler, MSB = MSBuild. All three emit
 // the same "<path>(<line>,<col>): error <CODE>: …" shape that the linkifier
 // below depends on. Keep this set in sync with CSHARP_ERROR_PARSE_RE.
@@ -156,8 +157,13 @@ function span(text: string, ...classes: string[]): HTMLSpanElement {
 }
 
 function isWebErrorLine(entry: ProjectLogEntry): boolean {
+  if (CHECKER_SUCCESS_SUMMARY_RE.test(entry.line)) return false;
   if (entry.stream === 'stderr') return true;
   return WEB_ERROR_PATTERNS.some((re) => re.test(entry.line));
+}
+
+function isBenignStderrLine(entry: ProjectLogEntry): boolean {
+  return entry.stream === 'stderr' && CHECKER_SUCCESS_SUMMARY_RE.test(entry.line);
 }
 
 function isCsharpErrorLine(entry: ProjectLogEntry): boolean {
@@ -340,7 +346,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
 
   function appendLog(entry: ProjectLogEntry): void {
     const line = div('proj-preview-log-line');
-    if (entry.stream === 'stderr') line.classList.add('is-stderr');
+    if (entry.stream === 'stderr' && !isBenignStderrLine(entry)) line.classList.add('is-stderr');
     if (entry.stream === 'system') line.classList.add('is-system');
     line.textContent = entry.line === '' ? ' ' : entry.line;
     logsPane.appendChild(line);
