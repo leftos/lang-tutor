@@ -266,12 +266,12 @@
         <div id="dasmFlagsControl" class="dasm-flags-control" hidden>
           <label for="dasmFlagsInput">Flags</label>
           <select id="dasmFlagsPreset" aria-label="DASM compiler flag preset">
-            <option value="-O0 -fno-omit-frame-pointer">-O0</option>
-            <option value="-O1 -fno-omit-frame-pointer">-O1</option>
-            <option value="-O2 -fno-omit-frame-pointer">-O2</option>
+            <option value="-O0 -g -fno-omit-frame-pointer">-O0</option>
+            <option value="-O1 -g -fno-omit-frame-pointer">-O1</option>
+            <option value="-O2 -g -fno-omit-frame-pointer">-O2</option>
             <option value="custom">Custom</option>
           </select>
-          <input id="dasmFlagsInput" type="text" value="-O0 -fno-omit-frame-pointer" spellcheck="false" autocomplete="off" aria-label="DASM compiler flags" />
+          <input id="dasmFlagsInput" type="text" value="-O0 -g -fno-omit-frame-pointer" spellcheck="false" autocomplete="off" aria-label="DASM compiler flags" />
         </div>
         <span id="progBadge" class="badge" style="display:none"></span>
         <div class="toolbar-spacer"></div>

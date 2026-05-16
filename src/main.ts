@@ -78,11 +78,11 @@ import { isSingleBufferLanguage } from './types';
 const THEME_KEY = 'lang-tutor:theme';
 const DASM_FLAGS_KEY = 'lang-tutor:dasm:compiler-flags';
 const FOCUS_MODE_KEY = 'lang-tutor:focus-mode';
-const DEFAULT_DASM_FLAGS = '-O0 -fno-omit-frame-pointer';
+const DEFAULT_DASM_FLAGS = '-O0 -g -fno-omit-frame-pointer';
 const DASM_FLAG_PRESETS = [
   { label: '-O0', flags: DEFAULT_DASM_FLAGS },
-  { label: '-O1', flags: '-O1 -fno-omit-frame-pointer' },
-  { label: '-O2', flags: '-O2 -fno-omit-frame-pointer' },
+  { label: '-O1', flags: '-O1 -g -fno-omit-frame-pointer' },
+  { label: '-O2', flags: '-O2 -g -fno-omit-frame-pointer' },
 ] as const;
 
 // ── State ─────────────────────────────────────────────────────────────────

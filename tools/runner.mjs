@@ -29,7 +29,7 @@ const LANG_CONFIG = Object.freeze({
   csharp: { file: 'main.cs' },
 });
 
-const DASM_DEFAULT_FLAGS = '-O0 -fno-omit-frame-pointer';
+const DASM_DEFAULT_FLAGS = '-O0 -g -fno-omit-frame-pointer';
 const DASM_ALLOWED_FLAGS = new Set([
   '-O0',
   '-O1',
