@@ -36,6 +36,7 @@ import {
   getRecentLogs,
   getStatus,
   getTree,
+  injectPreviewBootstrapIntoHtml,
   mkdir,
   openProject,
   readFile,
@@ -361,6 +362,7 @@ function proxyHeaders(headers, targetPort) {
   delete next['proxy-authorization'];
   delete next.te;
   delete next.trailer;
+  delete next['transfer-encoding'];
   delete next.upgrade;
   return next;
 }
@@ -380,6 +382,16 @@ function responseHeaders(headers) {
   next['access-control-allow-methods'] = 'GET, HEAD, OPTIONS';
   next['content-security-policy'] = PREVIEW_CONTENT_SECURITY_POLICY;
   return next;
+}
+
+function shouldInjectPreviewBootstrap(req, proxyRes) {
+  if (req.method !== 'GET') return false;
+  const status = proxyRes.statusCode ?? 200;
+  if (status < 200 || status >= 300) return false;
+  if (proxyRes.headers['content-encoding'] !== undefined) return false;
+
+  const contentType = String(proxyRes.headers['content-type'] ?? '').toLowerCase();
+  return contentType.includes('text/html');
 }
 
 function handlePreviewProxy(scope, route, req, res) {
@@ -402,8 +414,29 @@ function handlePreviewProxy(scope, route, req, res) {
     },
     (proxyRes) => {
       res.removeHeader('Content-Security-Policy');
-      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.statusMessage, responseHeaders(proxyRes.headers));
-      proxyRes.pipe(res);
+      const headers = responseHeaders(proxyRes.headers);
+      if (!shouldInjectPreviewBootstrap(req, proxyRes)) {
+        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.statusMessage, headers);
+        proxyRes.pipe(res);
+        return;
+      }
+
+      const chunks = [];
+      proxyRes.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      proxyRes.on('end', () => {
+        const original = Buffer.concat(chunks).toString('utf8');
+        const injected = injectPreviewBootstrapIntoHtml(original);
+        const body = Buffer.from(injected, 'utf8');
+        delete headers['content-length'];
+        delete headers['Content-Length'];
+        headers['content-length'] = String(body.length);
+        res.writeHead(proxyRes.statusCode ?? 502, proxyRes.statusMessage, headers);
+        res.end(body);
+      });
+      proxyRes.on('error', (error) => {
+        if (!res.headersSent) sendPreviewError(res, 502, `Project preview proxy failed: ${error.message}`);
+        else res.destroy(error);
+      });
     }
   );
   proxyReq.on('error', (error) => {

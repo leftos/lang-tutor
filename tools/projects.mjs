@@ -223,9 +223,9 @@ function getReadinessPort(lang) {
 
 // ── Iframe bootstrap (DOM snapshot + console capture for evaluate) ──
 //
-// Re-injected into projects/<lang>/index.html on every /proj/start so the
-// student can't accidentally break the Send-to-tutor flow. Idempotent via
-// the marker comments.
+// This is injected into proxied preview HTML only. It must never be written
+// into the student's workspace files; those should stay readable course
+// material.
 
 const BOOTSTRAP_START = '<!-- lang-tutor:bootstrap-start -->';
 const BOOTSTRAP_END = '<!-- lang-tutor:bootstrap-end -->';
@@ -413,34 +413,25 @@ const BOOTSTRAP_INNER = `(() => {
 
 const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}\n<script>${HTML_TO_IMAGE_BUNDLE}</script>\n<script>${BOOTSTRAP_INNER}</script>\n${BOOTSTRAP_END}`;
 
-function injectBootstrap(scope, lang) {
-  if (PROJECT_CONFIG[lang].bootstrap !== 'web-iframe') return;
-  const root = getProjectRoot(scope, lang);
-  const indexPath = join(root, 'index.html');
-  if (!existsSync(indexPath)) return;
-  const original = readFileSync(indexPath, 'utf8');
+export function stripPreviewBootstrapFromHtml(html) {
+  const startIdx = html.indexOf(BOOTSTRAP_START);
+  const endIdx = html.indexOf(BOOTSTRAP_END);
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return html;
 
-  // Strip any existing bootstrap block (so an update to BOOTSTRAP_SCRIPT
-  // takes effect on next start).
-  const startIdx = original.indexOf(BOOTSTRAP_START);
-  const endIdx = original.indexOf(BOOTSTRAP_END);
-  let stripped = original;
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    const before = original.slice(0, startIdx).replace(/\s+$/, '');
-    const after = original.slice(endIdx + BOOTSTRAP_END.length);
-    stripped = before + after;
-  }
+  const before = html.slice(0, startIdx).replace(/\s+$/, '');
+  const after = html.slice(endIdx + BOOTSTRAP_END.length).replace(/^\s+/, '');
+  return `${before}\n${after}`;
+}
 
-  // Inject right after the opening <head> tag — earliest point where a
-  // script can intercept console calls before page scripts run.
+export function injectPreviewBootstrapIntoHtml(html) {
+  const stripped = stripPreviewBootstrapFromHtml(html);
+
+  // Inject right after the opening <head> tag: early enough to intercept
+  // console calls before user scripts run, without polluting source files.
   const headOpen = stripped.search(/<head\b[^>]*>/i);
-  if (headOpen === -1) return; // not an HTML doc with <head> — skip silently
+  if (headOpen === -1) return stripped;
   const headEnd = stripped.indexOf('>', headOpen) + 1;
-  const updated = `${stripped.slice(0, headEnd)}\n${BOOTSTRAP_SCRIPT}\n${stripped.slice(headEnd).replace(/^\s+/, '')}`;
-
-  if (updated === original) return;
-  writeFileSync(indexPath, updated, 'utf8');
-  markSelfWrite(indexPath);
+  return `${stripped.slice(0, headEnd)}\n${BOOTSTRAP_SCRIPT}\n${stripped.slice(headEnd).replace(/^\s+/, '')}`;
 }
 
 const SELF_WRITE_SUPPRESS_MS = 500;
@@ -800,6 +791,17 @@ const SCAFFOLDS = Object.freeze({ web: SCAFFOLD_WEB, csharp: SCAFFOLD_CSHARP });
 
 function migrateWebScaffold(root) {
   const updatedPaths = [];
+  const indexPath = safeResolve(root, 'index.html');
+  if (existsSync(indexPath)) {
+    const original = readFileSync(indexPath, 'utf8');
+    const updated = stripPreviewBootstrapFromHtml(original);
+    if (updated !== original) {
+      writeFileSync(indexPath, updated, 'utf8');
+      markSelfWrite(indexPath);
+      updatedPaths.push('index.html');
+    }
+  }
+
   const viteConfig = safeResolve(root, 'vite.config.js');
   if (existsSync(viteConfig)) {
     const original = readFileSync(viteConfig, 'utf8');
@@ -921,11 +923,13 @@ function buildTree(absDir, projectRoot, ignoreSet) {
 export function getTree(scope, lang) {
   const root = getProjectRoot(scope, lang);
   if (!existsSync(root)) return { tree: null, scaffolded: false };
+  if (lang === 'web') migrateWebScaffold(root);
   return { tree: buildTree(root, root, getTreeIgnore(lang)), scaffolded: true };
 }
 
 export function readFile(scope, lang, relPath) {
   const root = getProjectRoot(scope, lang);
+  if (lang === 'web') migrateWebScaffold(root);
   const abs = safeResolve(root, relPath);
   if (!existsSync(abs) || !statSync(abs).isFile()) {
     throw new Error(`file not found: ${relPath}`);
@@ -1308,7 +1312,6 @@ export async function startProject(scope, lang) {
   if (scaffold.updated?.length > 0) {
     pushLog(state, 'system', `Updated ${lang} workspace config (${scaffold.updated.join(', ')}).`);
   }
-  injectBootstrap(scope, lang);
   const cwd = getProjectRoot(scope, lang);
   state.error = null;
 

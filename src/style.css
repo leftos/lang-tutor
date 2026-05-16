@@ -170,8 +170,8 @@
     -moz-osx-font-smoothing: grayscale;
   }
   ::selection {
-    background: var(--sig-soft);
-    color: var(--ink);
+    background: var(--sig);
+    color: var(--sig-fg);
   }
   button {
     cursor: pointer;
