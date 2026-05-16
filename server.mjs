@@ -17,7 +17,7 @@ import { handleStateRequest } from './tools/app-state.mjs';
 import { handleAuthRequest, readAuthSession } from './tools/auth-routes.mjs';
 import { checkCode, formatCode } from './tools/checker.mjs';
 import { handleLspRequest, handleLspUpgrade } from './tools/lsp.mjs';
-import { handleProjectRequest } from './tools/project-routes.mjs';
+import { handleProjectRequest, handleProjectUpgrade } from './tools/project-routes.mjs';
 import { runSnippet } from './tools/runner.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -147,13 +147,19 @@ const server = createServer(async (req, res) => {
 
 server.on('upgrade', (req, socket, head) => {
   stripBasePath(req);
-  if (!isLspUpgrade(req)) {
-    handleLspUpgrade(req, socket, head);
+  if (!isProtectedUpgrade(req)) {
+    if (!handleLspUpgrade(req, socket, head) && !handleProjectUpgrade(req, socket, head)) {
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+    }
     return;
   }
   requireSignedInUpgrade(req, socket)
     .then((allowed) => {
-      if (allowed) handleLspUpgrade(req, socket, head);
+      if (allowed && !handleLspUpgrade(req, socket, head) && !handleProjectUpgrade(req, socket, head)) {
+        socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+      }
     })
     .catch(() => {
       socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
@@ -210,6 +216,14 @@ function isToolRequest(req) {
 
 function isLspUpgrade(req) {
   return requestPath(req) === '/lsp';
+}
+
+function isProjectPreviewUpgrade(req) {
+  return requestPath(req).startsWith('/proj/preview/');
+}
+
+function isProtectedUpgrade(req) {
+  return isLspUpgrade(req) || isProjectPreviewUpgrade(req);
 }
 
 async function requireSignedInUser(req, res) {

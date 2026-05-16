@@ -12,12 +12,19 @@ becomes worth automating as a separate bootstrap command.
 - App root: `/opt/lang-tutor`
 - Account database: `/var/lib/lang-tutor/account.sqlite`
 - Code-run workspaces: `/var/lib/lang-tutor/runs`
+- Project workspaces: `/var/lib/lang-tutor/workspaces/<user-id>/<language>`
+- Shared project tool cache: `/var/lib/lang-tutor/cache`
 - Node service port: `5190`
 - Systemd unit: `lang-tutor.service`
 - Docker image built by deploy: `lang-tutor-toolchains:latest`
 
 Provider API keys are entered by users in the browser. They are not stored in
 the droplet environment, SQLite account database, or mirrored app state.
+
+Project-language files are copied from the app templates into per-user scratch
+workspaces under `/var/lib/lang-tutor/workspaces`. Web previews bind private
+loopback-only Vite ports and are exposed to the browser through the app's
+same-origin `/proj/preview/<lang>/` proxy.
 
 ## Normal Deploy
 
@@ -41,7 +48,10 @@ For an uncommitted worktree deployment:
   `python`, `black`, `basedpyright`, `typescript-language-server`,
   `vscode-html-language-server`, `vscode-css-language-server`, and `biome`.
 - Builds the Vite app with `LANG_TUTOR_BASE_PATH` derived from `-DeployUrl`.
-- Creates `/var/lib/lang-tutor` and `/var/lib/lang-tutor/runs`.
+- Creates `/var/lib/lang-tutor`, `/var/lib/lang-tutor/runs`,
+  `/var/lib/lang-tutor/workspaces`, and `/var/lib/lang-tutor/cache`.
+- Ensures `LANG_TUTOR_PROJECT_ROOT=/var/lib/lang-tutor/workspaces` is present
+  in `/etc/lang-tutor/lang-tutor-runtime.conf`.
 - Builds and verifies `lang-tutor-toolchains:latest` for hosted code runs.
 - Restarts `lang-tutor.service`.
 - Smoke-tests `/lang-tutor`, `/lang-tutor/`, auth, protected state, and
@@ -82,6 +92,7 @@ LANG_TUTOR_SECURE_COOKIES=true
 LANG_TUTOR_DB_FILE=/var/lib/lang-tutor/account.sqlite
 LANG_TUTOR_TOOLCHAIN_IMAGE=lang-tutor-toolchains:latest
 LANG_TUTOR_RUN_ROOT=/var/lib/lang-tutor/runs
+LANG_TUTOR_PROJECT_ROOT=/var/lib/lang-tutor/workspaces
 EOF
 ```
 
@@ -91,7 +102,7 @@ System user and directories:
 useradd --system --home /opt/lang-tutor --shell /usr/sbin/nologin lang-tutor || true
 usermod -aG docker lang-tutor
 install -d -o lang-tutor -g lang-tutor /opt/lang-tutor /opt/lang-tutor/releases
-install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor /var/lib/lang-tutor/runs
+install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor /var/lib/lang-tutor/runs /var/lib/lang-tutor/workspaces /var/lib/lang-tutor/cache
 ```
 
 Systemd service:
@@ -118,7 +129,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/lang-tutor /opt/lang-tutor/app/.local /opt/lang-tutor/app/projects /opt/lang-tutor/app/.tmp
+ReadWritePaths=/var/lib/lang-tutor /opt/lang-tutor/app/.local /opt/lang-tutor/app/.tmp
 
 [Install]
 WantedBy=multi-user.target

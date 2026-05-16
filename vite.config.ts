@@ -7,7 +7,7 @@ import { checkCode, formatCode } from './tools/checker.mjs';
 // @ts-expect-error -- plain JS module
 import { handleLspRequest, handleLspUpgrade } from './tools/lsp.mjs';
 // @ts-expect-error -- plain JS module
-import { handleProjectRequest } from './tools/project-routes.mjs';
+import { handleProjectRequest, handleProjectUpgrade } from './tools/project-routes.mjs';
 // @ts-expect-error -- plain JS module with JSDoc types
 import { runSnippet } from './tools/runner.mjs';
 
@@ -48,7 +48,8 @@ function toolchainPlugin(): Plugin {
       // WebSocket upgrades on /lsp need to attach to the underlying http.Server.
       // Vite's own HMR socket lives on /__hmr (no path collision).
       server.httpServer?.on('upgrade', (req, socket, head) => {
-        handleLspUpgrade(req, socket, head);
+        if (handleLspUpgrade(req, socket, head)) return;
+        handleProjectUpgrade(req, socket, head);
       });
 
       server.middlewares.use('/check', async (req, res, next) => {

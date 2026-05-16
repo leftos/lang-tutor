@@ -24,12 +24,14 @@ export interface ProjectStatus {
   readonly pid: number | null;
   readonly lastExitCode: number | null;
   readonly vitePort: number | null;
+  readonly previewPath?: string;
   readonly error: string | null;
 }
 
 interface StartResponse {
   readonly ok: boolean;
   readonly vitePort?: number;
+  readonly previewPath?: string;
   readonly ready?: boolean;
   readonly error?: string;
 }

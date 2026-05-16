@@ -34,6 +34,8 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { readAuthSession } from './auth-routes.mjs';
+import { ensureScaffold, getProjectRoot } from './projects.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -88,7 +90,7 @@ function resolveCsharpRoslynBin() {
  * @property {string} bin                   - executable on PATH
  * @property {string[]} args                - hardcoded argv (no user data)
  * @property {'fresh' | 'project'} [workspaceMode] - 'fresh' (default) creates `.tmp/lsp/<sid>/`
- *           and seeds files; 'project' uses the existing `projects/<projectDir>/` directory and
+ *           and seeds files; 'project' uses the signed-in user's persistent project workspace and
  *           does not seed any files.
  * @property {string} [projectDir]          - subdirectory under projects/ (project mode only)
  * @property {string} [mainFile]            - filename inside the workspace dir (fresh mode)
@@ -291,6 +293,7 @@ const WSS_KEY = '__langTutorLspWss';
 /**
  * @typedef {object} LspSession
  * @property {string} lang
+ * @property {string} scope
  * @property {import('node:child_process').ChildProcessWithoutNullStreams} proc
  * @property {string} workspaceDir
  * @property {boolean} workspaceEphemeral - true → delete on exit; false → leave projects/ alone
@@ -656,15 +659,15 @@ async function probeAvailability(serverKey) {
  */
 /**
  * Resolve the workspace directory for a session. Project-mode languages reuse
- * the on-disk `projects/<projectDir>/` directory (the dev-server supervisor
- * already manages files there); fresh-mode creates a per-session directory
+ * the user's on-disk project workspace (the dev-server supervisor already
+ * manages files there); fresh-mode creates a per-session directory
  * under `.tmp/lsp/<sid>/` and seeds the configured workspace files.
  *
  * @param {string} serverKey
  * @param {string} sessionId
  * @returns {{ dir: string; ephemeral: boolean }}
  */
-function createWorkspace(serverKey, sessionId) {
+function createWorkspace(scope, serverKey, sessionId) {
   const config = LSP_CONFIG[serverKey];
   if (config === undefined) throw new Error(`unknown serverKey: ${serverKey}`);
 
@@ -672,7 +675,8 @@ function createWorkspace(serverKey, sessionId) {
     if (typeof config.projectDir !== 'string' || config.projectDir.length === 0) {
       throw new Error(`project mode requires projectDir for ${serverKey}`);
     }
-    const dir = resolve(REPO_ROOT, 'projects', config.projectDir);
+    ensureScaffold(scope, config.projectDir);
+    const dir = getProjectRoot(scope, config.projectDir);
     return { dir, ephemeral: false };
   }
 
@@ -728,7 +732,7 @@ function pathToFileUri(absPath) {
  * @param {string} serverKey
  * @returns {Promise<{ ok: true; sessionId: string; mainFileUri?: string; rootUri: string } | { ok: false; error: string }>}
  */
-async function startSession(serverKey) {
+async function startSession(scope, serverKey) {
   const config = LSP_CONFIG[serverKey];
   if (config === undefined) return { ok: false, error: `unknown serverKey: ${serverKey}` };
 
@@ -736,7 +740,7 @@ async function startSession(serverKey) {
   if (!probe.available) return { ok: false, error: probe.error ?? 'unavailable' };
 
   const sessionId = randomUUID();
-  const { dir: workspaceDir, ephemeral } = createWorkspace(serverKey, sessionId);
+  const { dir: workspaceDir, ephemeral } = createWorkspace(scope, serverKey, sessionId);
 
   // When resolveBinPath produced an absolute path during probing, prefer it
   // over `config.bin` for the spawn (the cached probe stored that path under
@@ -770,6 +774,7 @@ async function startSession(serverKey) {
   /** @type {LspSession} */
   const session = {
     lang: serverKey,
+    scope,
     proc,
     workspaceDir,
     workspaceEphemeral: ephemeral,
@@ -864,7 +869,7 @@ async function startSession(serverKey) {
  *       unavailable: Array<{ serverKey: string; error: string }>; }
  *   | { ok: false; error: string }>}
  */
-async function startBundle(lang) {
+async function startBundle(scope, lang) {
   const entries = LANG_SERVERS[lang];
   if (entries === undefined || entries.length === 0) {
     return { ok: false, error: `unknown lang: ${lang}` };
@@ -878,7 +883,7 @@ async function startBundle(lang) {
   for (const entry of entries) {
     if (typeof entry === 'string') {
       // Single server — spawn unconditionally; missing binary just falls soft.
-      const result = await startSession(entry);
+      const result = await startSession(scope, entry);
       if (!result.ok) {
         unavailable.push({ serverKey: entry, error: result.error });
         continue;
@@ -897,7 +902,7 @@ async function startBundle(lang) {
     // weren't picked.
     let groupChosen = false;
     for (const serverKey of entry) {
-      const result = await startSession(serverKey);
+      const result = await startSession(scope, serverKey);
       if (!result.ok) {
         unavailable.push({ serverKey, error: result.error });
         continue;
@@ -1058,6 +1063,16 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+async function resolveScope(req, res) {
+  const session = await readAuthSession(req);
+  if (session !== null) return session.user.id;
+  if (process.env.LANG_TUTOR_REQUIRE_AUTH === 'true') {
+    sendJson(res, 401, { error: 'Sign in to use hosted tooling.' });
+    return null;
+  }
+  return 'local';
+}
+
 function getUrlPath(url) {
   const qIdx = url.indexOf('?');
   return qIdx === -1 ? url : url.slice(0, qIdx);
@@ -1093,6 +1108,8 @@ export async function handleLspRequest(req, res) {
     }
 
     if (req.method === 'POST' && urlPath === '/lsp/spawn') {
+      const scope = await resolveScope(req, res);
+      if (scope === null) return true;
       const body = await readBody(req);
       let parsed;
       try {
@@ -1106,7 +1123,7 @@ export async function handleLspRequest(req, res) {
         sendJson(res, 400, { error: 'missing lang' });
         return true;
       }
-      const result = await startBundle(lang);
+      const result = await startBundle(scope, lang);
       sendJson(res, result.ok ? 200 : 503, result);
       return true;
     }

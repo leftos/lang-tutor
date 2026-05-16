@@ -3,7 +3,7 @@
  * with `csharp` arriving in Phase 2).
  *
  * Owns:
- *  - Scaffolding the on-disk workspace under projects/<scaffoldDir>/.
+ *  - Scaffolding per-user workspaces under LANG_TUTOR_PROJECT_ROOT.
  *  - File CRUD (tree / read / write / rename / delete / mkdir) with strict
  *    path-traversal rejection — every path is resolved against the project root
  *    and rejected if it escapes.
@@ -15,14 +15,16 @@
  *    polls a port until it responds; `process-alive` waits for the spawned
  *    child to stay alive past a warm-up window (used by desktop processes).
  *
- * SECURITY: Like tools/checker.mjs, every spawn uses array-form `spawn(cmd, args[])`.
- * No shell, no string concatenation. The only user-controlled input is file content
- * (written via stdin to the file) and file paths (validated against project root).
+ * SECURITY: all user file paths are resolved against the user's project root
+ * before filesystem access. Child commands and arguments are fixed by
+ * PROJECT_CONFIG; only the private preview port and public base path are filled
+ * into placeholders.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,18 +32,32 @@ import chokidar from 'chokidar';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
-const PROJECTS_DIR = join(REPO_ROOT, 'projects');
+const DEFAULT_WORKSPACE_ROOT = process.env.NODE_ENV === 'production' ? '/var/lib/lang-tutor/workspaces' : join(REPO_ROOT, '.local', 'workspaces');
+const WORKSPACE_ROOT = resolve(process.env.LANG_TUTOR_PROJECT_ROOT ?? process.env.LANG_TUTOR_WORKSPACE_ROOT ?? DEFAULT_WORKSPACE_ROOT);
+const PROJECT_CACHE_ROOT = resolve(process.env.LANG_TUTOR_PROJECT_CACHE_ROOT ?? join(WORKSPACE_ROOT, '..', 'cache'));
 
 const LOG_RING_SIZE = 500;
 const READY_PROBE_INTERVAL_MS = 250;
 const READY_PROBE_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 3_000;
 const PROCESS_ALIVE_DEFAULT_MS = 500;
+const WEB_PORT_START = Number.parseInt(process.env.LANG_TUTOR_WEB_PORT_START ?? '5180', 10);
+const WEB_PORT_END = Number.parseInt(process.env.LANG_TUTOR_WEB_PORT_END ?? '5280', 10);
 
 const IS_WIN = process.platform === 'win32';
+const NODE = IS_WIN ? 'node.exe' : 'node';
 const PNPM = IS_WIN ? 'pnpm.cmd' : 'pnpm';
 const CSHARP_SOLUTION_FILE = 'LangTutor.sln';
 const CSHARP_WPF_PROJECT_FILE = 'LangTutor.Wpf/LangTutor.Wpf.csproj';
+
+function normalizeBasePath(value) {
+  const raw = value?.trim();
+  if (!raw || raw === './') return '/';
+  const withLeadingSlash = raw.startsWith('/') ? raw : `/${raw}`;
+  return withLeadingSlash.endsWith('/') ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
+const APP_BASE_PATH = normalizeBasePath(process.env.LANG_TUTOR_BASE_PATH);
 
 /**
  * Per-language project configuration. Single source of truth for
@@ -53,7 +69,7 @@ const CSHARP_WPF_PROJECT_FILE = 'LangTutor.Wpf/LangTutor.Wpf.csproj';
  *   install: { cmd: string, args: string[], marker: string } | null,
  *   dev: { cmd: string, args: string[] },
  *   readiness:
- *     | { kind: 'http-probe', port: number }
+ *     | { kind: 'http-probe', preferredPort: number }
  *     | { kind: 'process-alive', minAliveMs: number },
  *   treeIgnore: Set<string>,
  *   bootstrap: 'web-iframe' | null,
@@ -64,10 +80,24 @@ const CSHARP_WPF_PROJECT_FILE = 'LangTutor.Wpf/LangTutor.Wpf.csproj';
 const PROJECT_CONFIG = Object.freeze({
   web: {
     scaffoldDir: 'web',
-    install: { cmd: PNPM, args: ['install'], marker: 'node_modules' },
-    dev: { cmd: PNPM, args: ['dev'] },
-    readiness: { kind: 'http-probe', port: 5180 },
-    treeIgnore: new Set(['node_modules', '.git', 'dist', '.vite']),
+    install: { cmd: PNPM, args: ['install', '--ignore-scripts'], marker: 'node_modules' },
+    dev: {
+      cmd: NODE,
+      args: [
+        './node_modules/vite/bin/vite.js',
+        '--configLoader',
+        'runner',
+        '--host',
+        '127.0.0.1',
+        '--strictPort',
+        '--port',
+        '{port}',
+        '--base',
+        '{base}',
+      ],
+    },
+    readiness: { kind: 'http-probe', preferredPort: 5180 },
+    treeIgnore: new Set(['node_modules', '.git', 'dist', '.vite', '.vite-temp']),
     bootstrap: 'web-iframe',
   },
   csharp: {
@@ -90,6 +120,7 @@ const PROJECT_CONFIG = Object.freeze({
  */
 const MISSING_CMD_HINTS = Object.freeze({
   dotnet: '.NET SDK not found on PATH. Install .NET 8 (or newer) from https://aka.ms/dotnet/download and restart the dev server.',
+  node: 'Node.js not found on PATH. Install Node 20.6+ and restart the dev server.',
   pnpm: 'pnpm not found on PATH. Install with `npm install -g pnpm` and restart the dev server.',
 });
 
@@ -109,9 +140,9 @@ function missingCmdHint(cmd) {
  * `--version` since both `pnpm` and `dotnet` (the only commands we care about
  * today) respond to it cheaply. ENOENT means the executable isn't on PATH.
  *
- * On Windows with `shell: true`, a missing command exits non-zero through
- * cmd.exe rather than emitting the ENOENT error event — so we treat any
- * non-zero exit AND any error event as "missing" here.
+ * On Windows some package-manager shims need `shell: true`; a missing command
+ * exits non-zero through cmd.exe rather than emitting ENOENT, so we treat any
+ * non-zero exit and any error event as "missing" here.
  */
 function commandExists(cmd) {
   try {
@@ -187,7 +218,7 @@ function getTreeIgnore(lang) {
 /** Port reported back to the frontend. Null for desktop projects (no HTTP server). */
 function getReadinessPort(lang) {
   const r = PROJECT_CONFIG[lang].readiness;
-  return r.kind === 'http-probe' ? r.port : null;
+  return r.kind === 'http-probe' ? r.preferredPort : null;
 }
 
 // ── Iframe bootstrap (DOM snapshot + console capture for evaluate) ──
@@ -343,9 +374,9 @@ const BOOTSTRAP_INNER = `(() => {
 
 const BOOTSTRAP_SCRIPT = `${BOOTSTRAP_START}\n<script>${HTML_TO_IMAGE_BUNDLE}</script>\n<script>${BOOTSTRAP_INNER}</script>\n${BOOTSTRAP_END}`;
 
-function injectBootstrap(lang) {
+function injectBootstrap(scope, lang) {
   if (PROJECT_CONFIG[lang].bootstrap !== 'web-iframe') return;
-  const root = getProjectRoot(lang);
+  const root = getProjectRoot(scope, lang);
   const indexPath = join(root, 'index.html');
   if (!existsSync(indexPath)) return;
   const original = readFileSync(indexPath, 'utf8');
@@ -403,9 +434,29 @@ function assertLang(lang) {
   if (!ALLOWED_LANGS.has(lang)) throw new Error(`unknown project language: ${lang}`);
 }
 
-export function getProjectRoot(lang) {
+function scopeSegment(scope) {
+  const raw = typeof scope === 'string' && scope.length > 0 ? scope : 'local';
+  if (/^[a-zA-Z0-9._-]{1,80}$/.test(raw)) return raw;
+  return createHash('sha256').update(raw).digest('hex').slice(0, 32);
+}
+
+function stateKey(scope, lang) {
+  return `${scopeSegment(scope)}:${lang}`;
+}
+
+export function getProjectRoot(scope, lang) {
   assertLang(lang);
-  return join(PROJECTS_DIR, PROJECT_CONFIG[lang].scaffoldDir);
+  return join(WORKSPACE_ROOT, scopeSegment(scope), PROJECT_CONFIG[lang].scaffoldDir);
+}
+
+export function getPreviewRoutePath(lang) {
+  assertLang(lang);
+  return `/proj/preview/${encodeURIComponent(lang)}/`;
+}
+
+export function getPreviewPublicBase(lang) {
+  assertLang(lang);
+  return `${APP_BASE_PATH}proj/preview/${encodeURIComponent(lang)}/`;
 }
 
 function safeResolve(projectRoot, relPath) {
@@ -426,7 +477,7 @@ const SCAFFOLD_WEB = {
       name: 'lang-tutor-web',
       private: true,
       type: 'module',
-      scripts: { dev: 'vite --port 5180 --strictPort --host 0.0.0.0' },
+      scripts: { dev: 'vite --configLoader runner --port 5180 --strictPort --host 127.0.0.1' },
       devDependencies: {
         vite: '^7.0.0',
         // vite-plugin-checker runs tsc / biome in a worker and surfaces
@@ -453,6 +504,9 @@ import checker from 'vite-plugin-checker';
 // stderr, the latter is what makes them flow into the lang-tutor [SERVER]
 // block when the student clicks Send to tutor.
 export default defineConfig({
+  // Hosted workspaces live in writable scratch storage while app releases stay
+  // read-only. Keep Vite's own cache beside the user's project files.
+  cacheDir: './.vite',
   plugins: [
     checker({
       typescript: { tsconfigPath: 'jsconfig.json' },
@@ -496,6 +550,10 @@ export default defineConfig({
     null,
     2
   )}\n`,
+
+  'pnpm-workspace.yaml': `packages:
+  - .
+`,
 
   'index.html': `<!DOCTYPE html>
 <html lang="en">
@@ -550,8 +608,9 @@ This folder is your sandbox for the web-development course in lang-tutor.
 - \`style.css\` — page styles
 - \`app.js\` — page logic
 
-Vite serves it on http://localhost:5180 with hot reload. Edit the files here or
-through any other editor — lang-tutor reads and writes them on disk.
+Lang Tutor starts a private Vite dev server when you click Run and shows it in
+the Preview tab with hot reload. Edit the files here or through any other
+editor — lang-tutor reads and writes them on disk.
 `,
 };
 
@@ -701,8 +760,8 @@ You can also build and run from Visual Studio or JetBrains Rider by opening
 
 const SCAFFOLDS = Object.freeze({ web: SCAFFOLD_WEB, csharp: SCAFFOLD_CSHARP });
 
-export function ensureScaffold(lang) {
-  const root = getProjectRoot(lang);
+export function ensureScaffold(scope, lang) {
+  const root = getProjectRoot(scope, lang);
   const template = SCAFFOLDS[lang];
   if (!template) throw new Error(`no scaffold defined for ${lang}`);
 
@@ -753,14 +812,14 @@ function buildTree(absDir, projectRoot, ignoreSet) {
   return node;
 }
 
-export function getTree(lang) {
-  const root = getProjectRoot(lang);
+export function getTree(scope, lang) {
+  const root = getProjectRoot(scope, lang);
   if (!existsSync(root)) return { tree: null, scaffolded: false };
   return { tree: buildTree(root, root, getTreeIgnore(lang)), scaffolded: true };
 }
 
-export function readFile(lang, relPath) {
-  const root = getProjectRoot(lang);
+export function readFile(scope, lang, relPath) {
+  const root = getProjectRoot(scope, lang);
   const abs = safeResolve(root, relPath);
   if (!existsSync(abs) || !statSync(abs).isFile()) {
     throw new Error(`file not found: ${relPath}`);
@@ -768,9 +827,9 @@ export function readFile(lang, relPath) {
   return { content: readFileSync(abs, 'utf8') };
 }
 
-export function writeFile(lang, relPath, content) {
+export function writeFile(scope, lang, relPath, content) {
   if (typeof content !== 'string') throw new Error('content must be a string');
-  const root = getProjectRoot(lang);
+  const root = getProjectRoot(scope, lang);
   const abs = safeResolve(root, relPath);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content, 'utf8');
@@ -778,8 +837,8 @@ export function writeFile(lang, relPath, content) {
   return { ok: true };
 }
 
-export function renameFile(lang, fromRel, toRel) {
-  const root = getProjectRoot(lang);
+export function renameFile(scope, lang, fromRel, toRel) {
+  const root = getProjectRoot(scope, lang);
   const fromAbs = safeResolve(root, fromRel);
   const toAbs = safeResolve(root, toRel);
   if (!existsSync(fromAbs)) throw new Error(`source not found: ${fromRel}`);
@@ -791,8 +850,8 @@ export function renameFile(lang, fromRel, toRel) {
   return { ok: true };
 }
 
-export function deleteFile(lang, relPath) {
-  const root = getProjectRoot(lang);
+export function deleteFile(scope, lang, relPath) {
+  const root = getProjectRoot(scope, lang);
   const abs = safeResolve(root, relPath);
   if (abs === root) throw new Error('cannot delete project root');
   if (!existsSync(abs)) return { ok: true };
@@ -801,8 +860,8 @@ export function deleteFile(lang, relPath) {
   return { ok: true };
 }
 
-export function mkdir(lang, relPath) {
-  const root = getProjectRoot(lang);
+export function mkdir(scope, lang, relPath) {
+  const root = getProjectRoot(scope, lang);
   const abs = safeResolve(root, relPath);
   mkdirSync(abs, { recursive: true });
   markSelfWrite(abs);
@@ -859,6 +918,8 @@ if (globalThis[EXIT_HOOK_KEY] !== true) {
 /**
  * @typedef {object} ProcState
  * @property {import('node:child_process').ChildProcess | null} proc
+ * @property {string} scope
+ * @property {string} lang
  * @property {number | null} pid          PID of the supervised child while running.
  * @property {string} phase  'install' | 'starting' | 'ready' | 'stopped' | 'exited' | 'error'
  *   - 'stopped' means the user clicked Stop (or initial state).
@@ -872,11 +933,14 @@ if (globalThis[EXIT_HOOK_KEY] !== true) {
  * @property {string | null} error
  */
 
-function getOrInitState(lang) {
-  let s = procs.get(lang);
+function getOrInitState(scope, lang) {
+  const key = stateKey(scope, lang);
+  let s = procs.get(key);
   if (!s) {
     s = {
       proc: null,
+      scope: scopeSegment(scope),
+      lang,
       pid: null,
       phase: 'stopped',
       lastExitCode: null,
@@ -886,7 +950,7 @@ function getOrInitState(lang) {
       subs: new Set(),
       error: null,
     };
-    procs.set(lang, s);
+    procs.set(key, s);
   }
   return s;
 }
@@ -976,14 +1040,84 @@ function probeReady(state, readiness, signal) {
   }
 }
 
+function isPortAlreadyClaimed(port) {
+  for (const state of procs.values()) {
+    if (state.proc !== null && state.vitePort === port) return true;
+  }
+  return false;
+}
+
+function canListenOnLocalPort(port) {
+  return new Promise((resolveCanListen) => {
+    const server = createNetServer();
+    server.once('error', () => resolveCanListen(false));
+    server.once('listening', () => {
+      server.close(() => resolveCanListen(true));
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+async function allocateHttpPort(preferredPort) {
+  const start = Number.isFinite(WEB_PORT_START) ? WEB_PORT_START : preferredPort;
+  const end = Number.isFinite(WEB_PORT_END) && WEB_PORT_END >= start ? WEB_PORT_END : start + 100;
+  const candidates = [preferredPort, ...Array.from({ length: end - start + 1 }, (_, i) => start + i)];
+  const seen = new Set();
+  for (const port of candidates) {
+    if (!Number.isInteger(port) || port < 1024 || seen.has(port)) continue;
+    seen.add(port);
+    if (isPortAlreadyClaimed(port)) continue;
+    if (await canListenOnLocalPort(port)) return port;
+  }
+  throw new Error(`no free preview port found in ${start}-${end}`);
+}
+
+function runtimeReadiness(config, state) {
+  if (config.readiness.kind === 'http-probe') {
+    if (state.vitePort === null) throw new Error('preview port was not assigned');
+    return { kind: 'http-probe', port: state.vitePort };
+  }
+  return config.readiness;
+}
+
+function resolveCommandArgs(args, lang, state) {
+  return args.map((arg) => {
+    if (arg === '{port}') {
+      if (state.vitePort === null) throw new Error('preview port was not assigned');
+      return String(state.vitePort);
+    }
+    if (arg === '{base}') return getPreviewPublicBase(lang);
+    return arg;
+  });
+}
+
+function projectChildEnv() {
+  const cacheDirs = {
+    npm: join(PROJECT_CACHE_ROOT, 'npm'),
+    pnpmStore: join(PROJECT_CACHE_ROOT, 'pnpm-store'),
+    tmp: join(PROJECT_CACHE_ROOT, 'tmp'),
+    xdg: join(PROJECT_CACHE_ROOT, 'xdg'),
+  };
+  for (const dir of Object.values(cacheDirs)) mkdirSync(dir, { recursive: true });
+  return {
+    ...process.env,
+    npm_config_cache: cacheDirs.npm,
+    npm_config_store_dir: cacheDirs.pnpmStore,
+    TMPDIR: cacheDirs.tmp,
+    TEMP: cacheDirs.tmp,
+    TMP: cacheDirs.tmp,
+    XDG_CACHE_HOME: cacheDirs.xdg,
+  };
+}
+
 function spawnLogged(state, cmd, args, cwd, phaseTag) {
   pushLog(state, 'system', `$ ${cmd} ${args.join(' ')}  (in ${cwd})`);
   let proc;
   try {
-    // Node 20+ on Windows refuses to spawn .cmd/.bat files without shell:true
-    // (CVE-2024-27980). Args here are hardcoded constants ('install', 'dev'),
-    // and cwd is a validated absolute path — no injection vector.
-    proc = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
+    // Node 20+ on Windows refuses to spawn .cmd/.bat shims without shell:true
+    // (CVE-2024-27980). Args here are hardcoded constants plus validated
+    // runtime placeholders; user text never reaches argv.
+    proc = spawn(cmd, args, { cwd, env: projectChildEnv(), stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
   } catch (e) {
     pushLog(state, 'system', `[${phaseTag}] failed to spawn: ${e.message}`);
     state.phase = 'error';
@@ -1037,32 +1171,36 @@ function runInstall(state, cwd, install) {
   });
 }
 
-function describeStartTarget(config) {
+function describeStartTarget(config, state) {
   const { readiness } = config;
-  if (readiness.kind === 'http-probe') return `http://127.0.0.1:${readiness.port}`;
+  if (readiness.kind === 'http-probe') return `http://127.0.0.1:${state.vitePort}/`;
   return `${config.dev.cmd} ${config.dev.args.join(' ')}`;
 }
 
-export async function startProject(lang) {
+export async function startProject(scope, lang) {
   assertLang(lang);
   const config = PROJECT_CONFIG[lang];
-  const state = getOrInitState(lang);
+  const state = getOrInitState(scope, lang);
 
   if (state.proc !== null && (state.phase === 'starting' || state.phase === 'ready')) {
-    return { ok: true, vitePort: state.vitePort, ready: state.phase === 'ready' };
+    return { ok: true, vitePort: state.vitePort, previewPath: getPreviewRoutePath(lang), ready: state.phase === 'ready' };
   }
 
   // Scaffold returns the list of newly-created paths (empty if nothing changed).
   // First-time start gets a friendly "creating workspace" line so the student
   // sees what's happening rather than a 30-second blank Output tab.
-  const scaffold = ensureScaffold(lang);
+  const scaffold = ensureScaffold(scope, lang);
   if (scaffold.created.length > 0) {
-    pushLog(state, 'system', `Creating projects/${PROJECT_CONFIG[lang].scaffoldDir}/ workspace from template (${scaffold.created.length} files)…`);
+    pushLog(state, 'system', `Creating ${lang} workspace from template (${scaffold.created.length} files)…`);
     pushLog(state, 'system', 'Workspace ready.');
   }
-  injectBootstrap(lang);
-  const cwd = getProjectRoot(lang);
+  injectBootstrap(scope, lang);
+  const cwd = getProjectRoot(scope, lang);
   state.error = null;
+
+  if (config.readiness.kind === 'http-probe') {
+    state.vitePort = await allocateHttpPort(state.vitePort ?? config.readiness.preferredPort);
+  }
 
   // Preflight: bail out with a friendly hint if any required command is missing.
   // The install/dev commands are the only two that get spawned, and they almost
@@ -1101,8 +1239,8 @@ export async function startProject(lang) {
   state.phase = 'starting';
   state.lastExitCode = null;
   state.userStoppedAt = null;
-  pushLog(state, 'system', `Starting ${describeStartTarget(config)} …`);
-  const proc = spawnLogged(state, config.dev.cmd, config.dev.args, cwd, 'dev');
+  pushLog(state, 'system', `Starting ${describeStartTarget(config, state)} …`);
+  const proc = spawnLogged(state, config.dev.cmd, resolveCommandArgs(config.dev.args, lang, state), cwd, 'dev');
   if (!proc) return { ok: false, error: state.error ?? 'spawn failed' };
 
   state.proc = proc;
@@ -1121,13 +1259,13 @@ export async function startProject(lang) {
     probe.abort();
   });
 
-  const ready = await probeReady(state, config.readiness, probe.signal);
+  const ready = await probeReady(state, runtimeReadiness(config, state), probe.signal);
   if (ready) {
     state.phase = 'ready';
     pushLog(state, 'system', 'Dev process ready.');
-    return { ok: true, vitePort: state.vitePort, ready: true };
+    return { ok: true, vitePort: state.vitePort, previewPath: getPreviewRoutePath(lang), ready: true };
   }
-  return { ok: true, vitePort: state.vitePort, ready: false };
+  return { ok: true, vitePort: state.vitePort, previewPath: getPreviewRoutePath(lang), ready: false };
 }
 
 /**
@@ -1154,9 +1292,9 @@ function killProcessTree(proc) {
   }
 }
 
-export async function stopProject(lang) {
+export async function stopProject(scope, lang) {
   assertLang(lang);
-  const state = procs.get(lang);
+  const state = procs.get(stateKey(scope, lang));
   if (!state?.proc) return { ok: true };
   const proc = state.proc;
   state.userStoppedAt = Date.now();
@@ -1191,11 +1329,11 @@ export async function stopProject(lang) {
  *
  * Throws on filesystem failure (caller should surface as a 500 error).
  */
-export async function resetProject(lang) {
+export async function resetProject(scope, lang) {
   assertLang(lang);
-  await stopProject(lang);
+  await stopProject(scope, lang);
 
-  const state = procs.get(lang);
+  const state = procs.get(stateKey(scope, lang));
   if (state !== undefined) {
     // Clear log buffer, exit-code memory, and any latched 'error' phase so
     // the next /proj/start starts from a clean slate.
@@ -1206,17 +1344,17 @@ export async function resetProject(lang) {
     state.phase = 'stopped';
   }
 
-  const root = getProjectRoot(lang);
+  const root = getProjectRoot(scope, lang);
   if (existsSync(root)) {
     rmSync(root, { recursive: true, force: true });
   }
 
-  return ensureScaffold(lang);
+  return ensureScaffold(scope, lang);
 }
 
-export function getStatus(lang) {
+export function getStatus(scope, lang) {
   assertLang(lang);
-  const state = procs.get(lang);
+  const state = procs.get(stateKey(scope, lang));
   if (!state) {
     return {
       running: false,
@@ -1225,6 +1363,7 @@ export function getStatus(lang) {
       pid: null,
       lastExitCode: null,
       vitePort: getReadinessPort(lang),
+      previewPath: getPreviewRoutePath(lang),
       error: null,
     };
   }
@@ -1235,21 +1374,29 @@ export function getStatus(lang) {
     pid: state.pid,
     lastExitCode: state.lastExitCode,
     vitePort: state.vitePort,
+    previewPath: getPreviewRoutePath(lang),
     error: state.error,
   };
 }
 
-export function getRecentLogs(lang, n = 200) {
+export function getPreviewTarget(scope, lang) {
   assertLang(lang);
-  const state = procs.get(lang);
+  const state = procs.get(stateKey(scope, lang));
+  if (!state?.proc || state.vitePort === null || PROJECT_CONFIG[lang].readiness.kind !== 'http-probe') return null;
+  return { port: state.vitePort };
+}
+
+export function getRecentLogs(scope, lang, n = 200) {
+  assertLang(lang);
+  const state = procs.get(stateKey(scope, lang));
   if (!state) return { lines: [] };
   const slice = state.logs.slice(-Math.max(0, Math.min(n, LOG_RING_SIZE)));
   return { lines: slice };
 }
 
-export function subscribeLogs(lang, onEntry) {
+export function subscribeLogs(scope, lang, onEntry) {
   assertLang(lang);
-  const state = getOrInitState(lang);
+  const state = getOrInitState(scope, lang);
   state.subs.add(onEntry);
   return () => state.subs.delete(onEntry);
 }
@@ -1307,12 +1454,12 @@ function findVisualStudioTarget(root) {
  * @param {string} target   One of OPEN_TARGETS.
  * @returns {{ ok: boolean, error?: string }}
  */
-export function openProject(lang, target) {
+export function openProject(scope, lang, target) {
   assertLang(lang);
   if (!OPEN_TARGETS.has(target)) {
     return { ok: false, error: `unknown open target: ${target}` };
   }
-  const root = getProjectRoot(lang);
+  const root = getProjectRoot(scope, lang);
   if (!existsSync(root)) {
     return { ok: false, error: 'project not scaffolded yet' };
   }
@@ -1373,11 +1520,12 @@ function fanoutFsEvent(state, type, abs, root, ignoreSet) {
   }
 }
 
-function ensureWatcher(lang) {
-  const cached = watchers.get(lang);
+function ensureWatcher(scope, lang) {
+  const key = stateKey(scope, lang);
+  const cached = watchers.get(key);
   if (cached !== undefined) return cached;
 
-  const root = getProjectRoot(lang);
+  const root = getProjectRoot(scope, lang);
   const ignoreSet = getTreeIgnore(lang);
   // chokidar's `ignored` accepts patterns or absolute paths; we use a
   // function that matches any path containing one of the per-language
@@ -1392,7 +1540,7 @@ function ensureWatcher(lang) {
   });
 
   const state = { watcher, subs: new Set() };
-  watchers.set(lang, state);
+  watchers.set(key, state);
 
   watcher.on('add', (p) => fanoutFsEvent(state, 'add', p, root, ignoreSet));
   watcher.on('change', (p) => fanoutFsEvent(state, 'change', p, root, ignoreSet));
@@ -1406,10 +1554,10 @@ function ensureWatcher(lang) {
   return state;
 }
 
-export function subscribeFsEvents(lang, onEvent) {
+export function subscribeFsEvents(scope, lang, onEvent) {
   assertLang(lang);
-  ensureScaffold(lang);
-  const state = ensureWatcher(lang);
+  ensureScaffold(scope, lang);
+  const state = ensureWatcher(scope, lang);
   state.subs.add(onEvent);
   return () => state.subs.delete(onEvent);
 }
@@ -1513,7 +1661,7 @@ const WGC_CAPTURE_TIMEOUT_MS = 4_000;
  * helper exe. Returns `{ ok, fullDataUrl?, thumbDataUrl?, error? }`. On any
  * failure the error string is suitable to surface directly to the student.
  */
-export async function captureProjectScreenshot(lang) {
+export async function captureProjectScreenshot(scope, lang) {
   assertLang(lang);
   if (PROJECT_CONFIG[lang].readiness.kind !== 'process-alive') {
     return { ok: false, error: `screenshot capture not supported for ${lang}` };
@@ -1521,7 +1669,7 @@ export async function captureProjectScreenshot(lang) {
   if (!IS_WIN) {
     return { ok: false, error: 'desktop screenshot capture is Windows-only (WGC).' };
   }
-  const state = procs.get(lang);
+  const state = procs.get(stateKey(scope, lang));
   if (!state?.proc || state.pid === null) {
     return { ok: false, error: 'process not running' };
   }

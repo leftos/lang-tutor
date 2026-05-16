@@ -28,7 +28,7 @@ Two workspace shapes:
 | **C++** | single-buffer | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | local Docker sandbox (`clang++ -std=c++23`) | local `clang -fsyntax-only` | local `clang-format` |
 | **Python** | single-buffer | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | local Docker sandbox (`python3`) | local `python ast.parse` | local `black` |
 | **C#** | project workspace | Modern C# 12 → WPF fundamentals → MVVM patterns | local `dotnet run` for the WPF project, plus console snippets in Docker | dotnet build (streamed into the Build errors tab) | — |
-| **Web** | project workspace | Vanilla HTML/CSS/JS → TS → React → Hono → SQLite | local `pnpm dev` Vite server, iframe preview at `:5180` | TS compile via Vite | — |
+| **Web** | project workspace | Vanilla HTML/CSS/JS → TS → React → Hono → SQLite | private Vite server, same-origin Preview tab | TS compile via Vite | — |
 
 Live error checking and format-on-save are optional for the single-buffer languages — if a host toolchain isn't installed, those features silently fall back. The Run button uses the local `lang-tutor-toolchains:latest` Docker image built by setup.
 
@@ -36,7 +36,7 @@ The C# workspace requires the .NET 8+ SDK on PATH (the supervisor preflights and
 
 Each project workspace has an "Open in ▾" launcher in the file-tree header (VS Code · Visual Studio (csharp only) · File Explorer) that delegates to the user's installed editor — handy when the visual XAML designer or a debugger is wanted.
 
-Reset wipes the active language's progress + chat history. For project workspaces it also deletes the on-disk `projects/<lang>/` folder and re-scaffolds it from the template — so a confirmation dialog calls that out explicitly.
+Reset wipes the active language's progress + chat history. For project workspaces it also deletes that user's on-disk language workspace and re-scaffolds it from the template — so a confirmation dialog calls that out explicitly.
 
 The lesson plan for each language is in `src/constants.ts`. Edit it freely.
 
@@ -220,7 +220,7 @@ Each language has its own `localStorage` namespace:
 - `lang-tutor:{lang}:history` — last 30 messages
 - `lang-tutor:{lang}:progress` — structured progress blob (topic statuses, strengths, struggles, notes)
 - `lang-tutor:{lang}:code` — saved editor content (single-buffer languages only)
-- `lang-tutor:{lang}:openTabs` / `:activeTab` — multi-tab UI state (project workspaces only; the files themselves live on disk under `projects/<lang>/`)
+- `lang-tutor:{lang}:openTabs` / `:activeTab` — multi-tab UI state (project workspaces only; the files themselves live on disk under `.local/workspaces/<user>/<lang>/` locally or `/var/lib/lang-tutor/workspaces/<user>/<lang>/` when hosted)
 
 Switching language saves the current editor content, then loads everything for the new language. Conversations are non-destructive — switching back restores exactly where you were.
 

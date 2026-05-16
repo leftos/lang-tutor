@@ -432,7 +432,7 @@ chown -R lang-tutor:lang-tutor "$release"
 ln -sfnT "$release" /opt/lang-tutor/app
 chown -h lang-tutor:lang-tutor /opt/lang-tutor/app
 install -d -o lang-tutor -g lang-tutor /opt/lang-tutor/app/.local /opt/lang-tutor/app/projects /opt/lang-tutor/app/.tmp
-install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor /var/lib/lang-tutor/runs
+install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor /var/lib/lang-tutor/runs /var/lib/lang-tutor/workspaces /var/lib/lang-tutor/cache
 '@
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -660,6 +660,12 @@ function Invoke-Deploy {
     Invoke-Native -FilePath 'ssh' -Arguments @(
         $DeployHost,
         "cd /opt/lang-tutor/app && docker build -t lang-tutor-toolchains:latest -f docker/toolchains/Dockerfile docker/toolchains && docker run --rm --entrypoint python3 lang-tutor-toolchains:latest --version && docker run --rm --entrypoint rustc lang-tutor-toolchains:latest --version && docker run --rm --entrypoint clang++ lang-tutor-toolchains:latest --version >/dev/null && docker run --rm --entrypoint dotnet lang-tutor-toolchains:latest --version"
+    )
+
+    Write-Step 'Ensuring hosted workspace runtime config'
+    Invoke-Native -FilePath 'ssh' -Arguments @(
+        $DeployHost,
+        "install -d -m 0755 /etc/lang-tutor && touch /etc/lang-tutor/lang-tutor-runtime.conf && if grep -q '^LANG_TUTOR_PROJECT_ROOT=' /etc/lang-tutor/lang-tutor-runtime.conf; then sed -i 's#^LANG_TUTOR_PROJECT_ROOT=.*#LANG_TUTOR_PROJECT_ROOT=/var/lib/lang-tutor/workspaces#' /etc/lang-tutor/lang-tutor-runtime.conf; else printf '\nLANG_TUTOR_PROJECT_ROOT=/var/lib/lang-tutor/workspaces\n' >> /etc/lang-tutor/lang-tutor-runtime.conf; fi && install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor/workspaces /var/lib/lang-tutor/cache"
     )
 
     Write-Step 'Restarting lang-tutor.service'

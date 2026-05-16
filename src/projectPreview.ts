@@ -15,6 +15,7 @@
  *    the running indicator.
  */
 
+import { appUrl } from './appUrls';
 import {
   captureProjectScreenshot,
   getStatus,
@@ -63,15 +64,15 @@ function parseCsharpErrorLine(line: string): ParsedCsharpError | null {
 /**
  * Strip a host-absolute build-error path down to a project-root-relative path
  * the editor can open. dotnet emits absolute paths like
- * `X:\dev\lang-tutor\projects\csharp\MainWindow.xaml.cs`; we want
- * `MainWindow.xaml.cs` (or `Subdir/Foo.cs`). Match on the `projects/<dir>/`
- * segment so we don't have to ask the supervisor for the absolute root.
+ * `X:\dev\lang-tutor\projects\csharp\MainWindow.xaml.cs` locally or
+ * `/var/lib/lang-tutor/workspaces/<user>/csharp/MainWindow.xaml.cs` when
+ * hosted; we want `MainWindow.xaml.cs` (or `Subdir/Foo.cs`).
  */
 function toProjectRelativePath(absPath: string, scaffoldDir: string): string | null {
   // Escape regex specials in scaffoldDir defensively (it's a string literal in
   // PROJECT_CONFIG today, but treat as untrusted input).
   const dirEsc = scaffoldDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`[\\\\/]projects[\\\\/]${dirEsc}[\\\\/](.+)$`);
+  const re = new RegExp(`[\\\\/]${dirEsc}[\\\\/](.+)$`);
   const m = absPath.match(re);
   if (m === null || m[1] === undefined) return null;
   return m[1].replace(/\\/g, '/');
@@ -289,10 +290,7 @@ function createWebVitePreview(opts: ProjectPreviewOptions, runtime: WebProjectRu
   }
 
   function urlForPort(): string {
-    // Use the hostname the user is browsing from so this works over LAN
-    // (laptop hitting desktop's IP) as well as locally.
-    const host = window.location.hostname || '127.0.0.1';
-    return `http://${host}:${vitePort}/`;
+    return appUrl(`/proj/preview/${encodeURIComponent(langId)}/`);
   }
 
   function setRunningState(isRunning: boolean): void {
