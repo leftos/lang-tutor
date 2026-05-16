@@ -1236,6 +1236,68 @@
   border: 1px solid var(--rule-2);
 }
 
+/* ─── Send-to-tutor bundle: visible note + collapsible blocks ─────────── */
+.msg-bundle-note {
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin-bottom: 8px;
+}
+.msg-bundle-note:last-child {
+  margin-bottom: 0;
+}
+
+.msg-bundle-details {
+  margin: 0;
+}
+.msg-bundle-details[open] {
+  margin-top: 6px;
+}
+
+.msg-bundle-summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--ink-mute);
+  padding: 4px 0;
+  list-style: none;
+  user-select: none;
+}
+.msg-bundle-summary::-webkit-details-marker {
+  display: none;
+}
+.msg-bundle-summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1.2em;
+  color: var(--sig);
+  transition: transform 120ms ease;
+}
+.msg-bundle-details[open] > .msg-bundle-summary::before {
+  transform: rotate(90deg);
+}
+.msg-bundle-summary:hover {
+  color: var(--ink);
+}
+
+.msg-bundle-block {
+  margin-top: 10px;
+}
+.msg-bundle-block-tag {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: 3px;
+}
+.msg-bundle-block .code-fence {
+  margin: 0;
+}
+
 /* ─── Chat input ─────────────────────────────────────────── */
 .input-row {
   display: flex;
@@ -1626,12 +1688,50 @@
   border-radius: 1px;
 }
 
-.code-area {
+.workshop-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.code-area {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   background: var(--paper-2);
   border-bottom: 1px solid var(--rule);
   overflow: hidden;
+}
+
+.dasm-vresize {
+  flex: 0 0 5px;
+  cursor: ew-resize;
+  background: var(--rule);
+  transition: background 120ms ease;
+  align-self: stretch;
+}
+.dasm-vresize[hidden] {
+  display: none;
+}
+.dasm-vresize:hover,
+.dasm-vresize.dragging {
+  background: var(--sig);
+}
+
+.dasm-asm-column {
+  flex: 0 0 var(--dasm-column-width, 46%);
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border-left: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  overflow: hidden;
+}
+.dasm-asm-column[hidden] {
+  display: none;
 }
 
 .resize-bar {
@@ -1750,31 +1850,6 @@
   color: var(--danger);
 }
 
-.dasm-output-view {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(220px, 0.85fr) minmax(360px, 1.65fr);
-  overflow: hidden;
-  background: var(--paper);
-}
-
-.dasm-output-view[hidden] {
-  display: none;
-}
-
-.dasm-result-pane {
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--rule-2);
-}
-
-.dasm-result-pane:last-child {
-  border-right: 0;
-}
-
 .dasm-pane-title {
   flex: 0 0 auto;
   padding: 6px 16px;
@@ -1785,11 +1860,6 @@
   font-style: italic;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.dasm-program-pre {
-  border: 0;
-  padding: 10px 16px 14px;
 }
 
 .dasm-asm-pre {
@@ -1806,6 +1876,37 @@
   white-space: pre;
 }
 
+/* "Updating…" overlay on the asm pane — applied to whichever parent currently
+ *  hosts #dasmAsmPre (the right-hand column in split mode, the lower-pane tab
+ *  panel in tab mode). The prior disassembly stays mounted but dimmed. */
+.dasm-asm-column.is-dasm-updating,
+.dasm-asm-tab-pane.is-dasm-updating {
+  position: relative;
+}
+.dasm-asm-column.is-dasm-updating > .dasm-asm-pre,
+.dasm-asm-tab-pane.is-dasm-updating > .dasm-asm-pre {
+  opacity: 0.4;
+  transition: opacity 120ms ease;
+}
+.dasm-asm-column.is-dasm-updating::after,
+.dasm-asm-tab-pane.is-dasm-updating::after {
+  content: "Updating…";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 5px 14px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink);
+  pointer-events: none;
+  z-index: 1;
+}
+
 .asm-line {
   display: block;
   min-height: 1.55em;
@@ -1820,6 +1921,15 @@
 .asm-line.is-hovered {
   background: color-mix(in srgb, var(--asm-group-color, var(--sig)) 27%, transparent);
   color: var(--ink);
+}
+
+/* DASM line stripes painted onto the C++ editor (via the dasmLineHighlightExtension). */
+.cm-line.cm-line-asm {
+  background: color-mix(in srgb, var(--asm-group-color, transparent) 14%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--asm-group-color, transparent);
+}
+.cm-line.cm-line-asm.is-asm-hovered {
+  background: color-mix(in srgb, var(--asm-group-color, var(--sig)) 30%, transparent);
 }
 
 .asm-source-line {
@@ -2779,15 +2889,16 @@
     min-width: 0;
     flex: 1;
   }
-  .dasm-output-view {
-    grid-template-columns: 1fr;
+  .workshop-body {
+    flex-direction: column;
   }
-  .dasm-result-pane {
-    border-right: 0;
-    border-bottom: 1px solid var(--rule-2);
-    min-height: 140px;
+  .dasm-asm-column {
+    flex: 0 0 auto;
+    min-height: 220px;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
   }
-  .dasm-result-pane:last-child {
-    border-bottom: 0;
+  .dasm-vresize {
+    display: none;
   }
 }

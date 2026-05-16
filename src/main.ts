@@ -16,9 +16,9 @@ import {
   DEFAULT_LANGUAGE,
   getLanguage,
   historyKey,
-  LEARNER_PROFILE_KEY,
   LANGUAGE_IDS,
   LANGUAGES,
+  LEARNER_PROFILE_KEY,
   MAX_HISTORY,
   openTabsKey,
   progressKey,
@@ -479,7 +479,10 @@ function toggleTheme(): void {
 // ── System prompt builder ─────────────────────────────────────────────────
 function listProfileItems(items: readonly string[] | undefined, limit = 6): string {
   if (items === undefined || items.length === 0) return '  (none recorded)';
-  return items.slice(0, limit).map((item) => `  - ${item}`).join('\n');
+  return items
+    .slice(0, limit)
+    .map((item) => `  - ${item}`)
+    .join('\n');
 }
 
 function learnerProfileBlock(profile: LearnerProfile | null): string {
@@ -504,9 +507,7 @@ function buildSystem(prog: Progress | null, lang: Language, profile: LearnerProf
       profile === null
         ? ''
         : '\n\nIf the global learner profile already answers any background question above, do not ask that question again; use the recorded answer and ask only for missing details specific to this course.';
-    return (
-      `${lang.systemPromptIntro}${profileText}\n\n${lang.firstSessionPrompt}${profileGuidance}`
-    );
+    return `${lang.systemPromptIntro}${profileText}\n\n${lang.firstSessionPrompt}${profileGuidance}`;
   }
 
   const topicLines = lang.topics
@@ -637,15 +638,21 @@ function renderDasmFlagsControl(): void {
 }
 
 function setDasmAutoStatus(text: string): void {
-  lastSingleOutputText = '';
-  const runPre = el<HTMLPreElement>('dasmProgramPre');
-  const asmPre = el<HTMLPreElement>('dasmAsmPre');
-  runPre.textContent = '';
-  runPre.appendChild(span(text, 'muted'));
-  asmPre.textContent = '';
-  asmPre.appendChild(span('Disassembly will appear after the sandbox finishes.', 'muted'));
+  const outputPre = el<HTMLPreElement>('outputPre');
+  outputPre.textContent = '';
+  outputPre.appendChild(span(text, 'muted'));
+  setDasmAsmUpdating(true);
   syncSingleOutputPanes();
   renderSingleOutputTabs();
+}
+
+/** Toggle the "Updating…" overlay on the disassembly pane while a re-run is in flight.
+ *  The current content stays mounted (dimmed) so the user can still scroll / reference it. */
+function setDasmAsmUpdating(updating: boolean): void {
+  const asmPre = el<HTMLPreElement>('dasmAsmPre');
+  const parent = asmPre.parentElement;
+  if (parent === null) return;
+  parent.classList.toggle('is-dasm-updating', updating);
 }
 
 function saveDasmFlags(flags: string): void {
@@ -986,6 +993,15 @@ function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[])
   const lbl = div('msg-label');
   lbl.textContent = role === 'user' ? 'you' : 'tutor';
   const body = div(role === 'user' ? 'msg-you' : 'msg-ai');
+
+  if (role === 'user' && tryRenderUserBundle(body, content)) {
+    bl.appendChild(lbl);
+    bl.appendChild(body);
+    msgList.appendChild(bl);
+    msgList.scrollTop = msgList.scrollHeight;
+    return;
+  }
+
   if (typeof content === 'string') {
     body.appendChild(role === 'user' ? renderPlainWithFences(content) : renderMarkdown(content));
   } else {
@@ -1002,6 +1018,105 @@ function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[])
   if (role === 'assistant') addTutorBackToTop(bl);
   msgList.appendChild(bl);
   msgList.scrollTop = msgList.scrollHeight;
+}
+
+// ── Send-to-tutor bundle: collapsible rendering ──────────────────────────
+// A "bundle" is the structured payload emitted by evaluateCode / evaluateProjectCode:
+// `[NOTE]\n…\n\n[CODE]\n```…```\n\n[OUTPUT]\n…` etc. Render the note inline
+// (it's the student's actual question) and stash everything else under one chevron.
+
+const BUNDLE_TAG_PATTERN = /^\[(NOTE|CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|COMPILER FLAGS|SCREENSHOT)\]\n/;
+const BUNDLE_NON_NOTE_PATTERN = /\[(?:CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|COMPILER FLAGS|SCREENSHOT)\]\n/;
+const BUNDLE_TAG_LABEL: Record<string, string> = {
+  CODE: 'code',
+  OUTPUT: 'output',
+  LSP: 'diagnostics',
+  FILES: 'files',
+  DOM: 'DOM',
+  CONSOLE: 'console',
+  SERVER: 'server logs',
+  BUILD: 'build errors',
+  'COMPILER FLAGS': 'compiler flags',
+  SCREENSHOT: 'screenshot status',
+};
+
+interface BundleBlock {
+  tag: string;
+  body: string;
+}
+
+function isBundleText(text: string): boolean {
+  return BUNDLE_TAG_PATTERN.test(text) && BUNDLE_NON_NOTE_PATTERN.test(text);
+}
+
+function parseBundleBlocks(text: string): BundleBlock[] {
+  const blocks: BundleBlock[] = [];
+  const re = /\[([A-Z][A-Z ]*)\]\n([\s\S]*?)(?=\n\n\[[A-Z][A-Z ]*\]\n|$)/g;
+  for (const m of text.matchAll(re)) {
+    const tag = m[1] ?? '';
+    const body = (m[2] ?? '').trimEnd();
+    if (tag === '') continue;
+    blocks.push({ tag, body });
+  }
+  return blocks;
+}
+
+function bundleSummaryText(blocks: BundleBlock[], imageCount: number): string {
+  const labels: string[] = [];
+  for (const b of blocks) {
+    const label = BUNDLE_TAG_LABEL[b.tag];
+    if (label !== undefined && !labels.includes(label)) labels.push(label);
+  }
+  if (imageCount > 0 && !labels.includes('screenshot')) labels.push('screenshot');
+  const count = blocks.length + imageCount;
+  const items = labels.length > 0 ? labels.join(' + ') : 'context';
+  return `Sent ${items} (${count})`;
+}
+
+function tryRenderUserBundle(body: HTMLElement, content: string | ContentBlock[]): boolean {
+  const text = typeof content === 'string' ? content : (content.find((b): b is TextBlock => b.type === 'text')?.text ?? '');
+  if (!isBundleText(text)) return false;
+
+  const images: ImageBlock[] = typeof content === 'string' ? [] : content.filter((b): b is ImageBlock => b.type === 'image');
+  const blocks = parseBundleBlocks(text);
+  const note = blocks.find((b) => b.tag === 'NOTE');
+  const others = blocks.filter((b) => b.tag !== 'NOTE');
+
+  if (note !== undefined && note.body !== '') {
+    const noteEl = div('msg-bundle-note');
+    noteEl.appendChild(renderPlainWithFences(note.body));
+    body.appendChild(noteEl);
+  }
+
+  if (others.length === 0 && images.length === 0) return true;
+
+  const details = document.createElement('details');
+  details.className = 'msg-bundle-details';
+  const summary = document.createElement('summary');
+  summary.className = 'msg-bundle-summary';
+  summary.textContent = bundleSummaryText(others, images.length);
+  details.appendChild(summary);
+
+  for (const block of others) {
+    const sec = div('msg-bundle-block');
+    const head = div('msg-bundle-block-tag');
+    head.textContent = `[${block.tag}]`;
+    sec.appendChild(head);
+    sec.appendChild(renderPlainWithFences(block.body));
+    details.appendChild(sec);
+  }
+
+  for (const image of images) {
+    const sec = div('msg-bundle-block');
+    const head = div('msg-bundle-block-tag');
+    head.textContent = '[SCREENSHOT]';
+    sec.appendChild(head);
+    sec.appendChild(renderImageAttachment(image));
+    details.appendChild(sec);
+  }
+
+  body.appendChild(details);
+  return true;
 }
 
 // ── Chat attachment chip (single-slot, replace-not-stack) ─────────────────
@@ -1225,7 +1340,9 @@ function renderChatView(): void {
   el<HTMLButtonElement>('projEvalBtn').disabled = isSending || history.length === 0;
 }
 
-type SingleOutputTab = 'output' | 'errors';
+type SingleOutputTab = 'output' | 'errors' | 'dasm';
+type DasmLayout = 'split' | 'tab';
+const DASM_LAYOUT_KEY = 'lang-tutor:dasm:disasm-layout';
 type ProblemSeverity = 'error' | 'warning' | 'info';
 type ProblemSource = 'output' | 'diagnostic';
 
@@ -1260,7 +1377,17 @@ interface DasmOutputParts {
 interface AsmRenderState {
   nextGroup: number;
   currentGroup: number | null;
+  /** 1-based C++ line number from the most recent `main.cpp:N` marker, awaiting attachment to the next source-text group. */
+  pendingSourceLine: number | null;
+  /** Built during render: group id → 1-based C++ source line (when known). */
+  groupToSource: Map<number, number>;
+  /** Built during render: 1-based C++ source line → group ids (multiple groups can share a line in optimized output). */
+  sourceToGroups: Map<number, number[]>;
 }
+
+/** Snapshot of the most recent DASM render's source↔group maps. Used by the editor-side hover bridge. */
+const dasmGroupToSource: Map<number, number> = new Map();
+const dasmSourceToGroups: Map<number, number[]> = new Map();
 
 const OUTPUT_PLACEHOLDER = 'Run the program to capture its output here.';
 const CSHARP_LOCATION_RE = /(^|[\s([{'"])((?:[A-Za-z]:)?[^\s()\r\n]+?\.\w+)\((\d+),(\d+)\)/g;
@@ -1268,6 +1395,7 @@ const PYTHON_LOCATION_RE = /File "([^"]+)", line (\d+)/g;
 const COLON_LOCATION_RE = /(^|[\s([{'"])((?:(?:[A-Za-z]:)?[\\/])?(?:[^\s:()[\]{}'"`]+[\\/])*[A-Za-z0-9_.<>-]+):(\d+)(?::(\d+))?/g;
 
 let singleOutputTab: SingleOutputTab = 'output';
+let dasmLayout: DasmLayout = (storageGet<DasmLayout>(DASM_LAYOUT_KEY) ?? 'split') as DasmLayout;
 let outputProblems: SingleProblem[] = [];
 let lspProblems: SingleProblem[] = [];
 
@@ -1451,29 +1579,30 @@ function singleProblemCounts(): { errors: number; warnings: number } {
 
 function syncSingleOutputPanes(): void {
   const outputPre = el<HTMLPreElement>('outputPre');
-  const dasmOutput = el('dasmOutputView');
   const errorList = el('errorListPane');
-  const outputActive = singleOutputTab === 'output';
-  const dasmActive = outputActive && activeLang === 'dasm';
-  outputPre.hidden = !outputActive || dasmActive;
-  dasmOutput.hidden = !dasmActive;
-  errorList.hidden = outputActive;
-  outputPre.setAttribute('aria-hidden', outputActive && !dasmActive ? 'false' : 'true');
-  dasmOutput.setAttribute('aria-hidden', dasmActive ? 'false' : 'true');
-  errorList.setAttribute('aria-hidden', outputActive ? 'true' : 'false');
+  const dasmTabPane = el('dasmAsmTabPane');
+  outputPre.hidden = singleOutputTab !== 'output';
+  errorList.hidden = singleOutputTab !== 'errors';
+  dasmTabPane.hidden = singleOutputTab !== 'dasm';
+  outputPre.setAttribute('aria-hidden', singleOutputTab === 'output' ? 'false' : 'true');
+  errorList.setAttribute('aria-hidden', singleOutputTab === 'errors' ? 'false' : 'true');
+  dasmTabPane.setAttribute('aria-hidden', singleOutputTab === 'dasm' ? 'false' : 'true');
 }
 
 function renderSingleOutputTabs(): void {
   const outputBtn = el<HTMLButtonElement>('outputTabBtn');
   const problemsBtn = el<HTMLButtonElement>('problemsTabBtn');
+  const dasmTabBtn = el<HTMLButtonElement>('dasmTabBtn');
   const errorChip = el('problemErrorChip');
   const warningChip = el('problemWarningChip');
   const counts = singleProblemCounts();
 
   outputBtn.classList.toggle('is-active', singleOutputTab === 'output');
   problemsBtn.classList.toggle('is-active', singleOutputTab === 'errors');
+  dasmTabBtn.classList.toggle('is-active', singleOutputTab === 'dasm');
   outputBtn.setAttribute('aria-selected', singleOutputTab === 'output' ? 'true' : 'false');
   problemsBtn.setAttribute('aria-selected', singleOutputTab === 'errors' ? 'true' : 'false');
+  dasmTabBtn.setAttribute('aria-selected', singleOutputTab === 'dasm' ? 'true' : 'false');
 
   errorChip.textContent = problemPlural(counts.errors, 'error');
   warningChip.textContent = problemPlural(counts.warnings, 'warning');
@@ -1489,6 +1618,43 @@ function setSingleOutputTab(tab: SingleOutputTab): void {
   singleOutputTab = tab;
   syncSingleOutputPanes();
   renderSingleOutputTabs();
+}
+
+/** Apply the persisted DASM disassembly layout (split = right column / tab = lower-pane tab). */
+function applyDasmLayout(): void {
+  const isDasm = activeLang === 'dasm';
+  const wantSplit = isDasm && dasmLayout === 'split';
+  const wantTab = isDasm && dasmLayout === 'tab';
+
+  const asmCol = el('dasmAsmColumn');
+  const vbar = el('dasmVerticalResize');
+  const tabBtn = el('dasmTabBtn');
+  const tabPane = el('dasmAsmTabPane');
+  const asmPre = el<HTMLPreElement>('dasmAsmPre');
+  const layoutBtn = el<HTMLButtonElement>('dasmLayoutBtn');
+  const layoutLabel = el('dasmLayoutBtnLabel');
+
+  asmCol.hidden = !wantSplit;
+  vbar.hidden = !wantSplit;
+  tabBtn.hidden = !wantTab;
+
+  const desiredParent = wantTab ? tabPane : asmCol;
+  if (asmPre.parentElement !== desiredParent) desiredParent.appendChild(asmPre);
+
+  if (!wantTab && singleOutputTab === 'dasm') singleOutputTab = 'output';
+
+  layoutBtn.setAttribute('aria-pressed', wantTab ? 'true' : 'false');
+  layoutLabel.textContent = dasmLayout === 'split' ? 'Side-by-side' : 'In tab';
+  layoutBtn.title = `Currently ${dasmLayout === 'split' ? 'side-by-side' : 'showing as tab'}. Click to switch.`;
+
+  syncSingleOutputPanes();
+  renderSingleOutputTabs();
+}
+
+function toggleDasmLayout(): void {
+  dasmLayout = dasmLayout === 'split' ? 'tab' : 'split';
+  storageSet(DASM_LAYOUT_KEY, dasmLayout);
+  applyDasmLayout();
 }
 
 function jumpToSingleProblem(problem: SingleProblem): void {
@@ -1553,7 +1719,8 @@ function appendAsmText(host: HTMLElement, text: string, className: string): void
 }
 
 function appendHighlightedAsmOperands(host: HTMLElement, operands: string): void {
-  const tokenRe = /\b(?:r(?:[abcd]x|[sb]p|[sd]i|[0-9]{1,2}[bwd]?)|e(?:[abcd]x|[sb]p|[sd]i)|[abcd][lh]|[er]?ip|xmm\d+|ymm\d+|zmm\d+)\b|0x[0-9a-f]+|\b\d+\b|#.*$/gi;
+  const tokenRe =
+    /\b(?:r(?:[abcd]x|[sb]p|[sd]i|[0-9]{1,2}[bwd]?)|e(?:[abcd]x|[sb]p|[sd]i)|[abcd][lh]|[er]?ip|xmm\d+|ymm\d+|zmm\d+)\b|0x[0-9a-f]+|\b\d+\b|#.*$/gi;
   let cursor = 0;
   for (const m of operands.matchAll(tokenRe)) {
     if (m.index === undefined) continue;
@@ -1569,6 +1736,11 @@ function appendHighlightedAsmOperands(host: HTMLElement, operands: string): void
 function groupClass(group: number): string {
   return `asm-group-${group % 6}`;
 }
+
+/** `main.cpp:42` — file:line marker emitted by `objdump -l`. Carries the editor line into the next source group. */
+const DASM_SRC_MARKER_RE = /^([A-Za-z0-9_./-]+\.(?:cpp|cc|cxx|c\+\+|c|h|hpp|hxx)):(\d+)\s*$/;
+/** `add(int, int):`, `MyClass::foo():`, `main():` — objdump function-context line. Meta, not a source group. */
+const DASM_FUNC_CONTEXT_RE = /^[A-Za-z_~][A-Za-z0-9_:<>~,\s*&()]*\(.*\):\s*$/;
 
 function appendHighlightedAsmLine(host: HTMLElement, line: string, state: AsmRenderState): void {
   const lineEl = document.createElement('span');
@@ -1616,7 +1788,29 @@ function appendHighlightedAsmLine(host: HTMLElement, line: string, state: AsmRen
     return;
   }
 
-  if (/^\s*(Disassembly of section|\/tmp\/|main\.cpp:|\.\.\.)/.test(line)) {
+  // `main.cpp:42` — file:line marker from `objdump -l`. Stash the line so the
+  // next source-text group can be attached to that editor line for hover.
+  const srcMarker = DASM_SRC_MARKER_RE.exec(line);
+  if (srcMarker !== null) {
+    const parsedLine = Number.parseInt(srcMarker[2] ?? '', 10);
+    if (Number.isFinite(parsedLine) && parsedLine > 0) {
+      state.pendingSourceLine = parsedLine;
+    }
+    lineEl.classList.add('asm-meta-line');
+    appendAsmText(lineEl, line, 'asm-meta');
+    host.appendChild(lineEl);
+    return;
+  }
+
+  // Function-context lines like `add(int, int):` — meta, never a source group.
+  if (DASM_FUNC_CONTEXT_RE.test(line)) {
+    lineEl.classList.add('asm-meta-line');
+    appendAsmText(lineEl, line, 'asm-meta');
+    host.appendChild(lineEl);
+    return;
+  }
+
+  if (/^\s*(Disassembly of section|\/tmp\/|\.\.\.)/.test(line)) {
     lineEl.classList.add('asm-meta-line');
     appendAsmText(lineEl, line, 'asm-meta');
     host.appendChild(lineEl);
@@ -1633,54 +1827,127 @@ function appendHighlightedAsmLine(host: HTMLElement, line: string, state: AsmRen
   state.nextGroup += 1;
   lineEl.dataset.asmGroup = String(state.currentGroup);
   lineEl.classList.add('asm-source-line', groupClass(state.currentGroup));
+
+  if (state.pendingSourceLine !== null) {
+    const src = state.pendingSourceLine;
+    lineEl.dataset.asmSourceLine = String(src);
+    state.groupToSource.set(state.currentGroup, src);
+    const existing = state.sourceToGroups.get(src);
+    if (existing === undefined) {
+      state.sourceToGroups.set(src, [state.currentGroup]);
+    } else {
+      existing.push(state.currentGroup);
+    }
+    state.pendingSourceLine = null;
+  }
+
   appendAsmText(lineEl, line, 'asm-source');
   host.appendChild(lineEl);
 }
 
+function setAsmGroupHover(host: HTMLElement, groups: number | readonly number[] | null): void {
+  const wanted: Set<string> | null = groups === null ? null : new Set((typeof groups === 'number' ? [groups] : groups).map((g) => String(g)));
+  for (const line of host.querySelectorAll<HTMLElement>('.asm-line[data-asm-group]')) {
+    const attr = line.dataset.asmGroup;
+    line.classList.toggle('is-hovered', wanted !== null && attr !== undefined && wanted.has(attr));
+  }
+}
+
 function attachAsmHover(host: HTMLElement): void {
-  const lines = [...host.querySelectorAll<HTMLElement>('.asm-line[data-asm-group]')];
-  const setHover = (group: string, hover: boolean): void => {
-    for (const line of lines) {
-      if (line.dataset.asmGroup === group) line.classList.toggle('is-hovered', hover);
-    }
-  };
-  for (const line of lines) {
-    const group = line.dataset.asmGroup;
-    if (group === undefined) continue;
-    line.addEventListener('mouseenter', () => setHover(group, true));
-    line.addEventListener('mouseleave', () => setHover(group, false));
+  for (const line of host.querySelectorAll<HTMLElement>('.asm-line[data-asm-group]')) {
+    const groupAttr = line.dataset.asmGroup;
+    if (groupAttr === undefined) continue;
+    const group = Number.parseInt(groupAttr, 10);
+    if (!Number.isFinite(group)) continue;
+    line.addEventListener('mouseenter', () => {
+      setAsmGroupHover(host, group);
+      editor?.setHoveredAsmGroup?.(group);
+    });
+    line.addEventListener('mouseleave', () => {
+      setAsmGroupHover(host, null);
+      editor?.setHoveredAsmGroup?.(null);
+    });
   }
 }
 
 function renderHighlightedAsm(text: string): void {
   const asmPre = el<HTMLPreElement>('dasmAsmPre');
+  setDasmAsmUpdating(false);
   asmPre.textContent = '';
+  dasmGroupToSource.clear();
+  dasmSourceToGroups.clear();
 
   if (text.trim().length === 0) {
     asmPre.appendChild(span('No disassembly captured yet.', 'muted'));
+    publishDasmSourceMap();
     return;
   }
 
   const lines = text.split(/\r?\n/);
-  const state: AsmRenderState = { nextGroup: 0, currentGroup: null };
+  const state: AsmRenderState = {
+    nextGroup: 0,
+    currentGroup: null,
+    pendingSourceLine: null,
+    groupToSource: dasmGroupToSource,
+    sourceToGroups: dasmSourceToGroups,
+  };
   lines.forEach((line) => {
     appendHighlightedAsmLine(asmPre, line, state);
   });
   attachAsmHover(asmPre);
+  publishDasmSourceMap();
+}
+
+/** Notify the editor about the new group↔source map so it can paint line stripes. */
+function publishDasmSourceMap(): void {
+  if (activeLang !== 'dasm' || editor === undefined) return;
+  editor.setDasmSourceMap?.(dasmSourceToGroups);
+}
+
+/** Editor → asm pane: pointer entered a C++ line. Highlight all matching asm groups for that line. */
+function handleDasmEditorLineHover(line: number | null): void {
+  if (activeLang !== 'dasm') return;
+  const asmPre = el<HTMLPreElement>('dasmAsmPre');
+  if (line === null) {
+    setAsmGroupHover(asmPre, null);
+    editor?.setHoveredAsmGroup?.(null);
+    return;
+  }
+  const groups = dasmSourceToGroups.get(line);
+  if (groups === undefined || groups.length === 0) {
+    setAsmGroupHover(asmPre, null);
+    editor?.setHoveredAsmGroup?.(null);
+    return;
+  }
+  setAsmGroupHover(asmPre, groups);
+  // The editor side highlights based on a single hovered group; pick the first to drive
+  // its `is-asm-hovered` state so the stripe brightens consistently.
+  const primary = groups[0];
+  if (primary !== undefined) editor?.setHoveredAsmGroup?.(primary);
 }
 
 function renderDasmOutput(text: string, ok: boolean, placeholder = false): DasmOutputParts {
-  const runPre = el<HTMLPreElement>('dasmProgramPre');
   if (placeholder) {
-    renderLinkedOutput(OUTPUT_PLACEHOLDER, false, true, runPre);
+    renderLinkedOutput(OUTPUT_PLACEHOLDER, false, true);
     renderHighlightedAsm('');
     return { run: '', asm: '' };
   }
 
   const parts = splitDasmOutput(text);
   const runText = parts.run.trim().length > 0 ? parts.run : '(program produced no stdout/stderr)';
-  renderLinkedOutput(runText, !ok, false, runPre);
-  renderHighlightedAsm(parts.asm);
+  renderLinkedOutput(runText, !ok, false);
+
+  // The asm pane is only refreshed when the call carries actual disassembly
+  // text (i.e. the final result) or a final-error signal — progress callbacks
+  // ("Compiling…", "Running…") deliver no DASM markers, and we don't want to
+  // wipe the previous disassembly while the new compile is still in flight.
+  if (parts.asm.length > 0 || text.includes('[disassembly:')) {
+    renderHighlightedAsm(parts.asm);
+  } else if (!ok || text.includes('[program exited')) {
+    // Final error result with no new asm — drop the "Updating…" overlay but
+    // leave the prior asm content in place so the user can still reference it.
+    setDasmAsmUpdating(false);
+  }
   return parts;
 }
 
@@ -1755,7 +2022,7 @@ function clearOutput(): void {
 }
 
 // ── Single-buffer vs project workshop layout ─────────────────────────────
-const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'codeArea', 'resizeBar', 'singleOutputPanel']);
+const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'workshopBody', 'resizeBar', 'singleOutputPanel']);
 
 function setWorkshopMode(mode: 'single' | 'project'): void {
   const isProject = mode === 'project';
@@ -3122,6 +3389,7 @@ function loadLanguageState(id: LanguageId): void {
 
   if (isSingleBufferLanguage(lang)) {
     setWorkshopMode('single');
+    applyDasmLayout();
     el('fileLabel').textContent = lang.fileName;
 
     const storedCode = storageGet<string>(codeKey(activeLang));
@@ -3130,9 +3398,23 @@ function loadLanguageState(id: LanguageId): void {
     suppressDasmAutoRun = false;
     editor.setLanguage(lang.id as SingleBufferLanguageId);
 
+    if (lang.id !== 'dasm') {
+      dasmGroupToSource.clear();
+      dasmSourceToGroups.clear();
+    }
+    editor.setDasmSourceMap?.(lang.id === 'dasm' ? dasmSourceToGroups : new Map());
+
     clearOutput();
+
+    // Populate the disassembly the moment the user enters the DASM workspace —
+    // no edit-and-wait-for-debounce needed. The auto-run guard handles the
+    // case where the user switches away mid-run.
+    if (lang.id === 'dasm') {
+      void runDasmAutoDisassembly();
+    }
   } else {
     setWorkshopMode('project');
+    applyDasmLayout();
     ensureProjectUI(id, lang);
     const cached = projectStates.get(id) ?? loadProjectStateFromStorage(id);
     projectStates.set(id, cached);
@@ -3204,7 +3486,62 @@ function initResize(): void {
   });
 }
 
+function initDasmVerticalResize(): void {
+  const bar = el('dasmVerticalResize');
+  const body = el('workshopBody');
+  const col = el('dasmAsmColumn');
+
+  const stored = storageGet<number>(DASM_COLUMN_WIDTH_KEY);
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    body.style.setProperty('--dasm-column-width', `${clampDasmColumnWidth(stored, body.getBoundingClientRect().width)}px`);
+  }
+
+  let startX = 0;
+  let startW = 0;
+  let totalW = 0;
+
+  function onMove(e: MouseEvent): void {
+    const newW = clampDasmColumnWidth(startW - (e.clientX - startX), totalW);
+    body.style.setProperty('--dasm-column-width', `${newW}px`);
+  }
+
+  function onUp(): void {
+    bar.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
+    storageSet(DASM_COLUMN_WIDTH_KEY, col.getBoundingClientRect().width);
+  }
+
+  bar.addEventListener('mousedown', (e: MouseEvent) => {
+    startX = e.clientX;
+    startW = col.getBoundingClientRect().width;
+    totalW = body.getBoundingClientRect().width;
+    bar.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
+    e.preventDefault();
+  });
+
+  bar.addEventListener('dblclick', () => {
+    body.style.removeProperty('--dasm-column-width');
+    storageDelete(DASM_COLUMN_WIDTH_KEY);
+  });
+}
+
+function clampDasmColumnWidth(width: number, totalWidth: number): number {
+  const min = 220;
+  const max = Math.max(min, totalWidth - 280);
+  return Math.max(min, Math.min(width, max));
+}
+
 const OUTPUT_HEIGHT_KEY = 'lang-tutor:output-height';
+const DASM_COLUMN_WIDTH_KEY = 'lang-tutor:dasm-column-width';
 
 const ASIDE_WIDTH_KEY = 'lang-tutor:aside-width';
 const ASIDE_MIN_WIDTH = 320;
@@ -3342,9 +3679,15 @@ el<HTMLSelectElement>('dasmFlagsPreset').addEventListener('change', () => {
   if (selected !== 'custom') saveDasmFlags(selected);
 });
 el<HTMLInputElement>('dasmFlagsInput').addEventListener('change', () => saveDasmFlags(el<HTMLInputElement>('dasmFlagsInput').value));
-el<HTMLInputElement>('dasmFlagsInput').addEventListener('input', () => syncDasmPreset(normalizeDasmFlags(el<HTMLInputElement>('dasmFlagsInput').value)));
+el<HTMLInputElement>('dasmFlagsInput').addEventListener('input', () =>
+  syncDasmPreset(normalizeDasmFlags(el<HTMLInputElement>('dasmFlagsInput').value))
+);
 el('outputTabBtn').addEventListener('click', () => setSingleOutputTab('output'));
 el('problemsTabBtn').addEventListener('click', () => setSingleOutputTab('errors'));
+el('dasmTabBtn').addEventListener('click', () => setSingleOutputTab('dasm'));
+el('dasmLayoutBtn').addEventListener('click', () => {
+  toggleDasmLayout();
+});
 el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
 el('projResetFilesBtn').addEventListener('click', openProjectResetDialog);
 el('confirmProjectResetBtn').addEventListener('click', () => void resetCurrentProjectFiles());
@@ -3408,6 +3751,7 @@ for (const tab of document.querySelectorAll<HTMLButtonElement>('.lang-tab')) {
 }
 
 initResize();
+initDasmVerticalResize();
 initAsideResize();
 initProjectPreviewResize();
 initProjectTreeResize();
@@ -3435,5 +3779,6 @@ editor = createEditor({
   lang: editorBootLang,
   onChange: makeDebouncedCodeSaver(),
   onDiagnostics: updateSingleDiagnostics,
+  onDasmLineHover: handleDasmEditorLineHover,
 });
 loadLanguageState(initialLang);

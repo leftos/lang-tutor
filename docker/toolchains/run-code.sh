@@ -41,7 +41,12 @@ case "$lang" in
       printf '[program exited with code %s]\n' "$program_status"
     fi
     printf '\n[disassembly: main.cpp object file .text section, Intel syntax]\n'
-    objdump -dr -Mintel -C --no-show-raw-insn -S /tmp/main.o | awk '/Disassembly of section \.text/{flag=1} flag {print; count++} count >= 260 {exit}'
+    # -l prepends source-file:line markers so the frontend can map each asm
+    # group back to a C++ editor line for hover-highlight. Strip the compile
+    # cwd from those markers so paths show as `main.cpp:N`, not `/tmp/run/main.cpp:N`.
+    objdump -dlr -Mintel -C --no-show-raw-insn -S /tmp/main.o \
+      | sed -E "s|^${run_dir}/||; s|^\./||" \
+      | awk '/Disassembly of section \.text/{flag=1} flag {print; count++} count >= 320 {exit}'
     exit 0
     ;;
   rust)

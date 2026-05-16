@@ -14,8 +14,10 @@ import {
 } from '@codemirror/language';
 import { linter, lintGutter, lintKeymap } from '@codemirror/lint';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
-import { Compartment, EditorState, type Extension } from '@codemirror/state';
+import { Compartment, EditorState, type Extension, StateEffect, StateField } from '@codemirror/state';
 import {
+  Decoration,
+  type DecorationSet,
   drawSelection,
   dropCursor,
   EditorView,
@@ -136,6 +138,8 @@ export interface EditorOptions {
   lang: SingleBufferLanguageId;
   onChange: (doc: string) => void;
   onDiagnostics?: (diagnostics: readonly LspDiagnostic[]) => void;
+  /** Called when the pointer enters a 1-indexed C++ line that has a DASM group assignment. */
+  onDasmLineHover?: (line: number | null) => void;
 }
 
 export interface TutorEditor {
@@ -150,7 +154,69 @@ export interface TutorEditor {
   getCursorPosition(): { line: number; character: number };
   /** Focus the editor and reveal a 1-indexed line/column location. */
   revealAt(line: number, col?: number): void;
+  /** Paint background stripes for DASM groups. Map: 1-based source line → group ids. */
+  setDasmSourceMap(map: Map<number, number[]>): void;
+  /** Highlight all editor lines belonging to the given DASM group, or clear if null. */
+  setHoveredAsmGroup(group: number | null): void;
 }
+
+// ── DASM line-decoration extension ────────────────────────────────────────
+// One pair of state fields:
+//  - `dasmSourceMapField` carries the static stripe assignment (line → group).
+//  - `dasmHoveredGroupField` is the transient hover overlay.
+// A single decoration provider reads both and emits Decoration.line per line.
+
+const setDasmSourceMapEffect = StateEffect.define<Map<number, number[]>>();
+const setDasmHoveredGroupEffect = StateEffect.define<number | null>();
+
+const dasmSourceMapField = StateField.define<Map<number, number[]>>({
+  create: () => new Map(),
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setDasmSourceMapEffect)) return e.value;
+    }
+    return value;
+  },
+});
+
+const dasmHoveredGroupField = StateField.define<number | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setDasmHoveredGroupEffect)) return e.value;
+    }
+    return value;
+  },
+});
+
+function dasmLineDecorations(state: EditorState): DecorationSet {
+  const sourceMap = state.field(dasmSourceMapField);
+  const hovered = state.field(dasmHoveredGroupField);
+  if (sourceMap.size === 0 && hovered === null) return Decoration.none;
+
+  const builder: { from: number; deco: Decoration }[] = [];
+  for (const [lineNumber, groups] of sourceMap) {
+    if (lineNumber < 1 || lineNumber > state.doc.lines || groups.length === 0) continue;
+    const lineObj = state.doc.line(lineNumber);
+    const primaryGroup = groups[0];
+    if (primaryGroup === undefined) continue;
+    const isHovered = hovered !== null && groups.includes(hovered);
+    const classes = ['cm-line-asm', `asm-group-${primaryGroup % 6}`];
+    if (isHovered) classes.push('is-asm-hovered');
+    builder.push({
+      from: lineObj.from,
+      deco: Decoration.line({ attributes: { class: classes.join(' '), 'data-asm-group': String(primaryGroup) } }),
+    });
+  }
+  builder.sort((a, b) => a.from - b.from);
+  return Decoration.set(builder.map((b) => b.deco.range(b.from)));
+}
+
+const dasmLineHighlightExtension = [
+  dasmSourceMapField,
+  dasmHoveredGroupField,
+  EditorView.decorations.compute([dasmSourceMapField, dasmHoveredGroupField], dasmLineDecorations),
+];
 
 export function createEditor(opts: EditorOptions): TutorEditor {
   const langCompartment = new Compartment();
@@ -261,6 +327,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
       if (update.docChanged) opts.onChange(update.state.doc.toString());
     }),
     tutorTheme,
+    ...dasmLineHighlightExtension,
     langCompartment.of(langExtension[opts.lang]()),
     linterCompartment.of(lintSource),
     // LSP-aware extensions live in their own compartment so we can swap between
@@ -273,6 +340,35 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     parent: opts.parent,
     state: EditorState.create({ doc: opts.initialDoc, extensions: baseExtensions }),
   });
+
+  // ── DASM hover: editor → asm pane ───────────────────────────────────────
+  // Track the source line under the pointer (1-indexed) so the asm pane can
+  // highlight matching groups. Throttle to per-line transitions so the host
+  // callback isn't fired on every mousemove.
+  let lastHoverLine: number | null = null;
+  const onEditorMove = (e: MouseEvent): void => {
+    if (currentLang !== 'dasm' || opts.onDasmLineHover === undefined) return;
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (pos === null) {
+      if (lastHoverLine !== null) {
+        lastHoverLine = null;
+        opts.onDasmLineHover(null);
+      }
+      return;
+    }
+    const line = view.state.doc.lineAt(pos).number;
+    if (line === lastHoverLine) return;
+    lastHoverLine = line;
+    opts.onDasmLineHover(line);
+  };
+  const onEditorLeave = (): void => {
+    if (lastHoverLine !== null) {
+      lastHoverLine = null;
+      opts.onDasmLineHover?.(null);
+    }
+  };
+  view.dom.addEventListener('mousemove', onEditorMove);
+  view.dom.addEventListener('mouseleave', onEditorLeave);
 
   /**
    * (Re)connect the LSP for the given language. Dispose any previously
@@ -361,6 +457,8 @@ export function createEditor(opts: EditorOptions): TutorEditor {
         void old.dispose();
       }
       void generation; // silence unused-var lint when destroy isn't followed by reuse
+      view.dom.removeEventListener('mousemove', onEditorMove);
+      view.dom.removeEventListener('mouseleave', onEditorLeave);
       view.destroy();
     },
     getLspClient: getLspClient,
@@ -381,6 +479,13 @@ export function createEditor(opts: EditorOptions): TutorEditor {
         scrollIntoView: true,
       });
       view.focus();
+    },
+    setDasmSourceMap(map: Map<number, number[]>): void {
+      view.dispatch({ effects: setDasmSourceMapEffect.of(map) });
+    },
+    setHoveredAsmGroup(group: number | null): void {
+      if (view.state.field(dasmHoveredGroupField) === group) return;
+      view.dispatch({ effects: setDasmHoveredGroupEffect.of(group) });
     },
   };
 }
