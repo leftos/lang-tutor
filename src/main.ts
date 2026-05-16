@@ -1,13 +1,13 @@
 import './style.css';
 import { callClaude, fetchProgressExtraction } from './api';
 import {
+  type AccountSession,
   canUseHostedTooling,
   isAuthRequired,
   loadAuthSession,
   loginAccount,
   logoutAccount,
   registerAccount,
-  type AccountSession,
 } from './authClient';
 import {
   ACTIVE_LANG_KEY,
@@ -24,6 +24,7 @@ import {
 } from './constants';
 import { createEditor, type TutorEditor } from './editor';
 import { createFileTree, type FileTreeHandle, type OpenInOption } from './fileTree';
+import type { LspDiagnostic } from './lspClient';
 import {
   deleteFile as apiDeleteFile,
   mkdir as apiMkdir,
@@ -49,7 +50,6 @@ import {
   loadProviderSettings,
   PROVIDER_LABELS,
   type ProviderModel,
-  providerSetupUrl,
   readProviderKey,
   saveProviderSettings,
 } from './providerSettings';
@@ -971,15 +971,365 @@ function renderChatView(): void {
   el<HTMLButtonElement>('projEvalBtn').disabled = isSending || history.length === 0;
 }
 
-function clearOutput(): void {
+type SingleOutputTab = 'output' | 'errors';
+type ProblemSeverity = 'error' | 'warning' | 'info';
+type ProblemSource = 'output' | 'diagnostic';
+
+interface SingleProblem {
+  id: string;
+  severity: ProblemSeverity;
+  source: ProblemSource;
+  line: number;
+  col: number;
+  displayLocation: string;
+  message: string;
+  raw: string;
+  sourceLineIndex?: number;
+  matchStart?: number;
+  matchEnd?: number;
+}
+
+interface LocatedText {
+  token: string;
+  line: number;
+  col: number;
+  start: number;
+  end: number;
+  matchText: string;
+}
+
+const OUTPUT_PLACEHOLDER = 'Run the program to capture its output here.';
+const CSHARP_LOCATION_RE = /(^|[\s([{'"])((?:[A-Za-z]:)?[^\s()\r\n]+?\.\w+)\((\d+),(\d+)\)/g;
+const PYTHON_LOCATION_RE = /File "([^"]+)", line (\d+)/g;
+const COLON_LOCATION_RE = /(^|[\s([{'"])((?:(?:[A-Za-z]:)?[\\/])?(?:[^\s:()[\]{}'"`]+[\\/])*[A-Za-z0-9_.<>-]+):(\d+)(?::(\d+))?/g;
+
+let singleOutputTab: SingleOutputTab = 'output';
+let outputProblems: SingleProblem[] = [];
+let lspProblems: SingleProblem[] = [];
+
+function problemPlural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? '' : 's'}`;
+}
+
+function fileBasename(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  return normalized.split('/').pop() ?? normalized;
+}
+
+function isLikelySingleBufferLocation(token: string): boolean {
+  const clean = token.trim().replace(/^["']|["']$/g, '');
+  if (/^<[^>]+>$/.test(clean)) return true;
+  if (clean === 'main') return true;
+
+  const lang = getLanguage(activeLang);
+  if (!isSingleBufferLanguage(lang)) return false;
+
+  const base = fileBasename(clean);
+  if (base === lang.fileName) return true;
+
+  const dot = lang.fileName.lastIndexOf('.');
+  const ext = dot >= 0 ? lang.fileName.slice(dot) : '';
+  return ext.length > 0 && base.endsWith(ext);
+}
+
+function addLocatedText(out: LocatedText[], loc: LocatedText): void {
+  if (!Number.isFinite(loc.line) || loc.line < 1 || !Number.isFinite(loc.col) || loc.col < 1) return;
+  if (!isLikelySingleBufferLocation(loc.token)) return;
+  if (out.some((existing) => loc.start < existing.end && loc.end > existing.start)) return;
+  out.push(loc);
+}
+
+function findLocationsInLine(line: string): LocatedText[] {
+  const out: LocatedText[] = [];
+
+  for (const m of line.matchAll(PYTHON_LOCATION_RE)) {
+    const token = m[1];
+    const lineStr = m[2];
+    if (token === undefined || lineStr === undefined || m.index === undefined) continue;
+    addLocatedText(out, {
+      token,
+      line: Number.parseInt(lineStr, 10),
+      col: 1,
+      start: m.index,
+      end: m.index + m[0].length,
+      matchText: m[0],
+    });
+  }
+
+  for (const m of line.matchAll(CSHARP_LOCATION_RE)) {
+    const prefix = m[1] ?? '';
+    const token = m[2];
+    const lineStr = m[3];
+    const colStr = m[4];
+    if (token === undefined || lineStr === undefined || colStr === undefined || m.index === undefined) continue;
+    const matchText = `${token}(${lineStr},${colStr})`;
+    addLocatedText(out, {
+      token,
+      line: Number.parseInt(lineStr, 10),
+      col: Number.parseInt(colStr, 10),
+      start: m.index + prefix.length,
+      end: m.index + prefix.length + matchText.length,
+      matchText,
+    });
+  }
+
+  for (const m of line.matchAll(COLON_LOCATION_RE)) {
+    const prefix = m[1] ?? '';
+    const token = m[2];
+    const lineStr = m[3];
+    const colStr = m[4];
+    if (token === undefined || lineStr === undefined || m.index === undefined) continue;
+    const matchText = `${token}:${lineStr}${colStr === undefined ? '' : `:${colStr}`}`;
+    addLocatedText(out, {
+      token,
+      line: Number.parseInt(lineStr, 10),
+      col: colStr === undefined ? 1 : Number.parseInt(colStr, 10),
+      start: m.index + prefix.length,
+      end: m.index + prefix.length + matchText.length,
+      matchText,
+    });
+  }
+
+  return out.sort((a, b) => a.start - b.start);
+}
+
+function severityFromText(text: string): ProblemSeverity | null {
+  if (/\b(traceback|exception|error|failed|fatal|panic)\b/i.test(text)) return 'error';
+  if (/\b(warning|warn)\b/i.test(text)) return 'warning';
+  return null;
+}
+
+function problemMessageFromLine(line: string, matchText: string): string {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return matchText;
+  return trimmed.length > 220 ? `${trimmed.slice(0, 217)}...` : trimmed;
+}
+
+function parseOutputProblems(text: string): SingleProblem[] {
+  if (text.trim().length === 0 || text === OUTPUT_PLACEHOLDER) return [];
+
+  const problems: SingleProblem[] = [];
+  let contextSeverity: { severity: ProblemSeverity; ttl: number } | null = null;
+  const lines = text.split(/\r?\n/);
+
+  lines.forEach((line, index) => {
+    const explicitSeverity = severityFromText(line);
+    if (explicitSeverity !== null) {
+      contextSeverity = { severity: explicitSeverity, ttl: explicitSeverity === 'error' && /traceback/i.test(line) ? 8 : 3 };
+    }
+
+    const locations = findLocationsInLine(line);
+    for (const loc of locations) {
+      const severity = explicitSeverity ?? contextSeverity?.severity ?? 'info';
+      const displayPath = fileBasename(loc.token);
+      problems.push({
+        id: `output:${index}:${loc.start}:${loc.line}:${loc.col}`,
+        severity,
+        source: 'output',
+        line: loc.line,
+        col: loc.col,
+        displayLocation: `${displayPath}:${loc.line}:${loc.col}`,
+        message: problemMessageFromLine(line, loc.matchText),
+        raw: line,
+        sourceLineIndex: index,
+        matchStart: loc.start,
+        matchEnd: loc.end,
+      });
+    }
+
+    if (contextSeverity !== null) {
+      contextSeverity.ttl -= 1;
+      if (contextSeverity.ttl <= 0) contextSeverity = null;
+    }
+  });
+
+  return problems;
+}
+
+function severityFromDiagnostic(d: LspDiagnostic): ProblemSeverity {
+  if (d.severity === 1) return 'error';
+  if (d.severity === 2) return 'warning';
+  return 'info';
+}
+
+function diagnosticsToProblems(diagnostics: readonly LspDiagnostic[]): SingleProblem[] {
+  const lang = getLanguage(activeLang);
+  if (!isSingleBufferLanguage(lang)) return [];
+  return diagnostics.map((d, index) => {
+    const line = d.range.start.line + 1;
+    const col = d.range.start.character + 1;
+    const code = d.code !== undefined ? ` [${d.code}]` : '';
+    const source = d.source !== undefined && d.source.length > 0 ? `${d.source}: ` : '';
+    return {
+      id: `lsp:${index}:${line}:${col}:${d.message}`,
+      severity: severityFromDiagnostic(d),
+      source: 'diagnostic',
+      line,
+      col,
+      displayLocation: `${lang.fileName}:${line}:${col}`,
+      message: `${source}${d.message}${code}`,
+      raw: d.message,
+    };
+  });
+}
+
+function allSingleProblems(): SingleProblem[] {
+  return [...lspProblems, ...outputProblems];
+}
+
+function singleProblemCounts(): { errors: number; warnings: number } {
+  const problems = allSingleProblems();
+  return {
+    errors: problems.filter((p) => p.severity === 'error').length,
+    warnings: problems.filter((p) => p.severity === 'warning').length,
+  };
+}
+
+function syncSingleOutputPanes(): void {
   const outputPre = el<HTMLPreElement>('outputPre');
-  outputPre.style.color = '';
+  const errorList = el('errorListPane');
+  const outputActive = singleOutputTab === 'output';
+  outputPre.hidden = !outputActive;
+  errorList.hidden = outputActive;
+  outputPre.setAttribute('aria-hidden', outputActive ? 'false' : 'true');
+  errorList.setAttribute('aria-hidden', outputActive ? 'true' : 'false');
+}
+
+function renderSingleOutputTabs(): void {
+  const outputBtn = el<HTMLButtonElement>('outputTabBtn');
+  const problemsBtn = el<HTMLButtonElement>('problemsTabBtn');
+  const errorChip = el('problemErrorChip');
+  const warningChip = el('problemWarningChip');
+  const counts = singleProblemCounts();
+
+  outputBtn.classList.toggle('is-active', singleOutputTab === 'output');
+  problemsBtn.classList.toggle('is-active', singleOutputTab === 'errors');
+  outputBtn.setAttribute('aria-selected', singleOutputTab === 'output' ? 'true' : 'false');
+  problemsBtn.setAttribute('aria-selected', singleOutputTab === 'errors' ? 'true' : 'false');
+
+  errorChip.textContent = problemPlural(counts.errors, 'error');
+  warningChip.textContent = problemPlural(counts.warnings, 'warning');
+  errorChip.style.display = counts.errors > 0 ? 'inline-flex' : 'none';
+  warningChip.style.display = counts.warnings > 0 ? 'inline-flex' : 'none';
+  problemsBtn.title =
+    counts.errors === 0 && counts.warnings === 0
+      ? 'No errors or warnings detected'
+      : `${problemPlural(counts.errors, 'error')}, ${problemPlural(counts.warnings, 'warning')}`;
+}
+
+function setSingleOutputTab(tab: SingleOutputTab): void {
+  singleOutputTab = tab;
+  syncSingleOutputPanes();
+  renderSingleOutputTabs();
+}
+
+function jumpToSingleProblem(problem: SingleProblem): void {
+  editor.revealAt(problem.line, problem.col);
+}
+
+function renderLinkedOutput(text: string, failed: boolean, placeholder = false): void {
+  const outputPre = el<HTMLPreElement>('outputPre');
   outputPre.textContent = '';
-  outputPre.appendChild(span('Run the program to capture its output here.', 'muted'));
+  outputPre.classList.toggle('is-error', failed);
+
+  if (placeholder) {
+    outputPre.appendChild(span(OUTPUT_PLACEHOLDER, 'muted'));
+    return;
+  }
+
+  if (text.length === 0) return;
+
+  const lines = text.split(/\r?\n/);
+  lines.forEach((line, index) => {
+    const lineProblems = outputProblems
+      .filter((p) => p.sourceLineIndex === index && p.matchStart !== undefined && p.matchEnd !== undefined)
+      .sort((a, b) => (a.matchStart ?? 0) - (b.matchStart ?? 0));
+    let cursor = 0;
+
+    for (const problem of lineProblems) {
+      const start = problem.matchStart ?? cursor;
+      const end = problem.matchEnd ?? start;
+      if (start > cursor) outputPre.appendChild(document.createTextNode(line.slice(cursor, start)));
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = `output-location-link is-${problem.severity}`;
+      link.textContent = line.slice(start, end);
+      link.title = `Jump to line ${problem.line}, column ${problem.col}`;
+      link.addEventListener('click', () => jumpToSingleProblem(problem));
+      outputPre.appendChild(link);
+      cursor = end;
+    }
+
+    if (cursor < line.length) outputPre.appendChild(document.createTextNode(line.slice(cursor)));
+    if (index < lines.length - 1) outputPre.appendChild(document.createTextNode('\n'));
+  });
+}
+
+function renderProblemSection(title: string, problems: SingleProblem[], host: HTMLElement): void {
+  if (problems.length === 0) return;
+  const heading = div('output-problems-section-title');
+  heading.textContent = title;
+  host.appendChild(heading);
+
+  for (const problem of problems) {
+    const row = div('output-problem-line', `is-${problem.severity}`);
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'output-problem-link';
+    link.textContent = problem.displayLocation;
+    link.title = `Jump to line ${problem.line}, column ${problem.col}`;
+    link.addEventListener('click', () => jumpToSingleProblem(problem));
+    row.appendChild(link);
+
+    const severity = span(problem.severity, 'output-problem-severity');
+    row.appendChild(severity);
+    row.appendChild(span(problem.message, 'output-problem-message'));
+    host.appendChild(row);
+  }
+}
+
+function renderSingleProblemList(): void {
+  const pane = el('errorListPane');
+  pane.textContent = '';
+
+  const diagnostics = [...lspProblems].sort((a, b) => a.line - b.line || a.col - b.col);
+  const output = [...outputProblems].sort((a, b) => a.line - b.line || a.col - b.col);
+  if (diagnostics.length === 0 && output.length === 0) {
+    pane.appendChild(span('No file or line references detected.', 'muted'));
+    return;
+  }
+
+  renderProblemSection('Live diagnostics', diagnostics, pane);
+  renderProblemSection('Run output', output, pane);
+}
+
+function renderSingleOutput(text: string, ok: boolean, opts: { placeholder?: boolean; autoSelect?: boolean } = {}): void {
+  outputProblems = opts.placeholder ? [] : parseOutputProblems(text);
+  renderLinkedOutput(text, !ok, opts.placeholder ?? false);
+  renderSingleProblemList();
+
+  if (opts.placeholder) {
+    singleOutputTab = 'output';
+  } else if (opts.autoSelect) {
+    singleOutputTab = !ok && outputProblems.length > 0 ? 'errors' : 'output';
+  }
+
+  syncSingleOutputPanes();
+  renderSingleOutputTabs();
+}
+
+function updateSingleDiagnostics(diagnostics: readonly LspDiagnostic[]): void {
+  lspProblems = diagnosticsToProblems(diagnostics);
+  renderSingleProblemList();
+  renderSingleOutputTabs();
+}
+
+function clearOutput(): void {
+  renderSingleOutput(OUTPUT_PLACEHOLDER, true, { placeholder: true });
 }
 
 // ── Single-buffer vs project workshop layout ─────────────────────────────
-const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'codeArea', 'resizeBar', 'outputPre']);
+const SINGLE_BUFFER_IDS = new Set(['fileLabel', 'fileSpec', 'evalBtn', 'runBtn', 'codeArea', 'resizeBar', 'singleOutputPanel']);
 
 function setWorkshopMode(mode: 'single' | 'project'): void {
   const isProject = mode === 'project';
@@ -1632,15 +1982,14 @@ async function runActiveCode(): Promise<void> {
 
   const code = editor.getContent();
   const runBtn = el<HTMLButtonElement>('runBtn');
-  const outputPre = el<HTMLPreElement>('outputPre');
   runBtn.disabled = true;
   el('runLabel').textContent = 'Running…';
-  outputPre.style.color = '';
-  outputPre.textContent = '';
+  singleOutputTab = 'output';
+  renderSingleOutput('', true);
 
   const langAtStart = activeLang;
   const result = await runCode(lang.id as SingleBufferLanguageId, code, (msg) => {
-    if (activeLang === langAtStart) outputPre.textContent = msg;
+    if (activeLang === langAtStart) renderSingleOutput(msg, true);
   });
 
   if (activeLang !== langAtStart) {
@@ -1649,8 +1998,7 @@ async function runActiveCode(): Promise<void> {
     return;
   }
 
-  outputPre.style.color = result.ok ? '' : 'var(--danger)';
-  outputPre.textContent = result.output;
+  renderSingleOutput(result.output, result.ok, { autoSelect: true });
   runBtn.disabled = false;
   el('runLabel').textContent = 'Run';
 }
@@ -2051,6 +2399,9 @@ function loadLanguageState(id: LanguageId): void {
 
   renderFileSpec();
 
+  lspProblems = [];
+  updateSingleDiagnostics([]);
+
   if (isSingleBufferLanguage(lang)) {
     setWorkshopMode('single');
     el('fileLabel').textContent = lang.fileName;
@@ -2088,7 +2439,7 @@ function setLanguage(newLang: LanguageId): void {
 // ── Resize handle ─────────────────────────────────────────────────────────
 function initResize(): void {
   const bar = el('resizeBar');
-  const out = el<HTMLPreElement>('outputPre');
+  const out = el('singleOutputPanel');
 
   // Restore persisted height. Single source of truth for the clamp range
   // (60–500 px) is shared between init and the drag handler.
@@ -2258,6 +2609,8 @@ el<HTMLTextAreaElement>('chatInput').addEventListener('keydown', (e: KeyboardEve
 });
 el('runBtn').addEventListener('click', () => void runActiveCode());
 el('evalBtn').addEventListener('click', () => void evaluateCode());
+el('outputTabBtn').addEventListener('click', () => setSingleOutputTab('output'));
+el('problemsTabBtn').addEventListener('click', () => setSingleOutputTab('errors'));
 el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
 el('resetBtn').addEventListener('click', () => void resetCurrentLanguage());
 el('themeToggle').addEventListener('click', toggleTheme);
@@ -2339,5 +2692,6 @@ editor = createEditor({
   initialDoc: editorBootCode,
   lang: editorBootLang,
   onChange: makeDebouncedCodeSaver(),
+  onDiagnostics: updateSingleDiagnostics,
 });
 loadLanguageState(initialLang);

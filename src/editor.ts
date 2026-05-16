@@ -30,6 +30,7 @@ import { tags as t } from '@lezer/highlight';
 import { csharp } from '@replit/codemirror-lang-csharp';
 
 import { fetchDiagnostics, fetchFormatted } from './lint';
+import type { LspDiagnostic } from './lspClient';
 import { connectLsp, type LspClient } from './lspClient';
 import {
   applyLspDiagnostics,
@@ -133,6 +134,7 @@ export interface EditorOptions {
   initialDoc: string;
   lang: SingleBufferLanguageId;
   onChange: (doc: string) => void;
+  onDiagnostics?: (diagnostics: readonly LspDiagnostic[]) => void;
 }
 
 export interface TutorEditor {
@@ -145,6 +147,8 @@ export interface TutorEditor {
   getLspClient(): LspClient | null;
   /** Current cursor position as 0-indexed (line, character) in LSP coordinates. */
   getCursorPosition(): { line: number; character: number };
+  /** Focus the editor and reveal a 1-indexed line/column location. */
+  revealAt(line: number, col?: number): void;
 }
 
 export function createEditor(opts: EditorOptions): TutorEditor {
@@ -287,6 +291,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     view.dispatch({
       effects: [linterCompartment.reconfigure(lintSource), lspExtCompartment.reconfigure(autocompletion())],
     });
+    opts.onDiagnostics?.([]);
 
     let client: LspClient | null = null;
     try {
@@ -312,6 +317,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     client.onDiagnostics((diags) => {
       if (lspClient !== client) return; // stale
       applyLspDiagnostics(view, diags);
+      opts.onDiagnostics?.(diags);
     });
 
     view.dispatch({
@@ -361,6 +367,19 @@ export function createEditor(opts: EditorOptions): TutorEditor {
       const head = view.state.selection.main.head;
       const line = view.state.doc.lineAt(head);
       return { line: line.number - 1, character: head - line.from };
+    },
+    revealAt(line: number, col = 1): void {
+      const doc = view.state.doc;
+      const safeLine = Math.max(1, Math.min(line, doc.lines));
+      const lineObj = doc.line(safeLine);
+      const safeCol = Math.max(0, Math.min(col - 1, lineObj.length));
+      const offset = lineObj.from + safeCol;
+      view.dispatch({
+        selection: { anchor: offset },
+        effects: EditorView.scrollIntoView(offset, { y: 'center' }),
+        scrollIntoView: true,
+      });
+      view.focus();
     },
   };
 }

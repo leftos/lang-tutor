@@ -1438,7 +1438,76 @@
   color: var(--sig);
 }
 
+.single-output-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 80px;
+  min-width: 0;
+  background: var(--paper);
+}
+
+.single-output-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rule-2);
+  background: var(--paper-2);
+  flex-shrink: 0;
+  min-height: 34px;
+}
+
+.single-output-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  min-height: 34px;
+  padding: 6px 8px 5px;
+}
+
+.single-output-tab:hover {
+  color: var(--ink);
+}
+
+.single-output-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--sig);
+}
+
+.problem-count-chip {
+  align-items: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  padding: 2px 6px;
+  text-transform: lowercase;
+}
+
+.problem-count-chip.is-error {
+  color: var(--danger);
+}
+
+.problem-count-chip.is-warning {
+  color: var(--sig);
+}
+
 .output-pre {
+  flex: 1;
+  min-height: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
@@ -1450,6 +1519,86 @@
   color: var(--ink);
   background: var(--paper);
 }
+
+.output-pre.is-error {
+  color: var(--danger);
+}
+
+.output-location-link,
+.output-problem-link {
+  background: transparent;
+  border: 0;
+  color: var(--syn-number);
+  cursor: pointer;
+  font: inherit;
+  margin: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 77, 140, 0.45);
+  text-underline-offset: 2px;
+}
+
+.output-location-link:hover,
+.output-location-link:focus-visible,
+.output-problem-link:hover,
+.output-problem-link:focus-visible {
+  outline: none;
+  text-decoration-color: var(--syn-number);
+}
+
+.output-error-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 22px 14px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.output-problems-section-title {
+  color: var(--ink-mute);
+  font-size: 10px;
+  font-style: italic;
+  letter-spacing: 0.07em;
+  margin: 4px 0 7px;
+  text-transform: uppercase;
+}
+
+.output-problems-section-title:not(:first-child) {
+  margin-top: 14px;
+}
+
+.output-problem-line {
+  display: grid;
+  grid-template-columns: minmax(96px, max-content) max-content minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+  white-space: pre-wrap;
+}
+
+.output-problem-severity {
+  color: var(--ink-mute);
+  font-size: 10.5px;
+  text-transform: lowercase;
+}
+
+.output-problem-line.is-error .output-problem-severity {
+  color: var(--danger);
+}
+
+.output-problem-line.is-warning .output-problem-severity {
+  color: var(--sig);
+}
+
+.output-problem-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .muted {
   color: var(--ink-mute);
   font-style: italic;

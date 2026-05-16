@@ -250,7 +250,20 @@
         <span class="toolbar-spacer"></span>
         <span class="output-eyebrow-spec">stdout / stderr</span>
       </div>
-      <pre id="outputPre" class="output-pre" style="flex: 0 0 120px"><span class="muted">Run the program to capture its output here.</span></pre>
+      <div id="singleOutputPanel" class="single-output-panel" style="flex: 0 0 120px">
+        <div class="single-output-tabs" role="tablist" aria-label="Run output">
+          <button type="button" id="outputTabBtn" class="single-output-tab is-active" role="tab" aria-selected="true" aria-controls="outputPre">Output</button>
+          <button type="button" id="problemsTabBtn" class="single-output-tab" role="tab" aria-selected="false" aria-controls="errorListPane">
+            <span>Error list</span>
+            <span id="problemErrorChip" class="problem-count-chip is-error" style="display:none">0 errors</span>
+            <span id="problemWarningChip" class="problem-count-chip is-warning" style="display:none">0 warnings</span>
+          </button>
+        </div>
+        <pre id="outputPre" class="output-pre" role="tabpanel" aria-labelledby="outputTabBtn"><span class="muted">Run the program to capture its output here.</span></pre>
+        <div id="errorListPane" class="output-error-list" role="tabpanel" aria-labelledby="problemsTabBtn" hidden>
+          <span class="muted">No file or line references detected.</span>
+        </div>
+      </div>
 
       <!-- ─── Project workspace (web course) ───────────────────── -->
       <!--
