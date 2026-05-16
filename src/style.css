@@ -820,15 +820,18 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  user-select: text;
 }
 .msg-list {
   flex: 1;
   overflow-y: auto;
   padding: 20px 26px 26px;
+  user-select: text;
 }
 
 .msg-block {
   margin-bottom: 22px;
+  user-select: text;
 }
 .msg-label {
   display: inline-flex;
@@ -862,6 +865,7 @@
   padding: 9px 14px;
   border-left: 2px solid var(--sig);
   background: var(--sig-soft);
+  user-select: text;
 }
 .msg-ai {
   font-family: var(--font-body);
@@ -869,6 +873,13 @@
   line-height: 1.65;
   color: var(--ink);
   word-wrap: break-word;
+  user-select: text;
+}
+.msg-ai *,
+.msg-you *,
+.msg-error-text,
+.msg-error-text * {
+  user-select: text;
 }
 .msg-ai p {
   margin: 0 0 8px;
@@ -952,6 +963,7 @@
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+  user-select: none;
 }
 
 .msg-top-btn {

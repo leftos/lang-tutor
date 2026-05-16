@@ -1742,7 +1742,8 @@ function initProjectTreeResize(): void {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     storageSet(PROJ_TREE_WIDTH_KEY, tree.getBoundingClientRect().width);
     updateTreeAriaValue(bar, tree);
   }
@@ -1754,7 +1755,8 @@ function initProjectTreeResize(): void {
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
     e.preventDefault();
   });
 
@@ -1792,7 +1794,8 @@ function initProjectPreviewResize(): void {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     storageSet(PROJ_PREVIEW_HEIGHT_KEY, pane.getBoundingClientRect().height);
     updatePreviewAriaValue(bar, pane);
   }
@@ -1804,7 +1807,8 @@ function initProjectPreviewResize(): void {
     document.body.style.cursor = 'ns-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
     e.preventDefault();
   });
 
@@ -2693,7 +2697,8 @@ function initResize(): void {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     storageSet(OUTPUT_HEIGHT_KEY, out.getBoundingClientRect().height);
   }
 
@@ -2704,7 +2709,8 @@ function initResize(): void {
     document.body.style.cursor = 'ns-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
     e.preventDefault();
   });
 
@@ -2759,7 +2765,8 @@ function initAsideResize(): void {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
+    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('blur', onUp);
     if (aside !== null) {
       const finalWidth = aside.getBoundingClientRect().width;
       storageSet(ASIDE_WIDTH_KEY, finalWidth);
@@ -2775,7 +2782,8 @@ function initAsideResize(): void {
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
     e.preventDefault();
   });
 
