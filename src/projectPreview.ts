@@ -157,13 +157,14 @@ function span(text: string, ...classes: string[]): HTMLSpanElement {
 }
 
 function isWebErrorLine(entry: ProjectLogEntry): boolean {
+  if (entry.line.trim() === '') return false;
   if (CHECKER_SUCCESS_SUMMARY_RE.test(entry.line)) return false;
   if (entry.stream === 'stderr') return true;
   return WEB_ERROR_PATTERNS.some((re) => re.test(entry.line));
 }
 
 function isBenignStderrLine(entry: ProjectLogEntry): boolean {
-  return entry.stream === 'stderr' && CHECKER_SUCCESS_SUMMARY_RE.test(entry.line);
+  return entry.stream === 'stderr' && (entry.line.trim() === '' || CHECKER_SUCCESS_SUMMARY_RE.test(entry.line));
 }
 
 function isCsharpErrorLine(entry: ProjectLogEntry): boolean {
