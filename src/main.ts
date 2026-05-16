@@ -735,12 +735,14 @@ function renderImageAttachment(block: ImageBlock): HTMLElement {
   a.target = '_blank';
   a.rel = 'noopener';
   a.className = 'msg-attachment-link';
+  a.draggable = false;
   const dataUrl = `data:${block.source.media_type};base64,${block.source.data}`;
   a.href = dataUrl;
   const img = document.createElement('img');
   img.src = dataUrl;
   img.alt = 'screenshot';
   img.className = 'msg-attachment';
+  img.draggable = false;
   a.appendChild(img);
   return a;
 }
@@ -938,6 +940,21 @@ function appendMsgStreaming(): StreamingBubble {
       addTutorBackToTop(bl);
     },
   };
+}
+
+function initChatTextSelection(): void {
+  const msgList = el('msgList');
+
+  msgList.addEventListener('mousedown', () => {
+    if (document.body.style.userSelect === 'none') {
+      document.body.style.userSelect = '';
+    }
+  });
+
+  msgList.addEventListener('dragstart', (event: DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
 }
 
 function setSendingState(sending: boolean): void {
@@ -2912,6 +2929,7 @@ initResize();
 initAsideResize();
 initProjectPreviewResize();
 initProjectTreeResize();
+initChatTextSelection();
 
 // ── Init ──────────────────────────────────────────────────────────────────
 renderProviderSettings();

@@ -3,6 +3,13 @@ import { marked } from 'marked';
 
 marked.setOptions({ gfm: true, breaks: false });
 
+function disableNativeDrag(root: ParentNode): void {
+  for (const el of root.querySelectorAll<HTMLElement>('a, img, pre, code, table, blockquote')) {
+    el.draggable = false;
+    el.setAttribute('draggable', 'false');
+  }
+}
+
 export function setInline(el: HTMLElement, text: string): void {
   text.split(/(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\n)/g).forEach((chunk) => {
     if (chunk === '\n') {
@@ -18,6 +25,7 @@ export function setInline(el: HTMLElement, text: string): void {
     } else if (chunk.startsWith('`') && chunk.endsWith('`') && chunk.length > 2) {
       const s = document.createElement('code');
       s.className = 'inline-code';
+      s.draggable = false;
       s.textContent = chunk.slice(1, -1);
       el.appendChild(s);
     } else {
@@ -48,6 +56,8 @@ export function renderMarkdown(text: string): DocumentFragment {
     wrap.appendChild(table);
   }
 
+  disableNativeDrag(template.content);
+
   return template.content;
 }
 
@@ -63,10 +73,12 @@ export function renderPlainWithFences(text: string): DocumentFragment {
         .join('\n')
         .replace(/```\s*$/, '')
         .trimEnd();
+      pre.draggable = false;
       frag.appendChild(pre);
     } else {
       const s = document.createElement('span');
       s.style.whiteSpace = 'pre-wrap';
+      s.draggable = false;
       s.textContent = part;
       frag.appendChild(s);
     }
