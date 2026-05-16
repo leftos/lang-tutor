@@ -510,7 +510,7 @@ export default defineConfig({
   plugins: [
     checker({
       typescript: { tsconfigPath: 'jsconfig.json' },
-      biome: true,
+      biome: { dev: { logLevel: ['error', 'warning'] } },
       overlay: { initialIsOpen: false },
       enableBuild: false,
     }),
@@ -542,10 +542,9 @@ export default defineConfig({
 
   'biome.json': `${JSON.stringify(
     {
-      $schema: 'https://biomejs.dev/schemas/2.0.0/schema.json',
       formatter: { enabled: true, indentStyle: 'space', indentWidth: 2 },
       linter: { enabled: true, rules: { recommended: true } },
-      files: { includes: ['**/*.js', '**/*.html', '**/*.css'] },
+      files: { includes: ['**/*.js', '**/*.html', '**/*.css', '!index.html', '!**/node_modules', '!**/.vite'] },
     },
     null,
     2
@@ -761,16 +760,69 @@ You can also build and run from Visual Studio or JetBrains Rider by opening
 const SCAFFOLDS = Object.freeze({ web: SCAFFOLD_WEB, csharp: SCAFFOLD_CSHARP });
 
 function migrateWebScaffold(root) {
+  const updatedPaths = [];
   const viteConfig = safeResolve(root, 'vite.config.js');
-  if (!existsSync(viteConfig)) return [];
+  if (existsSync(viteConfig)) {
+    const original = readFileSync(viteConfig, 'utf8');
+    const updated = original
+      .replace(/\bbiomejs:\s*true\b/g, "biome: { dev: { logLevel: ['error', 'warning'] } }")
+      .replace(/\bbiome:\s*true\b/g, "biome: { dev: { logLevel: ['error', 'warning'] } }");
+    if (updated !== original) {
+      writeFileSync(viteConfig, updated, 'utf8');
+      markSelfWrite(viteConfig);
+      updatedPaths.push('vite.config.js');
+    }
+  }
 
-  const original = readFileSync(viteConfig, 'utf8');
-  const updated = original.replace(/\bbiomejs:\s*true\b/g, 'biome: true');
-  if (updated === original) return [];
+  const biomeConfig = safeResolve(root, 'biome.json');
+  if (!existsSync(biomeConfig)) return updatedPaths;
 
-  writeFileSync(viteConfig, updated, 'utf8');
-  markSelfWrite(viteConfig);
-  return ['vite.config.js'];
+  try {
+    const original = readFileSync(biomeConfig, 'utf8');
+    const config = JSON.parse(original);
+    let changed = false;
+
+    if (typeof config.$schema === 'string' && config.$schema.includes('biomejs.dev/schemas/')) {
+      delete config.$schema;
+      changed = true;
+    }
+
+    if (typeof config.files !== 'object' || config.files === null || Array.isArray(config.files)) {
+      config.files = {};
+      changed = true;
+    }
+
+    const includes = Array.isArray(config.files.includes)
+      ? config.files.includes.filter((entry) => typeof entry === 'string')
+      : ['**/*.js', '**/*.html', '**/*.css'];
+
+    for (const pattern of ['!index.html', '!**/node_modules', '!**/.vite']) {
+      if (!includes.includes(pattern)) {
+        includes.push(pattern);
+        changed = true;
+      }
+    }
+
+    if (
+      !Array.isArray(config.files.includes) ||
+      includes.length !== config.files.includes.length ||
+      includes.some((entry, index) => entry !== config.files.includes[index])
+    ) {
+      config.files.includes = includes;
+      changed = true;
+    }
+
+    if (changed) {
+      writeFileSync(biomeConfig, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+      markSelfWrite(biomeConfig);
+      updatedPaths.push('biome.json');
+    }
+  } catch {
+    // Leave hand-edited or invalid Biome configs alone; Vite/Biome will report
+    // the parse error in the normal project output.
+  }
+
+  return updatedPaths;
 }
 
 export function ensureScaffold(scope, lang) {
