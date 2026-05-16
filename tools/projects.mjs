@@ -1094,19 +1094,24 @@ function resolveCommandArgs(args, lang, state) {
 function projectChildEnv() {
   const cacheDirs = {
     npm: join(PROJECT_CACHE_ROOT, 'npm'),
+    pnpmCache: join(PROJECT_CACHE_ROOT, 'pnpm-cache'),
     pnpmStore: join(PROJECT_CACHE_ROOT, 'pnpm-store'),
     tmp: join(PROJECT_CACHE_ROOT, 'tmp'),
     xdg: join(PROJECT_CACHE_ROOT, 'xdg'),
+    xdgState: join(PROJECT_CACHE_ROOT, 'xdg-state'),
   };
   for (const dir of Object.values(cacheDirs)) mkdirSync(dir, { recursive: true });
   return {
     ...process.env,
     npm_config_cache: cacheDirs.npm,
     npm_config_store_dir: cacheDirs.pnpmStore,
+    pnpm_config_cache_dir: cacheDirs.pnpmCache,
+    pnpm_config_store_dir: cacheDirs.pnpmStore,
     TMPDIR: cacheDirs.tmp,
     TEMP: cacheDirs.tmp,
     TMP: cacheDirs.tmp,
     XDG_CACHE_HOME: cacheDirs.xdg,
+    XDG_STATE_HOME: cacheDirs.xdgState,
   };
 }
 
