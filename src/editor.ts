@@ -83,7 +83,7 @@ export const tutorTheme = EditorView.theme({
   '.cm-content': { padding: '14px 0', caretColor: 'var(--sig)' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--sig)', borderLeftWidth: '2px' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, ::selection': {
-    backgroundColor: 'var(--sig-soft)',
+    backgroundColor: 'color-mix(in srgb, var(--selection-bg) 32%, transparent)',
   },
   '.cm-gutters': {
     backgroundColor: 'var(--paper-2)',
@@ -110,7 +110,7 @@ export const tutorTheme = EditorView.theme({
     color: 'var(--ink)',
   },
   '.cm-searchMatch': { backgroundColor: 'var(--sig-soft)', outline: '1px solid var(--sig)' },
-  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--sig)', color: 'var(--sig-fg)' },
+  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--selection-bg)', color: 'var(--selection-fg)' },
   '.cm-panels': {
     backgroundColor: 'var(--paper)',
     color: 'var(--ink)',

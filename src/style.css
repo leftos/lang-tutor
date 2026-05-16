@@ -35,6 +35,8 @@
   --sig: #1a1814;
   --sig-soft: rgba(26, 24, 20, 0.08);
   --sig-fg: #f6f3ec;
+  --selection-bg: #1a1814;
+  --selection-fg: #f6f3ec;
 
   --syn-keyword: #8a4d99;
   --syn-string: #2c6d3e;
@@ -63,7 +65,11 @@
   --danger: #f08763;
   --danger-soft: rgba(240, 135, 99, 0.2);
 
+  --sig: #f5f2e6;
+  --sig-soft: rgba(245, 242, 230, 0.16);
   --sig-fg: #16140f;
+  --selection-bg: #f5f2e6;
+  --selection-fg: #16140f;
 
   --syn-keyword: #dcb4ee;
   --syn-string: #98ed9f;
@@ -92,7 +98,11 @@
     --rule-3: rgba(245, 242, 230, 0.42);
     --danger: #f08763;
     --danger-soft: rgba(240, 135, 99, 0.2);
+    --sig: #f5f2e6;
+    --sig-soft: rgba(245, 242, 230, 0.16);
     --sig-fg: #16140f;
+    --selection-bg: #f5f2e6;
+    --selection-fg: #16140f;
 
     --syn-keyword: #dcb4ee;
     --syn-string: #98ed9f;
@@ -182,8 +192,8 @@
     -moz-osx-font-smoothing: grayscale;
   }
   ::selection {
-    background: var(--sig);
-    color: var(--sig-fg);
+    background: var(--selection-bg);
+    color: var(--selection-fg);
   }
   button {
     cursor: pointer;
