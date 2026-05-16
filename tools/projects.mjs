@@ -510,7 +510,7 @@ export default defineConfig({
   plugins: [
     checker({
       typescript: { tsconfigPath: 'jsconfig.json' },
-      biomejs: true,
+      biome: true,
       overlay: { initialIsOpen: false },
       enableBuild: false,
     }),
@@ -760,12 +760,26 @@ You can also build and run from Visual Studio or JetBrains Rider by opening
 
 const SCAFFOLDS = Object.freeze({ web: SCAFFOLD_WEB, csharp: SCAFFOLD_CSHARP });
 
+function migrateWebScaffold(root) {
+  const viteConfig = safeResolve(root, 'vite.config.js');
+  if (!existsSync(viteConfig)) return [];
+
+  const original = readFileSync(viteConfig, 'utf8');
+  const updated = original.replace(/\bbiomejs:\s*true\b/g, 'biome: true');
+  if (updated === original) return [];
+
+  writeFileSync(viteConfig, updated, 'utf8');
+  markSelfWrite(viteConfig);
+  return ['vite.config.js'];
+}
+
 export function ensureScaffold(scope, lang) {
   const root = getProjectRoot(scope, lang);
   const template = SCAFFOLDS[lang];
   if (!template) throw new Error(`no scaffold defined for ${lang}`);
 
   const created = [];
+  const updated = [];
   if (!existsSync(root)) mkdirSync(root, { recursive: true });
 
   for (const [relPath, content] of Object.entries(template)) {
@@ -775,7 +789,8 @@ export function ensureScaffold(scope, lang) {
     writeFileSync(abs, content, 'utf8');
     created.push(relPath);
   }
-  return { root, created };
+  if (lang === 'web') updated.push(...migrateWebScaffold(root));
+  return { root, created, updated };
 }
 
 // ── FS CRUD ─────────────────────────────────────────────────────────────────
@@ -1198,6 +1213,9 @@ export async function startProject(scope, lang) {
   if (scaffold.created.length > 0) {
     pushLog(state, 'system', `Creating ${lang} workspace from template (${scaffold.created.length} files)…`);
     pushLog(state, 'system', 'Workspace ready.');
+  }
+  if (scaffold.updated?.length > 0) {
+    pushLog(state, 'system', `Updated ${lang} workspace config (${scaffold.updated.join(', ')}).`);
   }
   injectBootstrap(scope, lang);
   const cwd = getProjectRoot(scope, lang);
