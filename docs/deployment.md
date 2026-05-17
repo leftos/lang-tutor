@@ -6,8 +6,8 @@ becomes worth automating as a separate bootstrap command.
 
 ## Current Production
 
-- App URL: `https://projects.leftos.dev/lang-tutor/`
-- SSH target: `root@146.190.172.94`
+- App URL: `https://leftos.dev/lang-tutor/`
+- SSH target: `root@146.190.172.94` (tutor droplet; shared with chess-tutor)
 - App user: `lang-tutor`
 - App root: `/opt/lang-tutor`
 - Account database: `/var/lib/lang-tutor/account.sqlite`
@@ -62,19 +62,19 @@ For an uncommitted worktree deployment:
 These are one-time host steps before `.\lt.ps1 deploy -DeployHost root@NEW_IP`
 can succeed.
 
-1. Point DNS for `projects.leftos.dev` at the new droplet IP.
+1. Add Nginx `location ^~ /lang-tutor/` (with `Host: leftos.dev`, `X-Forwarded-Proto https`) on the leftos.dev website droplet so it `proxy_pass`es to the new tutor droplet IP. See the chess-tutor `DROPLET_RUNBOOK.md` "Routing Topology" section for the full picture; lang-tutor uses the same pattern.
 2. Install baseline host tools: Docker Engine, Node 22, pnpm, Caddy, Git, curl,
    and tar.
 3. Create the `lang-tutor` system user and app/state directories.
 4. Create `/etc/lang-tutor/lang-tutor-runtime.conf`.
 5. Create and enable `/etc/systemd/system/lang-tutor.service`.
-6. Configure Caddy to route `/lang-tutor` and `/lang-tutor/*` to port `5190`.
+6. Configure Caddy on the tutor droplet to add `/lang-tutor` + `/lang-tutor/*` handlers under the `http://leftos.dev { ... }` site block, both proxying to `127.0.0.1:5190`. (HTTP-only — DNS for leftos.dev does not point at this droplet, so Caddy's auto-HTTPS is disabled for this site; TLS is terminated by the website droplet upstream.)
 7. Run `.\lt.ps1 deploy -DeployHost root@NEW_IP`.
 8. Verify:
 
 ```powershell
-Invoke-WebRequest https://projects.leftos.dev/lang-tutor -Method Head
-Invoke-WebRequest https://projects.leftos.dev/lang-tutor/ -Method Head
+Invoke-WebRequest https://leftos.dev/lang-tutor -Method Head
+Invoke-WebRequest https://leftos.dev/lang-tutor/ -Method Head
 ```
 
 ## Known-Good Host Files
@@ -139,7 +139,8 @@ systemctl daemon-reload
 systemctl enable lang-tutor.service
 ```
 
-Caddy routing inside the `projects.leftos.dev` site:
+Caddy routing inside the tutor droplet's `http://leftos.dev { ... }` site
+(shared with chess-tutor on port 5184):
 
 ```caddyfile
 handle /lang-tutor {

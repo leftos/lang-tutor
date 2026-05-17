@@ -135,7 +135,7 @@ $env:LANG_TUTOR_BASE_PATH = "/lang-tutor/"
 `server.mjs` accepts requests with or without that prefix, so either
 `handle_path`-style prefix stripping or plain forwarding works.
 
-### Deploy to projects.leftos.dev
+### Deploy to leftos.dev/lang-tutor
 
 The production shortcut is:
 
@@ -165,7 +165,7 @@ Useful deploy arguments:
 - `-DeployHost <ssh-target>` changes the SSH target; default is
   `root@146.190.172.94`.
 - `-DeployUrl <url>` changes the hosted base URL and build base path; default is
-  `https://projects.leftos.dev/lang-tutor`.
+  `https://leftos.dev/lang-tutor`.
 - `-SkipCheck`, `-SkipPush`, and `-SkipSmoke` skip the local gate, branch push,
   or hosted smoke checks respectively.
 

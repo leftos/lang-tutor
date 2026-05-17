@@ -20,7 +20,7 @@
       format     Run biome format --write .
       toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
       install    Run pnpm install.
-      deploy     Deploy an immutable release to projects.leftos.dev/lang-tutor/.
+      deploy     Deploy an immutable release to leftos.dev/lang-tutor/.
       setup      Run scripts/setup.ps1.
       clean      Remove generated build output.
       help       Print the subcommand summary.
@@ -80,7 +80,7 @@ param(
     [switch]$NoBrowser,
     [switch]$SkipInstall,
     [string]$DeployHost = 'root@146.190.172.94',
-    [string]$DeployUrl = 'https://projects.leftos.dev/lang-tutor',
+    [string]$DeployUrl = 'https://leftos.dev/lang-tutor',
     [switch]$SkipCheck,
     [switch]$SkipPush,
     [switch]$Worktree,
@@ -707,7 +707,7 @@ Commands:
 
 Deploy options:
   -DeployHost <ssh>  SSH target. Default: root@146.190.172.94
-  -DeployUrl <url>   Hosted base URL. Default: https://projects.leftos.dev/lang-tutor
+  -DeployUrl <url>   Hosted base URL. Default: https://leftos.dev/lang-tutor
   -SkipCheck         Skip the local type-check/build gate before deploy.
   -SkipPush          Do not push before archiving HEAD.
   -Worktree          Deploy local tracked and untracked worktree files instead of HEAD; skips git push.

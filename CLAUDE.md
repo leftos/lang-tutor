@@ -44,7 +44,7 @@ pnpm install                # first time
 .\lt.ps1 typecheck          # tsc --noEmit
 .\lt.ps1 lint               # biome check --write .
 .\lt.ps1 toolchain          # build lang-tutor-toolchains:latest for /run
-.\lt.ps1 deploy             # deploy an immutable release to projects.leftos.dev/lang-tutor/
+.\lt.ps1 deploy             # deploy an immutable release to leftos.dev/lang-tutor/
 ```
 
 `.env` holds **runtime config** only — provider API keys are entered in the browser via the AI Provider dialog and persist to `localStorage`. The interesting env vars are in `.env.example`: `PORT`, `LANG_TUTOR_BASE_PATH`, `LANG_TUTOR_REQUIRE_AUTH`, `LANG_TUTOR_SECURE_COOKIES`, `LANG_TUTOR_DB_FILE`, `LANG_TUTOR_RUN_ROOT`, `LANG_TUTOR_TOOLCHAIN_IMAGE`. Auth is off in local dev (`LANG_TUTOR_REQUIRE_AUTH=false`) and on for the hosted droplet.
