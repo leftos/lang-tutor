@@ -79,7 +79,7 @@ param(
 
     [switch]$NoBrowser,
     [switch]$SkipInstall,
-    [string]$DeployHost = 'root@146.190.172.94',
+    [string]$DeployHost = 'root@24.199.111.154',
     [string]$DeployUrl = 'https://leftos.dev/lang-tutor',
     [switch]$SkipCheck,
     [switch]$SkipPush,
@@ -706,7 +706,7 @@ Commands:
   help       This message.
 
 Deploy options:
-  -DeployHost <ssh>  SSH target. Default: root@146.190.172.94
+  -DeployHost <ssh>  SSH target. Default: root@24.199.111.154
   -DeployUrl <url>   Hosted base URL. Default: https://leftos.dev/lang-tutor
   -SkipCheck         Skip the local type-check/build gate before deploy.
   -SkipPush          Do not push before archiving HEAD.

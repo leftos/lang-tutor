@@ -163,7 +163,7 @@ Useful deploy arguments:
   `HEAD`; use it for staging uncommitted changes. It automatically skips
   `git push`.
 - `-DeployHost <ssh-target>` changes the SSH target; default is
-  `root@146.190.172.94`.
+  `root@24.199.111.154`.
 - `-DeployUrl <url>` changes the hosted base URL and build base path; default is
   `https://leftos.dev/lang-tutor`.
 - `-SkipCheck`, `-SkipPush`, and `-SkipSmoke` skip the local gate, branch push,

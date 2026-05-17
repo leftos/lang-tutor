@@ -7,7 +7,7 @@ becomes worth automating as a separate bootstrap command.
 ## Current Production
 
 - App URL: `https://leftos.dev/lang-tutor/`
-- SSH target: `root@146.190.172.94` (tutor droplet; shared with chess-tutor)
+- SSH target: `root@24.199.111.154` (dedicated lang-tutor droplet, `lang-tutor-1` in DO)
 - App user: `lang-tutor`
 - App root: `/opt/lang-tutor`
 - Account database: `/var/lib/lang-tutor/account.sqlite`
@@ -62,7 +62,7 @@ For an uncommitted worktree deployment:
 These are one-time host steps before `.\lt.ps1 deploy -DeployHost root@NEW_IP`
 can succeed.
 
-1. Add Nginx `location ^~ /lang-tutor/` (with `Host: leftos.dev`, `X-Forwarded-Proto https`) on the leftos.dev website droplet so it `proxy_pass`es to the new tutor droplet IP. See the chess-tutor `DROPLET_RUNBOOK.md` "Routing Topology" section for the full picture; lang-tutor uses the same pattern.
+1. Add Nginx `location ^~ /lang-tutor/` (with `Host: leftos.dev`, `X-Forwarded-Proto https`) on the leftos.dev website droplet (`143.198.231.175`) so it `proxy_pass`es to the new tutor droplet IP. See `server-setup.sh` in the `leftos.dev` repo for the canonical block (it has the right `proxy_set_header Host leftos.dev` and `X-Forwarded-Proto https` headers so Caddy on this droplet routes correctly).
 2. Install baseline host tools: Docker Engine, Node 22, pnpm, Caddy, Git, curl,
    and tar.
 3. Create the `lang-tutor` system user and app/state directories.
@@ -140,14 +140,25 @@ systemctl enable lang-tutor.service
 ```
 
 Caddy routing inside the tutor droplet's `http://leftos.dev { ... }` site
-(shared with chess-tutor on port 5184):
+(lang-tutor is the only app on this droplet; `auto_https off` because the
+website droplet upstream terminates TLS):
 
 ```caddyfile
-handle /lang-tutor {
-	reverse_proxy 127.0.0.1:5190
+{
+    auto_https off
 }
-handle /lang-tutor/* {
-	reverse_proxy 127.0.0.1:5190
+
+http://leftos.dev {
+    handle /lang-tutor {
+        reverse_proxy 127.0.0.1:5190
+    }
+    handle /lang-tutor/* {
+        reverse_proxy 127.0.0.1:5190
+    }
+
+    handle {
+        respond 404
+    }
 }
 ```
 
