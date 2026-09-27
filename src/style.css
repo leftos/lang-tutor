@@ -1185,6 +1185,66 @@
   }
 }
 
+/* ─── Rewind: Edit & resend control, banner and Undo notice ─── */
+.msg-block.has-rewind {
+  position: relative;
+}
+.msg-rewind-btn {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  padding: 3px 8px;
+  background: var(--paper);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.msg-block.has-rewind:hover .msg-rewind-btn,
+.msg-rewind-btn:focus-visible {
+  opacity: 1;
+}
+.msg-rewind-btn:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 2px;
+}
+@media (hover: none) {
+  .msg-rewind-btn {
+    opacity: 1;
+  }
+}
+.msg-block.is-rewind-dropped {
+  opacity: 0.45;
+}
+.rewind-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 24px 0;
+  padding: 7px 10px;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-mute);
+  background: var(--paper-2);
+  border: 1px solid var(--rule-2);
+  border-radius: 1px;
+}
+.rewind-bar.is-editing {
+  color: var(--ink);
+  border-left: 2px solid var(--sig);
+  background: var(--sig-soft);
+}
+.rewind-bar > .ti {
+  font-size: 14px;
+  color: var(--sig);
+}
+.rewind-bar-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rewind-bar .ghost-btn {
+  flex: 0 0 auto;
+}
+
 /* ─── Chat attachment chip (single-slot above input) ─────── */
 .chat-attachment {
   display: flex;

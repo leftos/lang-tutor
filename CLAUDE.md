@@ -65,6 +65,7 @@ src/
   main.ts            Entry: state, session control, language switching, event wiring, init
   appUrls.ts         appUrl()/appWsUrl() — prepends Vite BASE_URL so the app works under /lang-tutor/
   api.ts             callClaude (streaming, provider-aware) + fetchMemoryExtraction (progress + profile delta in one call)
+  rewind.ts          Pure chat-rewind logic (rewindAt / undoRewind) + the Send-to-tutor bundle parser shared with the chat renderer (unit-tested)
   learnerMemory.ts   Pure merge rules for learner memory: profile v1→v2 migration, profile deltas, user add/remove, progress merge, extraction validation (unit-tested)
   modelResolution.ts Auto model resolution (newest family member from the live list) + FALLBACK_MODELS (unit-tested)
   authClient.ts      AI provider–independent account auth: register / login / logout / session refresh + CSRF
@@ -271,6 +272,7 @@ Tailwind v4 utilities for layout, plus component classes in `src/style.css` (`.b
 ## Gotchas
 
 - `extractMemory()` runs one extraction at a time; a request during a run sets `rerunRequested` for one trailing rerun. Progress from a run that outlived a language switch is dropped via the `langWhenStarted` check; its profile delta still applies.
+- **Edit & resend** (rewind): each user message can be edited and resent; on send, it and every later message leave `history`, and a Send-to-tutor bundle is re-captured fresh from the current editor with the input as its note. Each user message stores `progressBefore` (the language's progress snapshot at send time), restored on rewind; the learner profile is not rolled back. Undo lasts until the next send or a language switch. `progressBefore` never reaches a provider: every request maps messages to `role` + `content` only. A `historyGeneration` counter drops progress from an extraction that started before a rewind. History is persisted only after a successful reply, so a failed resend leaves the rewound history on disk.
 - `history` is sliced to the last `MAX_HISTORY` (30) entries on every persist; older context is gone from `localStorage` but may still be in memory for the current session until reload.
 - Refreshing the page restores the last active language and its full visible history.
 - The Reset button wipes only the **active** language's history, progress, and either code (single-buffer) or the user's workspace folder (project workspaces, via `POST /proj/reset` — confirmation dialog calls out the destructive on-disk delete). Switch language first if you want to reset a different one.

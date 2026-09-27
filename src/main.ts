@@ -71,6 +71,7 @@ import {
   storeProviderModels,
 } from './providerSettings';
 import { renderMarkdown, renderPlainWithFences } from './render';
+import { type BundleBlock, isBundleMessage, isBundleText, noteOf, parseBundleBlocks, primaryText, rewindAt, undoRewind } from './rewind';
 import { runCode } from './runners';
 import { hydrateStorageFromDisk, markResetEpoch, storageDelete, storageDeleteKeys, storageGet, storageSet } from './storage';
 import type {
@@ -113,6 +114,10 @@ let rerunRequested = false;
 /** Languages whose sessionCount has already been bumped during this page load. */
 const sessionCountedLangs = new Set<LanguageId>();
 let isSending = false;
+/** True while a Send-to-tutor path captures its context, before `isSending` is set by the send itself. */
+let isPreparing = false;
+/** Bumped by every rewind and undo, so a memory extraction that started before one drops its progress result. */
+let historyGeneration = 0;
 let focusMode = false;
 let editor: TutorEditor;
 let authSession: AccountSession | null = null;
@@ -1115,34 +1120,40 @@ function addTutorBackToTop(block: HTMLElement): void {
   block.appendChild(actions);
 }
 
-function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[]): void {
+function renderMessageContent(body: HTMLElement, role: 'user' | 'assistant', content: string | ContentBlock[]): void {
+  if (typeof content === 'string') {
+    body.appendChild(role === 'user' ? renderPlainWithFences(content) : renderMarkdown(content));
+    return;
+  }
+  for (const blk of content) {
+    if (blk.type === 'text') {
+      body.appendChild(role === 'user' ? renderPlainWithFences(blk.text) : renderMarkdown(blk.text));
+    } else {
+      body.appendChild(renderImageAttachment(blk));
+    }
+  }
+}
+
+/**
+ * Appends one chat message. `historyIndex` is the message's index in `history` for a user message
+ * (it gets an Edit & resend control), or `null` for a tutor message.
+ */
+function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[], historyIndex: number | null): void {
   const msgList = el('msgList');
   const bl = div('msg-block');
   const lbl = div('msg-label');
   lbl.textContent = role === 'user' ? 'you' : 'tutor';
   const body = div(role === 'user' ? 'msg-you' : 'msg-ai');
 
-  if (role === 'user' && tryRenderUserBundle(body, content)) {
-    bl.appendChild(lbl);
-    bl.appendChild(body);
-    msgList.appendChild(bl);
-    msgList.scrollTop = msgList.scrollHeight;
-    return;
-  }
-
-  if (typeof content === 'string') {
-    body.appendChild(role === 'user' ? renderPlainWithFences(content) : renderMarkdown(content));
-  } else {
-    for (const blk of content) {
-      if (blk.type === 'text') {
-        body.appendChild(role === 'user' ? renderPlainWithFences(blk.text) : renderMarkdown(blk.text));
-      } else {
-        body.appendChild(renderImageAttachment(blk));
-      }
-    }
-  }
+  const isBundle = role === 'user' && tryRenderUserBundle(body, content);
+  if (!isBundle) renderMessageContent(body, role, content);
   bl.appendChild(lbl);
   bl.appendChild(body);
+  if (historyIndex !== null) {
+    bl.classList.add('has-rewind');
+    bl.dataset.historyIndex = String(historyIndex);
+    bl.appendChild(rewindButton(historyIndex));
+  }
   if (role === 'assistant') addTutorBackToTop(bl);
   msgList.appendChild(bl);
   msgList.scrollTop = msgList.scrollHeight;
@@ -1153,8 +1164,6 @@ function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[])
 // `[NOTE]\n…\n\n[CODE]\n```…```\n\n[OUTPUT]\n…` etc. Render the note inline
 // (it's the student's actual question) and stash everything else under one chevron.
 
-const BUNDLE_TAG_PATTERN = /^\[(NOTE|CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|COMPILER FLAGS|SCREENSHOT)\]\n/;
-const BUNDLE_NON_NOTE_PATTERN = /\[(?:CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|COMPILER FLAGS|SCREENSHOT)\]\n/;
 const BUNDLE_TAG_LABEL: Record<string, string> = {
   CODE: 'code',
   OUTPUT: 'output',
@@ -1167,27 +1176,6 @@ const BUNDLE_TAG_LABEL: Record<string, string> = {
   'COMPILER FLAGS': 'compiler flags',
   SCREENSHOT: 'screenshot status',
 };
-
-interface BundleBlock {
-  tag: string;
-  body: string;
-}
-
-function isBundleText(text: string): boolean {
-  return BUNDLE_TAG_PATTERN.test(text) && BUNDLE_NON_NOTE_PATTERN.test(text);
-}
-
-function parseBundleBlocks(text: string): BundleBlock[] {
-  const blocks: BundleBlock[] = [];
-  const re = /\[([A-Z][A-Z ]*)\]\n([\s\S]*?)(?=\n\n\[[A-Z][A-Z ]*\]\n|$)/g;
-  for (const m of text.matchAll(re)) {
-    const tag = m[1] ?? '';
-    const body = (m[2] ?? '').trimEnd();
-    if (tag === '') continue;
-    blocks.push({ tag, body });
-  }
-  return blocks;
-}
 
 function bundleSummaryText(blocks: BundleBlock[], imageCount: number): string {
   const labels: string[] = [];
@@ -1202,7 +1190,7 @@ function bundleSummaryText(blocks: BundleBlock[], imageCount: number): string {
 }
 
 function tryRenderUserBundle(body: HTMLElement, content: string | ContentBlock[]): boolean {
-  const text = typeof content === 'string' ? content : (content.find((b): b is TextBlock => b.type === 'text')?.text ?? '');
+  const text = primaryText({ role: 'user', content });
   if (!isBundleText(text)) return false;
 
   const images: ImageBlock[] = typeof content === 'string' ? [] : content.filter((b): b is ImageBlock => b.type === 'image');
@@ -1319,7 +1307,7 @@ function appendErrorMsg(text: string, onRetry: () => void): void {
   retryBtn.className = 'retry-btn';
   retryBtn.textContent = 'Retry';
   retryBtn.addEventListener('click', () => {
-    if (isSending) return;
+    if (isBusy()) return;
     bl.remove();
     onRetry();
   });
@@ -1401,12 +1389,43 @@ function initChatTextSelection(): void {
   });
 }
 
+/** True while a Send-to-tutor capture, a send or a reply stream is in progress. */
+function isBusy(): boolean {
+  return isSending || isPreparing;
+}
+
+/** Derives every send and rewind control's disabled state from `isBusy()`. */
+function applyBusyState(): void {
+  const busy = isBusy();
+  el<HTMLTextAreaElement>('chatInput').disabled = busy;
+  el<HTMLButtonElement>('sendBtn').disabled = busy;
+  el<HTMLButtonElement>('evalBtn').disabled = busy || history.length === 0;
+  el<HTMLButtonElement>('projEvalBtn').disabled = busy || history.length === 0;
+  for (const button of document.querySelectorAll<HTMLButtonElement>('.msg-rewind-btn, #rewindUndoBtn, #rewindCancelBtn')) {
+    button.disabled = busy;
+  }
+}
+
 function setSendingState(sending: boolean): void {
   isSending = sending;
-  el<HTMLTextAreaElement>('chatInput').disabled = sending;
-  el<HTMLButtonElement>('sendBtn').disabled = sending;
-  el<HTMLButtonElement>('evalBtn').disabled = sending || history.length === 0;
-  el<HTMLButtonElement>('projEvalBtn').disabled = sending || history.length === 0;
+  applyBusyState();
+}
+
+/**
+ * Runs a Send-to-tutor evaluate path with the busy state held from the start of its capture
+ * (snapshot, logs, screenshot) until its reply finishes or fails, so no second bundle or rewind can start.
+ */
+async function runEvaluate(evaluate: () => Promise<void>): Promise<void> {
+  if (isBusy()) return;
+  isPreparing = true;
+  applyBusyState();
+  try {
+    await evaluate();
+  } finally {
+    isPreparing = false;
+    applyBusyState();
+    el<HTMLTextAreaElement>('chatInput').focus();
+  }
 }
 
 // ── Start screen ──────────────────────────────────────────────────────────
@@ -1456,7 +1475,7 @@ function renderChatView(): void {
   msgList.textContent = '';
 
   if (history.length > 0) {
-    for (const msg of history) appendMsg(msg.role, msg.content);
+    for (const [i, msg] of history.entries()) appendMsg(msg.role, msg.content, msg.role === 'user' ? i : null);
     el('inputRow').style.display = 'flex';
     el('resetBtn').style.display = 'inline-flex';
   } else {
@@ -1464,12 +1483,225 @@ function renderChatView(): void {
     el('inputRow').style.display = 'none';
     el('resetBtn').style.display = 'none';
   }
-  el<HTMLButtonElement>('evalBtn').disabled = isSending || history.length === 0;
-  el<HTMLButtonElement>('projEvalBtn').disabled = isSending || history.length === 0;
+  el<HTMLButtonElement>('evalBtn').disabled = isBusy() || history.length === 0;
+  el<HTMLButtonElement>('projEvalBtn').disabled = isBusy() || history.length === 0;
 }
 
 type SingleOutputTab = 'output' | 'errors' | 'dasm';
 type DasmLayout = 'split' | 'tab';
+// ── Rewind: edit & resend an earlier user message ────────────────────────
+// Clicking Edit & resend puts the chat into rewind mode for that message; nothing is removed until
+// the learner sends. The send removes the message and everything after it, rolls lesson progress back
+// to the message's snapshot, and offers Undo (kept in memory only) until the next send.
+
+interface RewindTarget {
+  index: number;
+  /** A Send-to-tutor bundle is resent through the evaluate path, capturing code and output fresh. */
+  bundle: boolean;
+  hasSnapshot: boolean;
+  /** The chat input's text before rewind mode filled it, restored on Cancel. */
+  draft: string;
+}
+
+interface RewindUndo {
+  lang: LanguageId;
+  keptLength: number;
+  removed: Message[];
+  progress: Progress | null;
+}
+
+let rewindTarget: RewindTarget | null = null;
+let rewindUndo: RewindUndo | null = null;
+
+function progressSnapshot(): Progress | null {
+  return progress === null ? null : structuredClone(progress);
+}
+
+function setProgress(next: Progress | null): void {
+  progress = next;
+  if (next === null) {
+    storageDelete(progressKey(activeLang));
+  } else {
+    storageSet(progressKey(activeLang), next);
+  }
+}
+
+function renderProgressViews(): void {
+  renderProgressTab();
+  renderChapterStrip();
+  renderLanguageRail();
+  updateProgCount();
+}
+
+function rewindButton(index: number): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'ghost-btn msg-rewind-btn';
+  button.setAttribute('aria-label', 'Edit and resend this message');
+  button.title = 'Edit and resend this message';
+  button.disabled = isBusy();
+  const icon = document.createElement('i');
+  icon.className = 'ti ti-arrow-back-up';
+  icon.setAttribute('aria-hidden', 'true');
+  button.appendChild(icon);
+  button.appendChild(document.createTextNode('Edit & resend'));
+  button.addEventListener('click', () => enterRewindMode(index));
+  return button;
+}
+
+/** Dims the target message and everything after it; `null` clears the marking. */
+function markRewindBlocks(index: number | null): void {
+  let dropping = false;
+  for (const block of el('msgList').querySelectorAll<HTMLElement>('.msg-block')) {
+    if (index !== null && block.dataset.historyIndex === String(index)) dropping = true;
+    block.classList.toggle('is-rewind-dropped', dropping);
+  }
+}
+
+function rewindBannerText(target: RewindTarget): string {
+  const action = target.bundle
+    ? 'Resend with your current code. This message and everything after it will be removed.'
+    : 'Editing an earlier message. Sending removes it and everything after it.';
+  return target.hasSnapshot ? action : `${action} Lesson progress can't be rolled back for this message.`;
+}
+
+function renderRewindBanner(): void {
+  const slot = el('rewindBanner');
+  slot.textContent = '';
+  if (rewindTarget === null) {
+    slot.style.display = 'none';
+    return;
+  }
+  const icon = document.createElement('i');
+  icon.className = 'ti ti-arrow-back-up';
+  icon.setAttribute('aria-hidden', 'true');
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.id = 'rewindCancelBtn';
+  cancel.className = 'ghost-btn';
+  cancel.textContent = 'Cancel';
+  cancel.disabled = isBusy();
+  cancel.setAttribute('aria-label', 'Cancel editing and keep the conversation');
+  cancel.addEventListener('click', () => cancelRewindMode(true));
+  slot.append(icon, span(rewindBannerText(rewindTarget), 'rewind-bar-text'), cancel);
+  slot.style.display = 'flex';
+}
+
+function enterRewindMode(index: number): void {
+  const message = history[index];
+  if (message === undefined || message.role !== 'user' || isBusy()) return;
+  const input = el<HTMLTextAreaElement>('chatInput');
+  const draft = rewindTarget?.draft ?? input.value;
+  const bundle = isBundleMessage(message);
+  rewindTarget = { index, bundle, hasSnapshot: message.progressBefore !== undefined, draft };
+  input.value = bundle ? noteOf(message) : primaryText(message);
+  markRewindBlocks(index);
+  renderRewindBanner();
+  input.focus();
+}
+
+function cancelRewindMode(restoreDraft: boolean): void {
+  if (rewindTarget === null) return;
+  if (restoreDraft) el<HTMLTextAreaElement>('chatInput').value = rewindTarget.draft;
+  rewindTarget = null;
+  markRewindBlocks(null);
+  renderRewindBanner();
+}
+
+function renderRewindUndo(): void {
+  const slot = el('rewindUndo');
+  slot.textContent = '';
+  if (rewindUndo === null || rewindUndo.lang !== activeLang) {
+    slot.style.display = 'none';
+    return;
+  }
+  const undo = document.createElement('button');
+  undo.type = 'button';
+  undo.id = 'rewindUndoBtn';
+  undo.className = 'ghost-btn';
+  undo.textContent = 'Undo';
+  undo.setAttribute('aria-label', 'Undo the rewind and restore the removed messages');
+  undo.disabled = isBusy();
+  undo.addEventListener('click', undoLastRewind);
+  slot.append(span('Conversation rewound.', 'rewind-bar-text'), undo);
+  slot.style.display = 'flex';
+}
+
+function dismissRewindUndo(): void {
+  rewindUndo = null;
+  renderRewindUndo();
+}
+
+/** Applies a rewind: removes the target and everything after it, and rolls progress back to its snapshot. */
+function commitRewind(target: RewindTarget): void {
+  const { kept, removed, progressBefore } = rewindAt(history, target.index);
+  rewindUndo = { lang: activeLang, keptLength: kept.length, removed, progress };
+  history = kept;
+  historyGeneration += 1;
+  if (progressBefore !== undefined) setProgress(progressBefore);
+  storageSet(historyKey(activeLang), history.slice(-MAX_HISTORY));
+  rewindTarget = null;
+  renderRewindBanner();
+  renderChatView();
+  if (history.length === 0) {
+    document.getElementById('startScreen')?.remove();
+    el('inputRow').style.display = 'flex';
+    el('resetBtn').style.display = 'inline-flex';
+  }
+  renderProgressViews();
+  renderRewindUndo();
+}
+
+/** Restores the messages and progress a rewind removed, discarding the exchange sent since. */
+function undoLastRewind(): void {
+  const undo = rewindUndo;
+  if (undo === null || isBusy() || undo.lang !== activeLang) return;
+  cancelRewindMode(true);
+  history = undoRewind(history, undo.keptLength, undo.removed);
+  historyGeneration += 1;
+  setProgress(undo.progress);
+  storageSet(historyKey(activeLang), history.slice(-MAX_HISTORY));
+  dismissRewindUndo();
+  renderChatView();
+  renderProgressViews();
+}
+
+async function resendFromRewind(mode: 'chat' | 'evaluate'): Promise<void> {
+  const target = rewindTarget;
+  if (target === null || isBusy()) return;
+  const text = el<HTMLTextAreaElement>('chatInput').value;
+  const evaluate = mode === 'evaluate' || target.bundle;
+  if (!evaluate && text.trim() === '') return;
+  commitRewind(target);
+  if (!evaluate) {
+    await sendMessage(text);
+    return;
+  }
+  await runEvaluate(isSingleBufferLanguage(getLanguage(activeLang)) ? evaluateCode : evaluateProjectCode);
+}
+
+/** Send button and Enter: a normal chat send, or the resend when rewind mode is on. */
+function submitChat(): void {
+  if (rewindTarget !== null) {
+    void resendFromRewind('chat');
+    return;
+  }
+  if (isBusy() || el<HTMLTextAreaElement>('chatInput').value.trim() === '') return;
+  dismissRewindUndo();
+  void sendMessage(el<HTMLTextAreaElement>('chatInput').value);
+}
+
+/** Send-to-tutor buttons: a normal evaluate, or the resend when rewind mode is on. */
+function submitEvaluate(evaluate: () => Promise<void>): void {
+  if (rewindTarget !== null) {
+    void resendFromRewind('evaluate');
+    return;
+  }
+  if (isBusy()) return;
+  dismissRewindUndo();
+  void runEvaluate(evaluate);
+}
+
 const DASM_LAYOUT_KEY = 'lang-tutor:dasm:disasm-layout';
 type ProblemSeverity = 'error' | 'warning' | 'info';
 type ProblemSource = 'output' | 'diagnostic';
@@ -2679,6 +2911,7 @@ function countSessionOnce(): void {
 
 async function runMemoryExtraction(): Promise<void> {
   const langWhenStarted = activeLang;
+  const generationWhenStarted = historyGeneration;
   const lang = getLanguage(langWhenStarted);
   const extracted = await fetchMemoryExtraction(history, lang.topics, progress, learnerProfile, lang.name);
   if (extracted === null) return;
@@ -2687,7 +2920,8 @@ async function runMemoryExtraction(): Promise<void> {
   learnerProfile = applyProfileDelta(learnerProfile, extracted.profileDelta, langWhenStarted, now);
   storageSet(LEARNER_PROFILE_KEY, learnerProfile);
 
-  if (langWhenStarted === activeLang) {
+  // A rewind or undo since the extraction started makes its progress stale; the profile delta still applies.
+  if (langWhenStarted === activeLang && generationWhenStarted === historyGeneration) {
     const merged = mergeProgress(progress, extracted.progress, lang.topics);
     const [date] = now.split('T');
     progress = { ...merged, sessionCount: merged.sessionCount ?? 1, lastSeen: date ?? '' };
@@ -2747,7 +2981,7 @@ async function streamReply(lastMessageOverride?: Message): Promise<{ ok: boolean
 
   removeThinking();
   if (result.ok) {
-    appendMsg('assistant', result.text);
+    appendMsg('assistant', result.text, null);
   } else {
     appendErrorMsg(result.text, () => void deliverReply(lastMessageOverride));
   }
@@ -2776,7 +3010,7 @@ async function startSession(): Promise<void> {
   const initMsg = `Hello! I'd like to start a ${lang.name} tutoring session.`;
   refreshSystemPrompt();
   countSessionOnce();
-  history.push({ role: 'user', content: initMsg });
+  history.push({ role: 'user', content: initMsg, progressBefore: progressSnapshot() });
 
   await deliverReply();
 }
@@ -2818,8 +3052,8 @@ async function sendMessage(text: string, attachment?: ScreenshotPair | null): Pr
     storedContent = text;
   }
 
-  history.push({ role: 'user', content: storedContent });
-  appendMsg('user', storedContent);
+  history.push({ role: 'user', content: storedContent, progressBefore: progressSnapshot() });
+  appendMsg('user', storedContent, history.length - 1);
   if (consumePending && pendingAttachment !== null) setChatAttachment(null);
   countSessionOnce();
 
@@ -3569,6 +3803,8 @@ async function resetCurrentProjectFiles(): Promise<void> {
 
 // ── Language switching ────────────────────────────────────────────────────
 function loadLanguageState(id: LanguageId): void {
+  cancelRewindMode(true);
+  dismissRewindUndo();
   activeLang = id;
   storageSet(ACTIVE_LANG_KEY, activeLang);
   document.documentElement.setAttribute('data-lang', activeLang);
@@ -3861,15 +4097,18 @@ function makeDebouncedCodeSaver(): (doc: string) => void {
 el('tabChatBtn').addEventListener('click', () => switchTab('chat'));
 el('tabProgBtn').addEventListener('click', () => switchTab('progress'));
 el('tabProfileBtn').addEventListener('click', () => switchTab('profile'));
-el('sendBtn').addEventListener('click', () => void sendMessage(el<HTMLTextAreaElement>('chatInput').value));
+el('sendBtn').addEventListener('click', submitChat);
 el<HTMLTextAreaElement>('chatInput').addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    void sendMessage(el<HTMLTextAreaElement>('chatInput').value);
+    submitChat();
+  } else if (e.key === 'Escape' && rewindTarget !== null) {
+    e.preventDefault();
+    cancelRewindMode(true);
   }
 });
 el('runBtn').addEventListener('click', () => void runActiveCode());
-el('evalBtn').addEventListener('click', () => void evaluateCode());
+el('evalBtn').addEventListener('click', () => submitEvaluate(evaluateCode));
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-focus-mode-toggle]')) {
   button.addEventListener('click', () => setFocusMode(!focusMode));
 }
@@ -3887,7 +4126,7 @@ el('dasmTabBtn').addEventListener('click', () => setSingleOutputTab('dasm'));
 el('dasmLayoutBtn').addEventListener('click', () => {
   toggleDasmLayout();
 });
-el('projEvalBtn').addEventListener('click', () => void evaluateProjectCode());
+el('projEvalBtn').addEventListener('click', () => submitEvaluate(evaluateProjectCode));
 el('projResetFilesBtn').addEventListener('click', openProjectResetDialog);
 el('confirmProjectResetBtn').addEventListener('click', () => void resetCurrentProjectFiles());
 el('projectResetDialog').addEventListener('close', () => {

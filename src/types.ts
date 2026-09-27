@@ -86,6 +86,12 @@ export type ContentBlock = TextBlock | ImageBlock;
 export interface Message {
   role: 'user' | 'assistant';
   content: string | ContentBlock[];
+  /**
+   * The language's lesson progress just before this user message was sent (`null` when there was none yet),
+   * restored when the conversation is rewound to this message. Absent on messages saved before snapshots existed.
+   * Never sent to a provider: request builders map messages to `role` and `content` only.
+   */
+  progressBefore?: Progress | null;
 }
 
 export interface ClaudeResponse {
