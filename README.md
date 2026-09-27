@@ -192,8 +192,10 @@ Switching language saves the current editor content, then loads everything for t
 
 Both use the selected browser-side provider:
 
-1. `callClaude()` — the tutoring conversation. Uses a system prompt built from the active language's `systemPromptIntro`, lesson plan, strengths, struggles, and resume context.
-2. `fetchProgressExtraction()` — fires after each `evaluateCode()`. Sends the last 14 messages with a strict JSON-output prompt; the result is merged with prior progress and persisted under the active language's key.
+1. `callClaude()` — the tutoring conversation. Uses a system prompt built from the active language's `systemPromptIntro`, lesson plan, resume context and the shared learner profile.
+2. `fetchMemoryExtraction()` — runs after each turn on a cheaper model. One JSON reply updates the active language's progress and proposes additions or removals for the learner profile; code merges both (topics only advance, lists are deduped and capped, facts you added are never removed by a tutor).
+
+The **Profile** tab shows everything the tutors have noted about you across languages; you can remove any fact or add your own.
 
 ### Code execution
 

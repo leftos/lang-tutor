@@ -9,6 +9,7 @@
     "prebuild": "node scripts/copy-html-to-image.mjs",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "biome check --write .",
     "preview": "vite preview",
     "serve": "node --env-file=.env server.mjs",
@@ -22,10 +23,10 @@
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.8.0",
-    "vite": "^7.0.0"
+    "vite": "^7.0.0",
+    "vitest": "5.0.2"
   },
   "dependencies": {
-    "@node-rs/argon2": "2.0.2",
     "@codemirror/autocomplete": "^6.20.2",
     "@codemirror/commands": "^6.10.3",
     "@codemirror/lang-cpp": "^6.0.3",
@@ -43,6 +44,7 @@
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.42.1",
     "@lezer/highlight": "^1.2.3",
+    "@node-rs/argon2": "2.0.2",
     "@replit/codemirror-lang-csharp": "6.2.0",
     "chokidar": "^5.0.0",
     "cookie": "1.1.1",

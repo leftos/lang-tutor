@@ -839,11 +839,15 @@
   padding: 0 24px;
   gap: 28px;
   flex-shrink: 0;
+  /* Three tabs no longer fit the 320px floor the resize handle clamps to. */
+  overflow-x: auto;
 }
 .aside-tab {
   display: flex;
   align-items: baseline;
   gap: 7px;
+  flex-shrink: 0;
+  white-space: nowrap;
   padding: 12px 0 11px;
   font-family: var(--font-display);
   font-size: 13px;
@@ -1593,6 +1597,125 @@
   color: var(--rule-3);
   margin-bottom: 10px;
   font-style: normal;
+}
+
+/* ─── Profile tab ────────────────────────────────────────── */
+.profile-lead {
+  display: block;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-mute);
+  margin-bottom: 24px;
+}
+
+.profile-empty {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-mute);
+  text-align: center;
+  padding: 34px 20px 38px;
+}
+
+.profile-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.profile-chip {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  border: 1px solid var(--rule-2);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.profile-fact {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--rule);
+}
+.profile-fact-text {
+  flex: 1;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.profile-fact-badge {
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.profile-fact-badge.is-user {
+  color: var(--sig-fg);
+  background: var(--sig);
+  border-color: var(--sig);
+}
+.profile-fact-remove {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-mute);
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.profile-fact-remove:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.profile-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.profile-add-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--rule-2);
+  padding: 5px 2px;
+}
+.profile-add-input::placeholder {
+  color: var(--ink-mute);
+  font-style: italic;
+}
+.profile-add-input:focus {
+  outline: none;
+  border-bottom-color: var(--sig);
+}
+.profile-add-msg {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  font-style: italic;
+  color: var(--danger);
 }
 
 /* ─── Main column ────────────────────────────────────────── */

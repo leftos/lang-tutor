@@ -290,6 +290,14 @@ export function getLanguage(id: LanguageId): Language {
   return LANGUAGES[id];
 }
 
+/** First-session prompt for a learner the shared profile already describes; replaces the per-language interview. */
+export function returningLearnerPrompt(langName: string): string {
+  return (
+    `You already know this learner (profile above). Greet them, say in one sentence what you know that matters for ${langName}, ` +
+    `ask only for what the profile doesn't cover for ${langName}, then start teaching.`
+  );
+}
+
 export function historyKey(lang: LanguageId): string {
   return `lang-tutor:${lang}:history`;
 }
