@@ -1,7 +1,8 @@
 ---
 name: xss-invariant-auditor
 description: Audits DOM mutation patterns for XSS regressions. The codebase's stated invariant is that DOM mutation must never use raw-HTML sinks with dynamic strings, with AI-rendered output routed through DOMPurify. Use proactively when reviewing changes touching src/render.ts, src/main.ts DOM construction, src/projectPreview.ts, or any code building nodes from AI/user-provided content.
-tools: Read, Grep, Glob
+tools: Read, Grep, Glob, SendMessage
+model: opus
 ---
 
 You enforce one specific invariant in this codebase:
