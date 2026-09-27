@@ -6,7 +6,7 @@
  * range is non-empty. Shift-Tab outdents the selected lines.
  */
 
-import { acceptCompletion } from '@codemirror/autocomplete';
+import { acceptCompletion, completionStatus } from '@codemirror/autocomplete';
 import { indentLess, indentMore } from '@codemirror/commands';
 import { indentUnit } from '@codemirror/language';
 import type { Command, KeyBinding } from '@codemirror/view';
@@ -22,6 +22,8 @@ export function makeTabBinding(accept: Command): TabBinding {
   const run: Command = (view) => {
     if (accept(view)) return true;
     const { state } = view;
+    // A popup that just opened or is refreshing ignores keys for a moment; never let Tab fall through to indenting then.
+    if (completionStatus(state) !== null) return true;
     if (state.readOnly) return false;
     if (state.selection.ranges.some((range) => !range.empty)) return indentMore(view);
     view.dispatch(state.update(state.replaceSelection(state.facet(indentUnit)), { userEvent: 'input.indent' }));
