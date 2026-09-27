@@ -45,6 +45,7 @@ import {
   lspPositionToOffset,
   lspSignatureHelpExtension,
 } from './lspEditor';
+import { cmDiagnosticsToLsp } from './outputProblems';
 import type { SingleBufferLanguageId } from './types';
 
 const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
@@ -285,7 +286,17 @@ export function createEditor(opts: EditorOptions): TutorEditor {
     });
   };
 
-  const lintSource = linter(async (v) => fetchDiagnostics(currentLang, v.state), { delay: 600 });
+  const lintSource = linter(
+    async (v) => {
+      const diagnostics = await fetchDiagnostics(currentLang, v.state);
+      // While a language server is connected it pushes diagnostics itself, so the
+      // host linter reports to the Error list only when none is (this is what keeps
+      // the list fed on a toolchain whose language server isn't installed).
+      if (lspClient === null) opts.onDiagnostics?.(cmDiagnosticsToLsp(v.state.doc, diagnostics));
+      return diagnostics;
+    },
+    { delay: 600 }
+  );
 
   const baseExtensions: Extension[] = [
     lineNumbers(),

@@ -41,6 +41,7 @@ import {
 } from './learnerMemory';
 import type { LspDiagnostic } from './lspClient';
 import { resolveChatModel } from './modelResolution';
+import { type ProblemSeverity, parseOutputProblems, type SingleProblem } from './outputProblems';
 import {
   deleteFile as apiDeleteFile,
   mkdir as apiMkdir,
@@ -1717,31 +1718,6 @@ function submitEvaluate(evaluate: () => Promise<void>): void {
 }
 
 const DASM_LAYOUT_KEY = 'lang-tutor:dasm:disasm-layout';
-type ProblemSeverity = 'error' | 'warning' | 'info';
-type ProblemSource = 'output' | 'diagnostic';
-
-interface SingleProblem {
-  id: string;
-  severity: ProblemSeverity;
-  source: ProblemSource;
-  line: number;
-  col: number;
-  displayLocation: string;
-  message: string;
-  raw: string;
-  sourceLineIndex?: number;
-  matchStart?: number;
-  matchEnd?: number;
-}
-
-interface LocatedText {
-  token: string;
-  line: number;
-  col: number;
-  start: number;
-  end: number;
-  matchText: string;
-}
 
 interface DasmOutputParts {
   run: string;
@@ -1764,9 +1740,6 @@ const dasmGroupToSource: Map<number, number> = new Map();
 const dasmSourceToGroups: Map<number, number[]> = new Map();
 
 const OUTPUT_PLACEHOLDER = 'Run the program to capture its output here.';
-const CSHARP_LOCATION_RE = /(^|[\s([{'"])((?:[A-Za-z]:)?[^\s()\r\n]+?\.\w+)\((\d+),(\d+)\)/g;
-const PYTHON_LOCATION_RE = /File "([^"]+)", line (\d+)/g;
-const COLON_LOCATION_RE = /(^|[\s([{'"])((?:(?:[A-Za-z]:)?[\\/])?(?:[^\s:()[\]{}'"`]+[\\/])*[A-Za-z0-9_.<>-]+):(\d+)(?::(\d+))?/g;
 
 let singleOutputTab: SingleOutputTab = 'output';
 let dasmLayout: DasmLayout = (storageGet<DasmLayout>(DASM_LAYOUT_KEY) ?? 'split') as DasmLayout;
@@ -1777,139 +1750,14 @@ function problemPlural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? '' : 's'}`;
 }
 
-function fileBasename(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  return normalized.split('/').pop() ?? normalized;
-}
-
-function isLikelySingleBufferLocation(token: string): boolean {
-  const clean = token.trim().replace(/^["']|["']$/g, '');
-  if (/^<[^>]+>$/.test(clean)) return true;
-  if (clean === 'main') return true;
-
+/**
+ * Parse a run's output into Error-list problems for the active language.
+ * Placeholder output and project workspaces produce nothing.
+ */
+function problemsFromRunOutput(text: string, placeholder: boolean): SingleProblem[] {
+  if (placeholder || text === OUTPUT_PLACEHOLDER) return [];
   const lang = getLanguage(activeLang);
-  if (!isSingleBufferLanguage(lang)) return false;
-
-  const base = fileBasename(clean);
-  if (base === lang.fileName) return true;
-
-  const dot = lang.fileName.lastIndexOf('.');
-  const ext = dot >= 0 ? lang.fileName.slice(dot) : '';
-  return ext.length > 0 && base.endsWith(ext);
-}
-
-function addLocatedText(out: LocatedText[], loc: LocatedText): void {
-  if (!Number.isFinite(loc.line) || loc.line < 1 || !Number.isFinite(loc.col) || loc.col < 1) return;
-  if (!isLikelySingleBufferLocation(loc.token)) return;
-  if (out.some((existing) => loc.start < existing.end && loc.end > existing.start)) return;
-  out.push(loc);
-}
-
-function findLocationsInLine(line: string): LocatedText[] {
-  const out: LocatedText[] = [];
-
-  for (const m of line.matchAll(PYTHON_LOCATION_RE)) {
-    const token = m[1];
-    const lineStr = m[2];
-    if (token === undefined || lineStr === undefined || m.index === undefined) continue;
-    addLocatedText(out, {
-      token,
-      line: Number.parseInt(lineStr, 10),
-      col: 1,
-      start: m.index,
-      end: m.index + m[0].length,
-      matchText: m[0],
-    });
-  }
-
-  for (const m of line.matchAll(CSHARP_LOCATION_RE)) {
-    const prefix = m[1] ?? '';
-    const token = m[2];
-    const lineStr = m[3];
-    const colStr = m[4];
-    if (token === undefined || lineStr === undefined || colStr === undefined || m.index === undefined) continue;
-    const matchText = `${token}(${lineStr},${colStr})`;
-    addLocatedText(out, {
-      token,
-      line: Number.parseInt(lineStr, 10),
-      col: Number.parseInt(colStr, 10),
-      start: m.index + prefix.length,
-      end: m.index + prefix.length + matchText.length,
-      matchText,
-    });
-  }
-
-  for (const m of line.matchAll(COLON_LOCATION_RE)) {
-    const prefix = m[1] ?? '';
-    const token = m[2];
-    const lineStr = m[3];
-    const colStr = m[4];
-    if (token === undefined || lineStr === undefined || m.index === undefined) continue;
-    const matchText = `${token}:${lineStr}${colStr === undefined ? '' : `:${colStr}`}`;
-    addLocatedText(out, {
-      token,
-      line: Number.parseInt(lineStr, 10),
-      col: colStr === undefined ? 1 : Number.parseInt(colStr, 10),
-      start: m.index + prefix.length,
-      end: m.index + prefix.length + matchText.length,
-      matchText,
-    });
-  }
-
-  return out.sort((a, b) => a.start - b.start);
-}
-
-function severityFromText(text: string): ProblemSeverity | null {
-  if (/\b(traceback|exception|error|failed|fatal|panic)\b/i.test(text)) return 'error';
-  if (/\b(warning|warn)\b/i.test(text)) return 'warning';
-  return null;
-}
-
-function problemMessageFromLine(line: string, matchText: string): string {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return matchText;
-  return trimmed.length > 220 ? `${trimmed.slice(0, 217)}...` : trimmed;
-}
-
-function parseOutputProblems(text: string): SingleProblem[] {
-  if (text.trim().length === 0 || text === OUTPUT_PLACEHOLDER) return [];
-
-  const problems: SingleProblem[] = [];
-  let contextSeverity: { severity: ProblemSeverity; ttl: number } | null = null;
-  const lines = text.split(/\r?\n/);
-
-  lines.forEach((line, index) => {
-    const explicitSeverity = severityFromText(line);
-    if (explicitSeverity !== null) {
-      contextSeverity = { severity: explicitSeverity, ttl: explicitSeverity === 'error' && /traceback/i.test(line) ? 8 : 3 };
-    }
-
-    const locations = findLocationsInLine(line);
-    for (const loc of locations) {
-      const severity = explicitSeverity ?? contextSeverity?.severity ?? 'info';
-      const displayPath = fileBasename(loc.token);
-      problems.push({
-        id: `output:${index}:${loc.start}:${loc.line}:${loc.col}`,
-        severity,
-        source: 'output',
-        line: loc.line,
-        col: loc.col,
-        displayLocation: `${displayPath}:${loc.line}:${loc.col}`,
-        message: problemMessageFromLine(line, loc.matchText),
-        raw: line,
-        sourceLineIndex: index,
-        matchStart: loc.start,
-        matchEnd: loc.end,
-      });
-    }
-
-    if (contextSeverity !== null) {
-      contextSeverity.ttl -= 1;
-      if (contextSeverity.ttl <= 0) contextSeverity = null;
-    }
-  });
-
-  return problems;
+  return parseOutputProblems(text, isSingleBufferLanguage(lang) ? lang.fileName : '');
 }
 
 function severityFromDiagnostic(d: LspDiagnostic): ProblemSeverity {
@@ -1943,12 +1791,11 @@ function allSingleProblems(): SingleProblem[] {
   return [...lspProblems, ...outputProblems];
 }
 
+/** Counts each (severity, line, column) once: live diagnostics and run output usually report the same problems. */
 function singleProblemCounts(): { errors: number; warnings: number } {
-  const problems = allSingleProblems();
-  return {
-    errors: problems.filter((p) => p.severity === 'error').length,
-    warnings: problems.filter((p) => p.severity === 'warning').length,
-  };
+  const distinct = new Set(allSingleProblems().map((p) => `${p.severity}:${p.line}:${p.col}`));
+  const count = (severity: ProblemSeverity): number => [...distinct].filter((key) => key.startsWith(`${severity}:`)).length;
+  return { errors: count('error'), warnings: count('warning') };
 }
 
 function syncSingleOutputPanes(): void {
@@ -2367,7 +2214,7 @@ function renderSingleOutput(text: string, ok: boolean, opts: { placeholder?: boo
   lastSingleOutputText = opts.placeholder ? '' : text;
   const dasmMode = activeLang === 'dasm';
   const problemText = dasmMode && !opts.placeholder ? splitDasmOutput(text).run : text;
-  outputProblems = opts.placeholder ? [] : parseOutputProblems(problemText);
+  outputProblems = problemsFromRunOutput(problemText, opts.placeholder ?? false);
   if (dasmMode) {
     renderDasmOutput(text, ok, opts.placeholder ?? false);
   } else {
