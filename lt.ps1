@@ -531,8 +531,13 @@ function Invoke-Stop {
     if ($null -ne $process) {
         Write-Step "Stopping server.mjs (pid $($process.Id)) and everything it started..."
         # /T takes the supervised dotnet/vite/LSP children too; a forced kill skips server.mjs's own cleanup handlers.
-        & taskkill /T /F /PID $process.Id | Out-Null
-        Test-ExitOk 'taskkill'
+        $output = & taskkill /T /F /PID $process.Id 2>&1
+        $killExit = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        # taskkill reports 128 when a process in the tree exits mid-kill; success is the server being gone.
+        if (-not $process.WaitForExit(5000)) {
+            throw "taskkill failed (exit $killExit): $($output -join ' ')"
+        }
         Write-Ok 'Stopped.'
     } elseif ($null -ne $record) {
         Write-Warn "pid $($record.pid) from the last launch is no longer running; clearing the stale record."
