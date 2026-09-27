@@ -20,11 +20,14 @@
     "@tailwindcss/vite": "^4.0.0",
     "@types/node": "^25.6.2",
     "@types/ws": "8.18.1",
+    "basedpyright": "1.40.1",
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.8.0",
+    "typescript-language-server": "6.0.1",
     "vite": "^7.0.0",
-    "vitest": "5.0.2"
+    "vitest": "5.0.2",
+    "vscode-langservers-extracted": "4.10.0"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.2",

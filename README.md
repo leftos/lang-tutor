@@ -6,14 +6,16 @@ Switch language at any time from the topbar — each language has its own conver
 
 ## Quick start (Windows)
 
-One-shot setup that installs all runtimes via winget, fetches dependencies, and opens the app in your browser:
+Prepare this PC to run everything, then check what's ready:
 
 ```powershell
-.\scripts\setup.ps1
+.\lt.ps1 setup     # install whatever is missing, then print the readiness report
+.\lt.ps1 doctor    # the readiness report only: each capability, ready or missing, and the command that fixes it
 ```
 
-It's idempotent — checks each tool first and only installs what's missing. First run takes 5–10 minutes (downloads); subsequent runs are seconds. After it finishes installing it'll start the dev server and open `http://localhost:5173`.
-After setup, use `.\lt.ps1 dev` as the root dev-server entrypoint, or `.\lt.ps1 launch` / `.\lt.ps1 stop` to run the built app on demand (see [Running it for real](#running-it-for-real)).
+`setup` is idempotent and needs no admin: it runs `doctor`, installs each missing piece (winget for Node, pnpm, Docker Desktop, .NET SDK, Rust, Python and LLVM; `rustup component add rust-analyzer`; `uv tool install black`; `pnpm install`, which brings the TypeScript, HTML/CSS, Biome and basedpyright language servers; starting Docker and building the toolchain image; the C# Dev Kit for Roslyn when VS Code is installed), then prints the report again. `doctor` runs each tool rather than just finding it on PATH, so a rustup stub for an uninstalled component shows as missing. First run takes 5–10 minutes of downloads; later runs take seconds.
+
+Then use `.\lt.ps1 dev` for development, or `.\lt.ps1 launch` / `.\lt.ps1 stop` to run the built app on demand (see [Running it for real](#running-it-for-real)); `launch` prints a one-line warning when `doctor` finds anything missing.
 
 ## Languages
 
@@ -57,8 +59,7 @@ mirror and account sync.
 - **pnpm** for package management
 - **Node 20+** runtime for the production proxy (`server.mjs`) and for the `/run` / `/check` / `/format` toolchain endpoints
 
-Optional local toolchains (auto-detected; gracefully disabled if missing):
-`rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`.
+Optional local toolchains (auto-detected; gracefully disabled if missing; `.\lt.ps1 doctor` lists them all): `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`, and the machine-level language servers `clangd`, `rust-analyzer` and Roslyn or OmniSharp. The npm-published language servers are project devDependencies.
 
 ## Prerequisites
 
@@ -162,7 +163,8 @@ When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so 
 │   └── runner.mjs     Backend: runs single-buffer code in the Docker sandbox image
 ├── scripts/
 │   ├── build-toolchain-image.ps1  Builds lang-tutor-toolchains:latest
-│   └── setup.ps1      One-shot Windows setup (installs runtimes, opens browser)
+│   ├── doctor.mjs     Readiness report behind `lt.ps1 doctor`
+│   └── setup.ps1      Installs what doctor reports missing (`lt.ps1 setup`)
 ├── docker/
 │   └── toolchains/    Docker image with Clang/LLVM, Rust, Python, .NET, formatters, and LSPs
 ├── index.html         Vite entry HTML

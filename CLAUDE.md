@@ -31,12 +31,14 @@ The user chats with their selected AI provider (Anthropic Claude, OpenAI ChatGPT
 - Optional local toolchains (auto-detected; features silently disable if missing):
   - Single-buffer host tools: `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`
   - Project: `dotnet` (.NET 8+ SDK), `pnpm`, `code` / `devenv` / `explorer.exe` for the "Open in" launchers
-  - LSP binaries: `clangd`, `rust-analyzer`, `basedpyright-langserver`, Roslyn LSP (discovered from C# Dev Kit install), `typescript-language-server`, `vscode-html-languageserver`, `vscode-css-languageserver`, `@biomejs/biome lsp-proxy`
+  - LSP binaries: machine-level `clangd`, `rust-analyzer` (rustup component) and Roslyn LSP (discovered from the C# Dev Kit install, OmniSharp as fallback); project devDependencies `typescript-language-server`, `vscode-langservers-extracted` (html + css), `basedpyright` (`basedpyright-langserver`), `@biomejs/biome`. `tools/lsp.mjs` resolves `node_modules/.bin` before PATH.
+  - `.\lt.ps1 doctor` (`scripts/doctor.mjs`) lists every one of these as ready or missing, built from `LSP_CONFIG` and `CHECKER_TOOLS` so a new server or checker is reported automatically; each probe runs the tool (a rustup proxy for an uninstalled component exits non-zero and counts as missing). `.\lt.ps1 setup` installs what doctor reports missing by each row's `recipe`.
 
 ## Run
 
 ```powershell
-pnpm install                # first time
+.\lt.ps1 setup              # first time: install everything missing, then print the readiness report
+.\lt.ps1 doctor [--json]    # readiness report only (exit 1 when anything is missing)
 .\lt.ps1 dev                # Vite dev server (default port 5173)
 .\lt.ps1 launch             # on-demand background run: build if stale, start Docker Desktop, serve on :3000, open browser
 .\lt.ps1 stop [-Docker]     # stop what launch started (whole process tree); -Docker also quits Docker Desktop
@@ -46,7 +48,7 @@ pnpm install                # first time
 .\lt.ps1 preview            # vite preview (preview the production build)
 .\lt.ps1 typecheck          # tsc --noEmit
 .\lt.ps1 lint               # biome check --write .
-pnpm test                   # vitest run (src/**/*.test.ts: learner memory + model resolution)
+pnpm test                   # vitest run (src/, tools/, scripts/ *.test.*)
 .\lt.ps1 toolchain          # build lang-tutor-toolchains:latest for /run
 ```
 
@@ -129,7 +131,8 @@ server.mjs               Production HTTP server: serves dist/, wires /auth /stat
 vite.config.ts           Dev plugin "lang-tutor-toolchain" mounts every backend module above as middleware,
                          hooks /lsp + /fs WebSocket upgrades on the Vite HTTP server. Manual chunks:
                          editor-vendor (@codemirror/@lezer/csharp), content-vendor (marked/dompurify/html-to-image), vendor.
-scripts/setup.ps1        Idempotent Windows quickstart: winget-installs runtimes, pnpm install, starts dev server.
+scripts/setup.ps1        `lt.ps1 setup`: runs doctor, installs each missing row by its recipe (winget / rustup / uv / pnpm / Docker / C# Dev Kit), prints the report.
+scripts/doctor.mjs       `lt.ps1 doctor`: readiness report for runtimes, host checkers and language servers (`--json` for setup).
 scripts/build-toolchain-image.ps1   Builds lang-tutor-toolchains:latest from docker/toolchains/.
 scripts/copy-html-to-image.mjs      predev/prebuild step: copies the html-to-image bundle into public/.
 projects/                Scaffold templates per project language (csharp, web). Reset re-scaffolds from here.

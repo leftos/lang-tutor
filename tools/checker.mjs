@@ -19,6 +19,23 @@ const TIMEOUT_MS = 10_000;
 const MAX_OUTPUT = 512 * 1024;
 
 /**
+ * The host binaries /check and /format spawn, for the readiness report
+ * (`scripts/doctor.mjs`). `fallbackBin` is tried when `bin` is missing, as
+ * pythonCheck does with the Windows `py` launcher. Keep in step with the
+ * spawnTool calls below.
+ *
+ * @type {ReadonlyArray<{ bin: string; fallbackBin?: string }>}
+ */
+export const CHECKER_TOOLS = [
+  { bin: 'rustc' },
+  { bin: 'rustfmt' },
+  { bin: 'clang' },
+  { bin: 'clang-format' },
+  { bin: 'python', fallbackBin: 'py' },
+  { bin: 'black' },
+];
+
+/**
  * Spawn a tool, pipe `input` to stdin, return { stdout, stderr, exitCode, available }.
  * `cmd` MUST be a hardcoded constant — never user-supplied.
  * `args` MUST be a hardcoded array — never built from user input.
