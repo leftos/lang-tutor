@@ -23,9 +23,9 @@ const inScope = /[/\\](src|tools)[/\\]/.test(filePath);
 if (!isLintable || !inScope) process.exit(0);
 
 const isWindows = platform === 'win32';
-const pnpm = isWindows ? 'pnpm.cmd' : 'pnpm';
-// shell:true on Windows is required for .cmd/.bat invocation in Node 20.12+ (CVE-2024-27980 fix).
-const result = spawnSync(pnpm, ['exec', 'biome', 'check', '--write', filePath], {
+// shell:true on Windows lets PATHEXT resolve either install shape (winget's pnpm.exe or npm's pnpm.cmd);
+// Node 20.12+ also requires it for .cmd/.bat invocation (CVE-2024-27980 fix).
+const result = spawnSync('pnpm', ['exec', 'biome', 'check', '--write', filePath], {
   stdio: 'inherit',
   shell: isWindows,
 });
