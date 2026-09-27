@@ -7,9 +7,9 @@ import { platform } from 'node:process';
 import { spawnSync } from 'node:child_process';
 
 const isWindows = platform === 'win32';
-const pnpm = isWindows ? 'pnpm.cmd' : 'pnpm';
-// shell:true on Windows is required for .cmd/.bat invocation in Node 20.12+ (CVE-2024-27980 fix).
-const result = spawnSync(pnpm, ['typecheck'], { stdio: 'inherit', shell: isWindows });
+// shell:true on Windows lets PATHEXT resolve either install shape (winget's pnpm.exe or npm's pnpm.cmd);
+// Node 20.12+ also requires it for .cmd/.bat invocation (CVE-2024-27980 fix).
+const result = spawnSync('pnpm', ['typecheck'], { stdio: 'inherit', shell: isWindows });
 
 if (result.status !== 0) {
   process.stderr.write('typecheck failed — fix TS errors before continuing.\n');

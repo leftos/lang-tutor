@@ -13,7 +13,7 @@ One-shot setup that installs all runtimes via winget, fetches dependencies, and 
 ```
 
 It's idempotent — checks each tool first and only installs what's missing. First run takes 5–10 minutes (downloads); subsequent runs are seconds. After it finishes installing it'll start the dev server and open `http://localhost:5173`.
-After setup, use `.\lt.ps1 dev` as the root dev-server entrypoint.
+After setup, use `.\lt.ps1 dev` as the root dev-server entrypoint, or `.\lt.ps1 launch` / `.\lt.ps1 stop` to run the built app on demand (see [Running it for real](#running-it-for-real)).
 
 ## Languages
 
@@ -99,10 +99,7 @@ The AI Provider dialog includes setup links and basic funding guidance:
 
 ## Development
 
-The Vite dev server hosts the app and local toolchain endpoints. AI provider
-requests are made directly from the browser with the user's own key, so the
-local server and hosted droplet do not store provider credentials. HMR is on for
-`.ts` and `.css` changes.
+The Vite dev server hosts the app and local toolchain endpoints. AI provider requests are made directly from the browser with the user's own key, so the server never stores provider credentials. HMR is on for `.ts` and `.css` changes.
 
 ```powershell
 .\lt.ps1 dev
@@ -112,62 +109,29 @@ Open the URL Vite prints (default `http://localhost:5173`).
 
 **Windows Ctrl+C tip:** `pnpm dev` is invoked through a `.cmd` wrapper, so Ctrl+C triggers the *"Terminate batch job (Y/N)?"* prompt. Use `.\lt.ps1 dev` instead — it runs Vite via Node directly so Ctrl+C kills it cleanly. Same idea for the production server: use `.\lt.ps1 serve` instead of `pnpm serve`.
 
-## Production
+## Running it for real
 
-Build the static bundle, then run the Node proxy server which serves `dist/` and proxies API calls.
+`launch` starts the app in the background on demand, and `stop` shuts it down so nothing is left using resources between sessions:
+
+```powershell
+.\lt.ps1 launch           # build if needed, start Docker Desktop if needed, serve on http://localhost:3000, open the browser
+.\lt.ps1 status           # is it running? is the Docker engine up?
+.\lt.ps1 stop             # stop the server and everything it started (project dev servers, LSPs)
+.\lt.ps1 stop -Docker     # ...and quit Docker Desktop too
+```
+
+`launch` runs `pnpm install` when `node_modules` is missing, rebuilds `dist/` when any of its sources are newer, starts Docker Desktop and waits for the engine, and builds `lang-tutor-toolchains:latest` the first time (several minutes). The server runs hidden; its output goes to `.tmp/serve.log` and `.tmp/serve.err.log`. `-Port <n>` picks another port and `-NoBrowser` skips opening the browser.
+
+Progress, chat history and project workspaces persist under `.local/` in the repo (auth is off by default), so they survive restarts and are shared with `.\lt.ps1 dev`.
+
+To run the server in the foreground instead (Ctrl+C stops it):
 
 ```powershell
 .\lt.ps1 build      # type-checks, then builds to dist/
 .\lt.ps1 serve      # node server.mjs (uses .env if present)
 ```
 
-Open `http://localhost:3000` (override with `$env:PORT = "8080"; .\lt.ps1 serve`).
-
-When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so
-asset URLs and internal API calls include that prefix:
-
-```powershell
-$env:LANG_TUTOR_BASE_PATH = "/lang-tutor/"
-.\lt.ps1 build
-.\lt.ps1 serve
-```
-
-`server.mjs` accepts requests with or without that prefix, so either
-`handle_path`-style prefix stripping or plain forwarding works.
-
-### Deploy to leftos.dev/lang-tutor
-
-The production shortcut is:
-
-```powershell
-.\lt.ps1 deploy
-```
-
-That command runs the local type-check/build gate, pushes the current branch,
-archives `HEAD`, uploads an immutable release to the droplet, builds with
-`LANG_TUTOR_BASE_PATH` derived from `-DeployUrl`, restarts
-`lang-tutor.service`, and smoke-tests both `/lang-tutor` and `/lang-tutor/`.
-It also verifies hosted auth is required before account-specific state or
-toolchain endpoints are reachable. The deploy also ensures the host has the
-checker/LSP binaries used by live diagnostics and format-on-save, then builds
-and verifies the hosted `lang-tutor-toolchains:latest` Docker image used by
-Rust, C++, DASM, Python, and C# console runs.
-
-For a new droplet or a host rebuild, follow [docs/deployment.md](docs/deployment.md)
-first. It records the one-time Node, Docker, Caddy, systemd, app-user, and
-runtime-env setup that the deploy command assumes.
-
-Useful deploy arguments:
-
-- `-Worktree` deploys local tracked and untracked non-ignored files instead of
-  `HEAD`; use it for staging uncommitted changes. It automatically skips
-  `git push`.
-- `-DeployHost <ssh-target>` changes the SSH target; default is
-  `root@24.199.111.154`.
-- `-DeployUrl <url>` changes the hosted base URL and build base path; default is
-  `https://leftos.dev/lang-tutor`.
-- `-SkipCheck`, `-SkipPush`, and `-SkipSmoke` skip the local gate, branch push,
-  or hosted smoke checks respectively.
+When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so asset URLs and internal API calls include that prefix; `server.mjs` accepts requests with or without it. Set `LANG_TUTOR_REQUIRE_AUTH=true` to require accounts.
 
 ## Other commands
 
@@ -220,7 +184,7 @@ Each language has its own `localStorage` namespace:
 - `lang-tutor:{lang}:history` — last 30 messages
 - `lang-tutor:{lang}:progress` — structured progress blob (topic statuses, strengths, struggles, notes)
 - `lang-tutor:{lang}:code` — saved editor content (single-buffer languages only)
-- `lang-tutor:{lang}:openTabs` / `:activeTab` — multi-tab UI state (project workspaces only; the files themselves live on disk under `.local/workspaces/<user>/<lang>/` locally or `/var/lib/lang-tutor/workspaces/<user>/<lang>/` when hosted)
+- `lang-tutor:{lang}:openTabs` / `:activeTab` — multi-tab UI state (project workspaces only; the files themselves live on disk under `.local/workspaces/<user>/<lang>/`, or under `LANG_TUTOR_WORKSPACE_ROOT` when set)
 
 Switching language saves the current editor content, then loads everything for the new language. Conversations are non-destructive — switching back restores exactly where you were.
 
@@ -259,3 +223,7 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
 - Resetting progress only affects the **active** language. Switch first if you want to reset a different one.
 - Rust, C++, DASM, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
 - The XSS-safe DOM construction means you can paste arbitrary content from the AI without risk.
+
+## Glossary
+
+- **Wave**: a group of open plan items in `docs/plans/MAIN.md` that share files or a subsystem, so they ship and are reviewed together.

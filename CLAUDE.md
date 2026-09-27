@@ -38,16 +38,18 @@ The user chats with their selected AI provider (Anthropic Claude, OpenAI ChatGPT
 ```powershell
 pnpm install                # first time
 .\lt.ps1 dev                # Vite dev server (default port 5173)
+.\lt.ps1 launch             # on-demand background run: build if stale, start Docker Desktop, serve on :3000, open browser
+.\lt.ps1 stop [-Docker]     # stop what launch started (whole process tree); -Docker also quits Docker Desktop
+.\lt.ps1 status             # launched app + Docker engine state
 .\lt.ps1 build              # type-check + Vite build to dist/
-.\lt.ps1 serve              # node --env-file=.env server.mjs (default port 3000)
+.\lt.ps1 serve              # node --env-file=.env server.mjs in the foreground (default port 3000)
 .\lt.ps1 preview            # vite preview (preview the production build)
 .\lt.ps1 typecheck          # tsc --noEmit
 .\lt.ps1 lint               # biome check --write .
 .\lt.ps1 toolchain          # build lang-tutor-toolchains:latest for /run
-.\lt.ps1 deploy             # deploy an immutable release to leftos.dev/lang-tutor/
 ```
 
-`.env` holds **runtime config** only — provider API keys are entered in the browser via the AI Provider dialog and persist to `localStorage`. The interesting env vars are in `.env.example`: `PORT`, `LANG_TUTOR_BASE_PATH`, `LANG_TUTOR_REQUIRE_AUTH`, `LANG_TUTOR_SECURE_COOKIES`, `LANG_TUTOR_DB_FILE`, `LANG_TUTOR_RUN_ROOT`, `LANG_TUTOR_TOOLCHAIN_IMAGE`. Auth is off in local dev (`LANG_TUTOR_REQUIRE_AUTH=false`) and on for the hosted droplet.
+`.env` holds **runtime config** only — provider API keys are entered in the browser via the AI Provider dialog and persist to `localStorage`. The interesting env vars are in `.env.example`: `PORT`, `LANG_TUTOR_BASE_PATH`, `LANG_TUTOR_REQUIRE_AUTH`, `LANG_TUTOR_SECURE_COOKIES`, `LANG_TUTOR_DB_FILE`, `LANG_TUTOR_RUN_ROOT`, `LANG_TUTOR_TOOLCHAIN_IMAGE`. Auth is off by default (`LANG_TUTOR_REQUIRE_AUTH` unset or `false`); `true` requires accounts.
 
 **Windows Ctrl+C tip:** `pnpm dev` / `pnpm serve` go through a `.cmd` wrapper, so Ctrl+C triggers *"Terminate batch job (Y/N)?"*. Use `.\lt.ps1 dev` and `.\lt.ps1 serve` — they invoke Node directly and Ctrl+C kills cleanly.
 
@@ -129,7 +131,7 @@ scripts/copy-html-to-image.mjs      predev/prebuild step: copies the html-to-ima
 projects/                Scaffold templates per project language (csharp, web). Reset re-scaffolds from here.
 docker/toolchains/       Dockerfile + tooling for the sandbox image (Clang/LLVM, Rust, Python 3.13, .NET SDK,
                          formatters, LSPs).
-docs/                    deployment.md (one-time host setup) + plans/ (milestone checklists).
+docs/                    lsp.md (LSP bridge decisions + caveats) + plans/ (MAIN.md index, archive/).
 ```
 
 ### Per-language model
@@ -189,7 +191,7 @@ The toolchain image is built by `.\lt.ps1 toolchain` from `docker/toolchains/`.
 
 **Project workspaces** — supervised by `tools/projects.mjs`. Run/Stop hits `POST /proj/start` / `/proj/stop`; status pill polls `POST /proj/status` every 2 s + log SSE on `/proj/logs`. PROJECT_CONFIG drives install/dev commands (web → `pnpm install` + `pnpm dev`; csharp → `dotnet restore LangTutor.sln` + `dotnet run --project LangTutor.Wpf/LangTutor.Wpf.csproj --verbosity minimal`). Readiness is `http-probe` for web (Vite port 5180) or `process-alive` for csharp (500 ms warm-up). The C# pill reflects build phases derived from `dotnet --verbosity minimal` output: `spawning…` → `restoring NuGet…` → `building…` → `running (PID N)`.
 
-Project files live under a **user-scoped path**: locally `.local/workspaces/<user>/<lang>/`, on the hosted droplet `/var/lib/lang-tutor/workspaces/<user>/<lang>/`. Templates live in `projects/<lang>/` and are copied on first scaffold. `POST /proj/reset` stops the supervised process, deletes the user's workspace folder, and re-scaffolds from the template.
+Project files live under a **user-scoped path**: `.local/workspaces/<user>/<lang>/` by default (`LANG_TUTOR_PROJECT_ROOT` / `LANG_TUTOR_WORKSPACE_ROOT` override it; with `NODE_ENV=production` the default becomes `/var/lib/lang-tutor/workspaces`, so leave `NODE_ENV` unset on Windows). Templates live in `projects/<lang>/` and are copied on first scaffold. `POST /proj/reset` stops the supervised process, deletes the user's workspace folder, and re-scaffolds from the template.
 
 ### Send-to-tutor / Evaluate flow
 
@@ -254,11 +256,9 @@ All spawns use `child_process.spawn(cmd, args[])` — array form, no shell injec
 
 The supervisor stashes its `procs` Map on `globalThis['__langTutorProcs']` so Vite HMR reloading `tools/projects.mjs` doesn't lose track of running children. Process-exit / SIGINT / SIGTERM handlers (registered once via a global flag) call `killProcessTree` for every supervised PID so children die with the dev server.
 
-## Production deploy
+## Running on demand
 
-`.\lt.ps1 deploy` is the production shortcut. It runs the local type-check/build gate, pushes the current branch, archives `HEAD` (or the working tree with `-Worktree`), uploads an immutable release to the droplet, builds with `LANG_TUTOR_BASE_PATH` derived from `-DeployUrl`, restarts `lang-tutor.service`, and smoke-tests both `/lang-tutor` and `/lang-tutor/`. It also verifies hosted auth is required before account-specific endpoints are reachable, ensures the host has the checker/LSP binaries, and (re)builds the hosted `lang-tutor-toolchains:latest` Docker image. New-host bootstrap: `docs/deployment.md` records the one-time Node / Docker / Caddy / systemd / app-user / runtime-env setup.
-
-Useful flags: `-DeployHost <ssh-target>`, `-DeployUrl <url>`, `-SkipCheck`, `-SkipPush`, `-SkipSmoke`, `-Worktree`.
+The app runs natively on the Windows PC; there is no hosted deployment (a WPF window needs a real desktop session, which rules out containers). `.\lt.ps1 launch` starts `server.mjs` hidden via `Start-Process`, logs to `.tmp/serve.log` / `.tmp/serve.err.log`, and records `{ pid, port, startTicks }` in `.tmp/serve.pid.json`; the start ticks guard against stopping a reused pid. `.\lt.ps1 stop` uses `taskkill /T /F`, because a forced kill on Windows skips `server.mjs`'s SIGINT/SIGTERM cleanup, so the whole tree has to go. `launch` rebuilds `dist/` only when `src/`, `public/` (minus the generated `lang-tutor-assets/`), `index.html`, `vite.config.ts`, `package.json` or `pnpm-lock.yaml` is newer than `dist/index.html`, starts Docker Desktop via `docker desktop start` when `docker info` fails, and builds the toolchain image when it is missing.
 
 ## Styling
 

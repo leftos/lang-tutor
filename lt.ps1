@@ -1,9 +1,8 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Lang tutor dev helper: install, launch dev, build, serve, preview,
-    type-check, lint, format, clean, and run first-time setup. One entry
-    point replaces the older dev.ps1 and serve.ps1 scripts.
+    Lang tutor helper: install, dev server, build, on-demand launch/stop of the
+    app, preview, type-check, lint, format, clean, and first-time setup.
 
 .DESCRIPTION
     Subcommands:
@@ -11,7 +10,15 @@
       dev        Prepare generated assets, then run Vite via Node directly.
                  This is the default when no subcommand is given. Extra
                  arguments are forwarded to Vite.
-      serve      Run the production Node proxy via Node directly with
+      launch     Start the app in the background for everyday use: pnpm install
+                 if node_modules is missing, build if dist/ is older than its
+                 sources, start Docker Desktop and build the toolchain image if
+                 needed, run server.mjs hidden (logs in .tmp/serve*.log), wait
+                 until it answers, then open the browser.
+      stop       Stop what launch started, including every process it spawned
+                 (project dev servers, LSPs). With -Docker, also quit Docker Desktop.
+      status     Show whether the launched app and the Docker engine are running.
+      serve      Run the production Node server in the foreground with
                  --env-file=.env. Extra arguments are forwarded to server.mjs.
       build      Prepare generated assets, run tsc --noEmit, then Vite build.
       preview    Run vite preview via Node directly.
@@ -20,7 +27,6 @@
       format     Run biome format --write .
       toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
       install    Run pnpm install.
-      deploy     Deploy an immutable release to leftos.dev/lang-tutor/.
       setup      Run scripts/setup.ps1.
       clean      Remove generated build output.
       help       Print the subcommand summary.
@@ -28,42 +34,30 @@
 .PARAMETER Command
     The subcommand to run. When omitted, defaults to dev.
 
+.PARAMETER Port
+    Applies to launch. The port server.mjs listens on; overrides PORT in .env.
+
 .PARAMETER NoBrowser
-    Applies to setup. Forwarded to scripts/setup.ps1.
+    Applies to launch (do not open the browser) and setup (forwarded to scripts/setup.ps1).
 
 .PARAMETER SkipInstall
     Applies to setup. Forwarded to scripts/setup.ps1.
 
-.PARAMETER DeployHost
-    SSH target for deploy. Defaults to the production droplet.
-
-.PARAMETER DeployUrl
-    HTTPS base URL for deploy smoke checks and base-path detection.
-
-.PARAMETER SkipCheck
-    With deploy, skip the local type-check and production build gate.
-
-.PARAMETER SkipPush
-    With deploy, do not push the current branch before archiving HEAD.
-
-.PARAMETER Worktree
-    With deploy, archive the current tracked and untracked working tree instead
-    of HEAD. This is intended for staging uncommitted deployment work; it also
-    skips git push.
-
-.PARAMETER SkipSmoke
-    With deploy, skip hosted smoke checks after service restart.
+.PARAMETER Docker
+    Applies to stop. Also quit Docker Desktop after stopping the app.
 
 .EXAMPLE
     .\lt.ps1
     .\lt.ps1 dev --host 0.0.0.0
+    .\lt.ps1 launch
+    .\lt.ps1 launch -Port 3100 -NoBrowser
+    .\lt.ps1 stop -Docker
+    .\lt.ps1 status
     .\lt.ps1 build
     .\lt.ps1 serve
     .\lt.ps1 preview --port 4173
     .\lt.ps1 typecheck
     .\lt.ps1 toolchain
-    .\lt.ps1 deploy
-    .\lt.ps1 deploy -Worktree
     .\lt.ps1 lint
     .\lt.ps1 setup -NoBrowser
 #>
@@ -74,17 +68,15 @@
     Justification = 'Top-level params consumed by subcommands via script scope.')]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('', 'dev', 'serve', 'build', 'preview', 'typecheck', 'lint', 'format', 'toolchain', 'install', 'setup', 'clean', 'deploy', 'help')]
+    [ValidateSet('', 'dev', 'launch', 'stop', 'status', 'serve', 'build', 'preview', 'typecheck', 'lint', 'format', 'toolchain',
+        'install', 'setup', 'clean', 'help')]
     [string]$Command = '',
 
+    [ValidateRange(1, 65535)]
+    [int]$Port = 3000,
     [switch]$NoBrowser,
     [switch]$SkipInstall,
-    [string]$DeployHost = 'root@24.199.111.154',
-    [string]$DeployUrl = 'https://leftos.dev/lang-tutor',
-    [switch]$SkipCheck,
-    [switch]$SkipPush,
-    [switch]$Worktree,
-    [switch]$SkipSmoke,
+    [switch]$Docker,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rest
@@ -100,6 +92,9 @@ $EnvFile = Join-Path $ScriptDir '.env'
 $AssetScript = Join-Path $ScriptDir 'scripts\copy-html-to-image.mjs'
 $SetupScript = Join-Path $ScriptDir 'scripts\setup.ps1'
 $ToolchainScript = Join-Path $ScriptDir 'scripts\build-toolchain-image.ps1'
+$ServePidFile = Join-Path $ScriptDir '.tmp\serve.pid.json'
+$ServeLog = Join-Path $ScriptDir '.tmp\serve.log'
+$ServeErrLog = Join-Path $ScriptDir '.tmp\serve.err.log'
 
 function Test-Tool {
     param([string]$Name, [string]$InstallHint)
@@ -128,41 +123,6 @@ function Write-Ok {
 function Write-Warn {
     param([string]$Message)
     Write-Host $Message -ForegroundColor Yellow
-}
-
-function Invoke-Native {
-    param(
-        [Parameter(Mandatory)]
-        [string]$FilePath,
-
-        [string[]]$Arguments = @()
-    )
-
-    Push-Location $ScriptDir
-    try {
-        & $FilePath @Arguments
-        Test-ExitOk $FilePath
-    } finally {
-        Pop-Location
-    }
-}
-
-function Invoke-NativeOutput {
-    param(
-        [Parameter(Mandatory)]
-        [string]$FilePath,
-
-        [string[]]$Arguments = @()
-    )
-
-    Push-Location $ScriptDir
-    try {
-        $output = & $FilePath @Arguments
-        Test-ExitOk $FilePath
-        return $output
-    } finally {
-        Pop-Location
-    }
 }
 
 function Assert-File {
@@ -350,337 +310,188 @@ function Invoke-Clean {
     Remove-RepoChildDirectory 'public\lang-tutor-assets'
 }
 
-function Assert-CleanTrackedWorktree {
-    Test-Tool 'git' 'Install Git and try again.'
+function Get-NewestWriteTime {
+    param([string[]]$RelativePaths)
 
-    Push-Location $ScriptDir
-    try {
-        & git update-index --refresh
-        Test-ExitOk 'git update-index'
-
-        & git diff --quiet --exit-code
-        if ($LASTEXITCODE -eq 1) {
-            throw 'Tracked files have unstaged changes. Commit or stash them before deploying, or pass -Worktree.'
+    $newest = [datetime]::MinValue
+    $generated = Join-Path $ScriptDir 'public\lang-tutor-assets'
+    foreach ($relative in $RelativePaths) {
+        $path = Join-Path $ScriptDir $relative
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $files = Get-ChildItem -LiteralPath $path -File -Recurse |
+            Where-Object { -not $_.FullName.StartsWith($generated, [System.StringComparison]::OrdinalIgnoreCase) }
+        foreach ($file in $files) {
+            if ($file.LastWriteTime -gt $newest) { $newest = $file.LastWriteTime }
         }
-        Test-ExitOk 'git diff'
+    }
+    return $newest
+}
 
-        & git diff --cached --quiet --exit-code
-        if ($LASTEXITCODE -eq 1) {
-            throw 'Tracked files have staged but uncommitted changes. Commit or unstage them before deploying, or pass -Worktree.'
-        }
-        Test-ExitOk 'git diff --cached'
+function Test-DistStale {
+    $distIndex = Join-Path $ScriptDir 'dist\index.html'
+    if (-not (Test-Path -LiteralPath $distIndex)) { return $true }
+    $inputs = @('src', 'public', 'index.html', 'vite.config.ts', 'package.json', 'pnpm-lock.yaml')
+    return (Get-NewestWriteTime $inputs) -gt (Get-Item -LiteralPath $distIndex).LastWriteTime
+}
 
-        $untracked = @(git ls-files --others --exclude-standard)
-        if ($untracked.Count -gt 0) {
-            Write-Warn "Untracked files are not included in the deploy archive: $($untracked -join ', ')"
+function Test-DockerEngine {
+    & docker info *> $null
+    $up = $LASTEXITCODE -eq 0
+    # A probe's failure is an answer, not an error: keep it out of the script's own exit code.
+    $global:LASTEXITCODE = 0
+    return $up
+}
+
+function Start-DockerEngine {
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Dev helper launch command is the user gesture.')]
+    param()
+
+    Test-Tool 'docker' 'Install Docker Desktop, or run .\scripts\setup.ps1.'
+    if (Test-DockerEngine) { return }
+    Write-Step 'Starting Docker Desktop...'
+    & docker desktop start
+    $deadline = (Get-Date).AddSeconds(120)
+    while (-not (Test-DockerEngine)) {
+        if ((Get-Date) -gt $deadline) {
+            throw 'Docker engine did not come up within 120 s. Start Docker Desktop by hand and retry.'
         }
-    } finally {
-        Pop-Location
+        Start-Sleep -Seconds 2
+    }
+    Write-Ok 'Docker engine is up.'
+}
+
+function Initialize-ToolchainImage {
+    & docker image inspect lang-tutor-toolchains:latest *> $null
+    if ($LASTEXITCODE -eq 0) { return }
+    $global:LASTEXITCODE = 0
+    Write-Step 'Toolchain image missing; building it (one-time, several minutes)...'
+    Invoke-Toolchain
+}
+
+function Read-ServeRecord {
+    if (-not (Test-Path -LiteralPath $ServePidFile)) { return $null }
+    return Get-Content -LiteralPath $ServePidFile -Raw | ConvertFrom-Json
+}
+
+function Get-ServeProcess {
+    param($Record)
+
+    if ($null -eq $Record) { return $null }
+    $process = Get-Process -Id $Record.pid -ErrorAction SilentlyContinue
+    # A pid the OS has since handed to another process must never be stopped as ours.
+    if ($null -eq $process -or $process.StartTime.Ticks -ne [long]$Record.startTicks) { return $null }
+    return $process
+}
+
+function Show-LogTail {
+    foreach ($log in @($ServeLog, $ServeErrLog)) {
+        if (Test-Path -LiteralPath $log) {
+            Write-Host "--- $log (last 20 lines) ---" -ForegroundColor DarkGray
+            Get-Content -LiteralPath $log -Tail 20 | Write-Host
+        }
     }
 }
 
-function New-DeployArchive {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Archive,
+function Wait-ServerReady {
+    param([System.Diagnostics.Process]$Process, [string]$Url)
 
-        [Parameter(Mandatory)]
-        [bool]$IncludeWorktree
-    )
-
-    Push-Location $ScriptDir
-    try {
-        if ($IncludeWorktree) {
-            Test-Tool 'tar' 'Install tar or use Git for Windows PowerShell.'
-            & git ls-files -z --cached --others --exclude-standard | & tar --null -T - -cf $Archive
-            Test-ExitOk 'worktree archive'
-            return
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        if ($Process.HasExited) {
+            Show-LogTail
+            throw "server.mjs exited with code $($Process.ExitCode) before answering on $Url."
         }
-
-        & git archive --format=tar "--output=$Archive" HEAD
-        Test-ExitOk 'git archive'
-    } finally {
-        Pop-Location
-    }
-}
-
-function New-DeployActivationScript {
-    param([string]$Path)
-
-    $scriptText = @'
-#!/usr/bin/env bash
-set -euo pipefail
-
-release_name="$1"
-case "$release_name" in
-  ""|*[!a-zA-Z0-9._-]*)
-    echo "invalid release name: $release_name" >&2
-    exit 1
-    ;;
-esac
-
-archive=/tmp/lang-tutor-release.tar
-release="/opt/lang-tutor/releases/${release_name}"
-if [ -e "$release" ]; then
-  echo "release already exists: $release" >&2
-  exit 1
-fi
-
-mkdir -p "$release"
-tar -xf "$archive" -C "$release"
-chown -R lang-tutor:lang-tutor "$release"
-ln -sfnT "$release" /opt/lang-tutor/app
-chown -h lang-tutor:lang-tutor /opt/lang-tutor/app
-install -d -o lang-tutor -g lang-tutor /opt/lang-tutor/app/.local /opt/lang-tutor/app/projects /opt/lang-tutor/app/.tmp
-install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor /var/lib/lang-tutor/runs /var/lib/lang-tutor/workspaces /var/lib/lang-tutor/cache
-'@
-
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, ($scriptText -replace "`r`n", "`n"), $utf8NoBom)
-}
-
-function New-HostedToolingScript {
-    param([string]$Path)
-
-    $scriptText = @'
-#!/usr/bin/env bash
-set -euo pipefail
-
-required_commands=(
-  rustc
-  rustfmt
-  rust-analyzer
-  clang
-  clang-format
-  clangd
-  python
-  black
-  basedpyright
-  basedpyright-langserver
-  typescript-language-server
-  vscode-html-language-server
-  vscode-css-language-server
-  biome
-)
-
-missing=()
-for cmd in "${required_commands[@]}"; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    missing+=("$cmd")
-  fi
-done
-
-if [ "${#missing[@]}" -eq 0 ]; then
-  echo "hosted checker/LSP tools already installed"
-  exit 0
-fi
-
-echo "installing missing hosted checker/LSP tools: ${missing[*]}"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends \
-  ca-certificates \
-  curl \
-  build-essential \
-  clang \
-  clang-format \
-  clangd \
-  black \
-  python-is-python3 \
-  python3-pip
-
-if ! command -v npm >/dev/null 2>&1; then
-  echo "npm is required to install hosted TypeScript/Python/Web LSP binaries" >&2
-  exit 1
-fi
-npm install -g basedpyright typescript typescript-language-server vscode-langservers-extracted @biomejs/biome
-
-export RUSTUP_HOME=/opt/rustup
-export CARGO_HOME=/opt/cargo
-if [ ! -x /opt/cargo/bin/rustup ]; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,rust-analyzer
-else
-  /opt/cargo/bin/rustup toolchain install stable --profile minimal --component rustfmt --component rust-analyzer
-  /opt/cargo/bin/rustup default stable
-  /opt/cargo/bin/rustup component add rustfmt rust-analyzer
-fi
-
-rustc_path="$(/opt/cargo/bin/rustup which rustc)"
-rustfmt_path="$(/opt/cargo/bin/rustup which rustfmt)"
-cargo_path="$(/opt/cargo/bin/rustup which cargo)"
-rust_analyzer_path="$(/opt/cargo/bin/rustup which rust-analyzer)"
-ln -sf "$rustc_path" /usr/local/bin/rustc
-ln -sf "$rustfmt_path" /usr/local/bin/rustfmt
-ln -sf "$cargo_path" /usr/local/bin/cargo
-ln -sf "$rust_analyzer_path" /usr/local/bin/rust-analyzer
-
-for cmd in "${required_commands[@]}"; do
-  command -v "$cmd" >/dev/null
-done
-echo "hosted checker/LSP tools ready"
-'@
-
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($Path, ($scriptText -replace "`r`n", "`n"), $utf8NoBom)
-}
-
-function Test-HttpStatus {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Uri,
-
-        [string]$Method = 'Get',
-
-        [Parameter(Mandatory)]
-        [int]$ExpectedStatus
-    )
-
-    $lastStatus = $null
-    for ($attempt = 1; $attempt -le 10; $attempt++) {
         try {
-            $response = Invoke-WebRequest -Uri $Uri -Method $Method -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 30
-            $lastStatus = $response.StatusCode
-            if ($response.StatusCode -eq $ExpectedStatus) {
-                return
-            }
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 5
+            if ($response.StatusCode -eq 200) { return }
         } catch {
-            $lastStatus = $_.Exception.Message
+            Write-Verbose "not ready yet: $($_.Exception.Message)"
         }
-        Start-Sleep -Seconds 1
+        Start-Sleep -Milliseconds 500
     }
-    throw "Expected $ExpectedStatus from $Uri, got $lastStatus."
+    Show-LogTail
+    throw "server.mjs did not answer on $Url within 30 s. It is still running; .\lt.ps1 stop to end it."
 }
 
-function Get-DeployBasePath {
-    param([string]$BaseUrl)
+function Start-ServeProcess {
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Dev helper launch command is the user gesture.')]
+    param()
 
+    $nodeArgs = @()
+    if (Test-Path -LiteralPath $EnvFile) { $nodeArgs += "--env-file=$EnvFile" }
+    $nodeArgs += $ServerPath
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ServePidFile) | Out-Null
+    # Node's --env-file never overrides a variable already set, so -Port wins over PORT in .env.
+    $previousPort = $env:PORT
+    $env:PORT = "$Port"
     try {
-        $path = ([System.Uri]$BaseUrl).AbsolutePath
-    } catch {
-        return '/'
+        return Start-Process -FilePath 'node' -ArgumentList $nodeArgs -WorkingDirectory $ScriptDir -WindowStyle Hidden `
+            -RedirectStandardOutput $ServeLog -RedirectStandardError $ServeErrLog -PassThru
+    } finally {
+        $env:PORT = $previousPort
     }
-    if ([string]::IsNullOrWhiteSpace($path) -or $path -eq '/') {
-        return '/'
-    }
-    return "$($path.TrimEnd('/'))/"
 }
 
-function Invoke-DeploySmokeChecks {
-    param([string]$BaseUrl)
-
-    $trimmedUrl = $BaseUrl.TrimEnd('/')
-    Write-Step "Smoke: $trimmedUrl"
-    Test-HttpStatus -Uri $trimmedUrl -Method Head -ExpectedStatus 200
-
-    Write-Step "Smoke: $trimmedUrl/"
-    Test-HttpStatus -Uri "$trimmedUrl/" -Method Head -ExpectedStatus 200
-
-    Write-Step 'Smoke: auth session'
-    $session = Invoke-RestMethod -Uri "$trimmedUrl/api/auth/session" -Method Get -TimeoutSec 30
-    if (-not (Get-Member -InputObject $session -Name 'session' -MemberType NoteProperty)) {
-        throw 'Auth session response did not include a session property.'
+function Invoke-Launch {
+    $running = Get-ServeProcess (Read-ServeRecord)
+    if ($null -ne $running) {
+        $record = Read-ServeRecord
+        throw "Already running at http://localhost:$($record.port)/ (pid $($record.pid)). Run .\lt.ps1 stop first."
     }
-    if (-not (Get-Member -InputObject $session -Name 'requireAuth' -MemberType NoteProperty) -or $session.requireAuth -ne $true) {
-        throw 'Hosted Lang Tutor must report requireAuth: true.'
-    }
+    Assert-Node
+    if (-not (Test-Path -LiteralPath (Join-Path $ScriptDir 'node_modules'))) { Invoke-Install }
+    if (Test-DistStale) { Invoke-Build } else { Write-Ok 'dist/ is up to date.' }
+    Start-DockerEngine
+    Initialize-ToolchainImage
 
-    Write-Step 'Smoke: unauthenticated state is protected'
-    Test-HttpStatus -Uri "$trimmedUrl/state/local-storage" -ExpectedStatus 401
+    Write-Step "Starting server.mjs on port $Port..."
+    $process = Start-ServeProcess
+    $record = [ordered]@{ pid = $process.Id; port = $Port; startTicks = $process.StartTime.Ticks }
+    $record | ConvertTo-Json | Set-Content -LiteralPath $ServePidFile -Encoding utf8
+    $url = "http://localhost:$Port/"
+    Wait-ServerReady -Process $process -Url $url
 
-    Write-Step 'Smoke: unauthenticated hosted tooling is protected'
-    $body = @{ lang = 'rust'; code = 'fn main() {}' } | ConvertTo-Json -Compress
-    $response = Invoke-WebRequest -Uri "$trimmedUrl/run" -Method Post -ContentType 'application/json' -Body $body -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 30
-    if ($response.StatusCode -ne 401) {
-        throw "Expected 401 from unauthenticated /run, got $($response.StatusCode)."
-    }
-
-    Write-Ok 'Hosted smoke checks passed.'
+    Write-Ok "Lang Tutor is running at $url (pid $($process.Id))."
+    Write-Host "Logs: $ServeLog, $ServeErrLog" -ForegroundColor Gray
+    Write-Host 'Stop it with .\lt.ps1 stop (add -Docker to also quit Docker Desktop).' -ForegroundColor Gray
+    if (-not $NoBrowser) { Start-Process $url }
 }
 
-function Invoke-Deploy {
-    Test-Tool 'git' 'Install Git and try again.'
-    Test-Tool 'ssh' 'Install OpenSSH client and try again.'
-    Test-Tool 'scp' 'Install OpenSSH client and try again.'
-
-    if ($Worktree) {
-        Write-Warn 'Deploying the current working tree, including uncommitted tracked files and untracked non-ignored files.'
+function Invoke-Stop {
+    $record = Read-ServeRecord
+    $process = Get-ServeProcess $record
+    if ($null -ne $process) {
+        Write-Step "Stopping server.mjs (pid $($process.Id)) and everything it started..."
+        # /T takes the supervised dotnet/vite/LSP children too; a forced kill skips server.mjs's own cleanup handlers.
+        & taskkill /T /F /PID $process.Id | Out-Null
+        Test-ExitOk 'taskkill'
+        Write-Ok 'Stopped.'
+    } elseif ($null -ne $record) {
+        Write-Warn "pid $($record.pid) from the last launch is no longer running; clearing the stale record."
     } else {
-        Assert-CleanTrackedWorktree
+        Write-Host 'Nothing launched by lt.ps1 is running.' -ForegroundColor Gray
     }
+    if ($null -ne $record) { Remove-Item -LiteralPath $ServePidFile -Force }
+    if ($Docker) {
+        Write-Step 'Stopping Docker Desktop...'
+        & docker desktop stop
+        Test-ExitOk 'docker desktop stop'
+    }
+}
 
-    if (-not $SkipCheck) {
-        Invoke-Typecheck
+function Invoke-Status {
+    $record = Read-ServeRecord
+    if ($null -ne (Get-ServeProcess $record)) {
+        Write-Ok "Lang Tutor: running at http://localhost:$($record.port)/ (pid $($record.pid))"
     } else {
-        Write-Warn 'Skipping local typecheck.'
+        Write-Host 'Lang Tutor: not running' -ForegroundColor Gray
     }
-
-    if ($Worktree) {
-        Write-Warn 'Skipping git push because -Worktree deploys local uncommitted content.'
-    } elseif (-not $SkipPush) {
-        Write-Step 'Pushing current branch'
-        Invoke-Native -FilePath 'git' -Arguments @('push')
-    } else {
-        Write-Warn 'Skipping git push.'
-    }
-
-    $commit = ((Invoke-NativeOutput -FilePath 'git' -Arguments @('rev-parse', '--short', 'HEAD')) -join '').Trim()
-    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
-    $releaseName = if ($Worktree) { "$commit-worktree-$stamp" } else { "$commit-$stamp" }
-    $deployBasePath = Get-DeployBasePath -BaseUrl $DeployUrl
-    $tmpDir = Join-Path $ScriptDir '.tmp'
-    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
-    $archive = Join-Path $tmpDir "lang-tutor-$releaseName.tar"
-    $activateScript = Join-Path $tmpDir "lang-tutor-activate-$releaseName.sh"
-    $hostedToolingScript = Join-Path $tmpDir "lang-tutor-hosted-tooling-$releaseName.sh"
-
-    Write-Step "Creating release archive $releaseName"
-    New-DeployArchive -Archive $archive -IncludeWorktree:$Worktree
-    New-DeployActivationScript -Path $activateScript
-    New-HostedToolingScript -Path $hostedToolingScript
-
-    Write-Step "Uploading release to $DeployHost"
-    Invoke-Native -FilePath 'scp' -Arguments @($archive, "${DeployHost}:/tmp/lang-tutor-release.tar")
-    Invoke-Native -FilePath 'scp' -Arguments @($activateScript, "${DeployHost}:/tmp/lang-tutor-activate.sh")
-    Invoke-Native -FilePath 'scp' -Arguments @($hostedToolingScript, "${DeployHost}:/tmp/lang-tutor-hosted-tooling.sh")
-
-    Write-Step 'Ensuring hosted checker/LSP tools on droplet'
-    Invoke-Native -FilePath 'ssh' -Arguments @($DeployHost, 'bash /tmp/lang-tutor-hosted-tooling.sh')
-
-    Write-Step 'Activating release on droplet'
-    Invoke-Native -FilePath 'ssh' -Arguments @($DeployHost, "bash /tmp/lang-tutor-activate.sh '$releaseName'")
-
-    Write-Step 'Installing dependencies and building production assets on droplet'
-    Invoke-Native -FilePath 'ssh' -Arguments @(
-        $DeployHost,
-        "runuser -u lang-tutor -- env HOME=/opt/lang-tutor LANG_TUTOR_BASE_PATH='$deployBasePath' bash -lc 'cd /opt/lang-tutor/app && pnpm install --frozen-lockfile && pnpm build'"
-    )
-
-    Write-Step 'Building hosted toolchain Docker image on droplet'
-    Invoke-Native -FilePath 'ssh' -Arguments @(
-        $DeployHost,
-        "cd /opt/lang-tutor/app && docker build -t lang-tutor-toolchains:latest -f docker/toolchains/Dockerfile docker/toolchains && docker run --rm --entrypoint python3 lang-tutor-toolchains:latest --version && docker run --rm --entrypoint rustc lang-tutor-toolchains:latest --version && docker run --rm --entrypoint clang++ lang-tutor-toolchains:latest --version >/dev/null && docker run --rm --entrypoint objdump lang-tutor-toolchains:latest --version >/dev/null && docker run --rm --entrypoint dotnet lang-tutor-toolchains:latest --version"
-    )
-
-    Write-Step 'Ensuring hosted workspace runtime config'
-    Invoke-Native -FilePath 'ssh' -Arguments @(
-        $DeployHost,
-        "install -d -m 0755 /etc/lang-tutor && touch /etc/lang-tutor/lang-tutor-runtime.conf && if grep -q '^LANG_TUTOR_PROJECT_ROOT=' /etc/lang-tutor/lang-tutor-runtime.conf; then sed -i 's#^LANG_TUTOR_PROJECT_ROOT=.*#LANG_TUTOR_PROJECT_ROOT=/var/lib/lang-tutor/workspaces#' /etc/lang-tutor/lang-tutor-runtime.conf; else printf '\nLANG_TUTOR_PROJECT_ROOT=/var/lib/lang-tutor/workspaces\n' >> /etc/lang-tutor/lang-tutor-runtime.conf; fi && install -d -o lang-tutor -g lang-tutor /var/lib/lang-tutor/workspaces /var/lib/lang-tutor/cache"
-    )
-
-    Write-Step 'Restarting lang-tutor.service'
-    Invoke-Native -FilePath 'ssh' -Arguments @(
-        $DeployHost,
-        'systemctl restart lang-tutor.service && systemctl is-active lang-tutor.service && readlink -f /opt/lang-tutor/app'
-    )
-
-    if (-not $SkipSmoke) {
-        Invoke-DeploySmokeChecks -BaseUrl $DeployUrl
-    } else {
-        Write-Warn 'Skipping hosted smoke checks.'
-    }
-
-    Write-Ok "Deploy complete: $releaseName"
+    $engine = if ((Get-Command docker -ErrorAction SilentlyContinue) -and (Test-DockerEngine)) { 'running' } else { 'not running' }
+    Write-Host "Docker engine: $engine" -ForegroundColor Gray
 }
 
 function Show-Help {
@@ -700,29 +511,29 @@ Commands:
   format     Run biome format --write .
   toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
   install    Run pnpm install.
-  deploy     Deploy to the droplet, restart lang-tutor.service, and smoke test.
+  launch     Start the app in the background: install and build if needed, start Docker Desktop
+             and the toolchain image if needed, run server.mjs, open the browser.
+  stop       Stop what launch started, with every process it spawned.
+  status     Show whether the app and the Docker engine are running.
   setup      Run scripts/setup.ps1.
   clean      Remove dist/ and generated public/lang-tutor-assets/.
   help       This message.
 
-Deploy options:
-  -DeployHost <ssh>  SSH target. Default: root@24.199.111.154
-  -DeployUrl <url>   Hosted base URL. Default: https://leftos.dev/lang-tutor
-  -SkipCheck         Skip the local type-check/build gate before deploy.
-  -SkipPush          Do not push before archiving HEAD.
-  -Worktree          Deploy local tracked and untracked worktree files instead of HEAD; skips git push.
-  -SkipSmoke         Skip hosted smoke checks after restart.
+Options:
+  -Port <n>    launch: port for server.mjs. Default: 3000.
+  -NoBrowser   launch: do not open the browser. setup: forwarded to setup.ps1.
+  -Docker      stop: also quit Docker Desktop.
 
 Examples:
   .\lt.ps1
   .\lt.ps1 dev --host 0.0.0.0
+  .\lt.ps1 launch
+  .\lt.ps1 stop -Docker
   .\lt.ps1 build
   .\lt.ps1 serve
   .\lt.ps1 preview --port 4173
   .\lt.ps1 typecheck
   .\lt.ps1 toolchain
-  .\lt.ps1 deploy
-  .\lt.ps1 deploy -Worktree
   .\lt.ps1 lint
   .\lt.ps1 setup -NoBrowser
 '@
@@ -743,7 +554,9 @@ switch ($effective) {
     'install'   { Invoke-Install }
     'setup'     { Invoke-Setup }
     'clean'     { Invoke-Clean }
-    'deploy'    { Invoke-Deploy }
+    'launch'    { Invoke-Launch }
+    'stop'      { Invoke-Stop }
+    'status'    { Invoke-Status }
     'help'      { Show-Help }
     default     { throw "Unknown command: $effective" }
 }
