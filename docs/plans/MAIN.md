@@ -37,6 +37,12 @@ Shared: `src/api.ts` (extraction calls), `src/main.ts` (`buildSystem`, `extractP
 - [x] Resend one of my earlier messages and restore the conversation to that point: later tutor and user turns drop out of the context (Edit & resend, PR #7)
 - [ ] Live check: Edit & resend a plain message and a Send-to-tutor message with a real key; the tutor answers from the rewound point, and lesson progress matches that point
 
+### Singles (current)
+
+- [ ] One command prepares this PC to run the server with full capabilities (runtimes, host checkers/formatters, every LSP, Docker + toolchain image) and reports what is missing
+- [ ] Rust Error list shows only `main.rs:L:C` + severity with no message text (e.g. "warning --> main.rs:2:9"); the editor tooltips have the messages
+- [x] Copy buttons: a copy icon on every code block in chat, and a copy button on every tutor reply and user message in the history
+
 ## Backlog
 
 ### Wave 3 — LSP features in project workspaces

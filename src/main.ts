@@ -9,6 +9,7 @@ import {
   logoutAccount,
   registerAccount,
 } from './authClient';
+import { createCopyButton } from './clipboard';
 import {
   ACTIVE_LANG_KEY,
   activeTabKey,
@@ -1134,9 +1135,22 @@ function renderMessageContent(body: HTMLElement, role: 'user' | 'assistant', con
   }
 }
 
+/** The message's Copy control; it copies the stored source text, never the rendered chrome. */
+function messageCopyButton(message: Message): HTMLButtonElement {
+  return createCopyButton(() => primaryText(message), { ariaLabel: 'Copy message', label: 'Copy' });
+}
+
+/** A message's hover controls: Edit & resend on a user message, plus Copy on both. */
+function messageActions(role: 'user' | 'assistant', content: string | ContentBlock[], historyIndex: number | null): HTMLDivElement {
+  const actions = div('msg-hover-actions');
+  if (historyIndex !== null) actions.appendChild(rewindButton(historyIndex));
+  actions.appendChild(messageCopyButton({ role, content }));
+  return actions;
+}
+
 /**
  * Appends one chat message. `historyIndex` is the message's index in `history` for a user message
- * (it gets an Edit & resend control), or `null` for a tutor message.
+ * (it gets an Edit & resend control), or `null` for a tutor message. Every message gets a Copy control.
  */
 function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[], historyIndex: number | null): void {
   const msgList = el('msgList');
@@ -1149,11 +1163,9 @@ function appendMsg(role: 'user' | 'assistant', content: string | ContentBlock[],
   if (!isBundle) renderMessageContent(body, role, content);
   bl.appendChild(lbl);
   bl.appendChild(body);
-  if (historyIndex !== null) {
-    bl.classList.add('has-rewind');
-    bl.dataset.historyIndex = String(historyIndex);
-    bl.appendChild(rewindButton(historyIndex));
-  }
+  if (historyIndex !== null) bl.dataset.historyIndex = String(historyIndex);
+  bl.classList.add('has-msg-actions');
+  bl.appendChild(messageActions(role, content, historyIndex));
   if (role === 'assistant') addTutorBackToTop(bl);
   msgList.appendChild(bl);
   msgList.scrollTop = msgList.scrollHeight;
@@ -1369,6 +1381,8 @@ function appendMsgStreaming(): StreamingBubble {
     },
     finalize(): void {
       render();
+      bl.classList.add('has-msg-actions');
+      bl.appendChild(messageActions('assistant', accumulated, null));
       addTutorBackToTop(bl);
     },
   };

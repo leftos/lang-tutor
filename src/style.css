@@ -1166,6 +1166,51 @@
   color: inherit;
 }
 
+/* ─── Copy buttons on code fences ─────────────────────────── */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.code-fence-wrap {
+  position: relative;
+  margin: 10px 0;
+}
+.code-fence-wrap > .code-fence {
+  margin: 0;
+}
+.msg-bundle-block .code-fence-wrap {
+  margin: 0;
+}
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 8px;
+  background: var(--paper);
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.code-fence-wrap:hover .code-copy-btn,
+.code-copy-btn:focus-visible {
+  opacity: 1;
+}
+.copy-btn:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 2px;
+}
+@media (hover: none) {
+  .code-copy-btn {
+    opacity: 1;
+  }
+}
+
 .thinking {
   display: inline-block;
   font-family: var(--font-mono);
@@ -1185,32 +1230,38 @@
   }
 }
 
-/* ─── Rewind: Edit & resend control, banner and Undo notice ─── */
-.msg-block.has-rewind {
+/* ─── Message hover controls: Edit & resend and Copy ─── */
+.msg-block.has-msg-actions {
   position: relative;
 }
-.msg-rewind-btn {
+.msg-hover-actions {
   position: absolute;
   top: -4px;
   right: 0;
-  padding: 3px 8px;
-  background: var(--paper);
+  display: flex;
+  gap: 4px;
   opacity: 0;
   transition: opacity 150ms ease;
 }
-.msg-block.has-rewind:hover .msg-rewind-btn,
-.msg-rewind-btn:focus-visible {
+.msg-block.has-msg-actions:hover .msg-hover-actions,
+.msg-hover-actions:focus-within {
   opacity: 1;
+}
+.msg-hover-actions .ghost-btn {
+  padding: 3px 8px;
+  background: var(--paper);
 }
 .msg-rewind-btn:focus-visible {
   outline: 2px solid var(--sig);
   outline-offset: 2px;
 }
 @media (hover: none) {
-  .msg-rewind-btn {
+  .msg-hover-actions {
     opacity: 1;
   }
 }
+
+/* ─── Rewind: banner and Undo notice ─── */
 .msg-block.is-rewind-dropped {
   opacity: 0.45;
 }

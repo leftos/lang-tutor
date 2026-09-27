@@ -1,7 +1,22 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
+import { createCopyButton } from './clipboard';
 
 marked.setOptions({ gfm: true, breaks: false });
+
+/**
+ * Wraps `pre` in a `div.code-fence-wrap` carrying a copy button, so the button sits over the
+ * fence's top-right corner without its label landing inside the copied text.
+ */
+function wrapCodeFence(pre: HTMLPreElement): void {
+  const wrap = document.createElement('div');
+  wrap.className = 'code-fence-wrap';
+  pre.replaceWith(wrap);
+  wrap.appendChild(pre);
+  const button = createCopyButton(() => pre.textContent ?? '', { ariaLabel: 'Copy code' });
+  button.classList.add('code-copy-btn');
+  wrap.appendChild(button);
+}
 
 function disableNativeDrag(root: ParentNode): void {
   for (const el of root.querySelectorAll<HTMLElement>('a, img, pre, code, table, blockquote')) {
@@ -47,6 +62,7 @@ export function renderMarkdown(text: string): DocumentFragment {
 
   for (const pre of template.content.querySelectorAll('pre')) {
     pre.classList.add('code-fence');
+    wrapCodeFence(pre);
   }
 
   for (const table of template.content.querySelectorAll('table')) {
@@ -75,6 +91,7 @@ export function renderPlainWithFences(text: string): DocumentFragment {
         .trimEnd();
       pre.draggable = false;
       frag.appendChild(pre);
+      wrapCodeFence(pre);
     } else {
       const s = document.createElement('span');
       s.style.whiteSpace = 'pre-wrap';
