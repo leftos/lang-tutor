@@ -223,3 +223,7 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
 - Resetting progress only affects the **active** language. Switch first if you want to reset a different one.
 - Rust, C++, DASM, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
 - The XSS-safe DOM construction means you can paste arbitrary content from the AI without risk.
+
+## Glossary
+
+- **Wave**: a group of open plan items in `docs/plans/MAIN.md` that share files or a subsystem, so they ship and are reviewed together.
