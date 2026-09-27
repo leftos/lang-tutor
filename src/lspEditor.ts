@@ -157,6 +157,15 @@ const KIND_TO_TYPE: Record<number, string> = {
   25: 'type', // TypeParameter
 };
 
+/**
+ * Whether completion should query the server. An explicit request (Ctrl+Space) always does; typing
+ * only opens the popup after a partial identifier or one of the server's trigger characters, so
+ * `;` then Enter makes a new line instead of accepting a suggestion.
+ */
+export function shouldQueryCompletion(explicit: boolean, prefix: string, triggerCharacter: string | undefined): boolean {
+  return explicit || prefix.length > 0 || triggerCharacter !== undefined;
+}
+
 export function lspCompletionExtension(getClient: () => LspClient | null) {
   const source = async (context: CompletionContext): Promise<CompletionResult | null> => {
     const client = getClient();
@@ -169,6 +178,8 @@ export function lspCompletionExtension(getClient: () => LspClient | null) {
       const triggers = client.capabilities.completionProvider?.triggerCharacters ?? [];
       if (triggers.includes(before)) triggerCharacter = before;
     }
+    const prefix = context.matchBefore(/[\w$_]+/)?.text ?? '';
+    if (!shouldQueryCompletion(context.explicit, prefix, triggerCharacter)) return null;
 
     const lspPos = offsetToLspPosition(context.state, context.pos);
     const result = await client.completion(lspPos.line, lspPos.character, triggerCharacter);
