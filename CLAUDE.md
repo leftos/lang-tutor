@@ -46,6 +46,7 @@ pnpm install                # first time
 .\lt.ps1 preview            # vite preview (preview the production build)
 .\lt.ps1 typecheck          # tsc --noEmit
 .\lt.ps1 lint               # biome check --write .
+pnpm test                   # vitest run (src/**/*.test.ts: learner memory + model resolution)
 .\lt.ps1 toolchain          # build lang-tutor-toolchains:latest for /run
 ```
 
@@ -63,9 +64,11 @@ pnpm install                # first time
 src/
   main.ts            Entry: state, session control, language switching, event wiring, init
   appUrls.ts         appUrl()/appWsUrl() — prepends Vite BASE_URL so the app works under /lang-tutor/
-  api.ts             callClaude (streaming, provider-aware) + fetchProgressExtraction + fetchLearnerProfileExtraction
+  api.ts             callClaude (streaming, provider-aware) + fetchMemoryExtraction (progress + profile delta in one call)
+  learnerMemory.ts   Pure merge rules for learner memory: profile v1→v2 migration, profile deltas, user add/remove, progress merge, extraction validation (unit-tested)
+  modelResolution.ts Auto model resolution (newest family member from the live list) + FALLBACK_MODELS (unit-tested)
   authClient.ts      AI provider–independent account auth: register / login / logout / session refresh + CSRF
-  providerSettings.ts Per-provider config (Anthropic / OpenAI / Gemini): API key, model list, default model
+  providerSettings.ts Per-provider config (Anthropic / OpenAI / Gemini): API key, saved model or Auto, cached model list
   editor.ts          CodeMirror 6 wrapper for single-buffer editor: createEditor() → TutorEditor
   projectEditor.ts   Multi-file CodeMirror wrapper (Map<path, EditorState>) for project workspaces
   lspClient.ts       Hand-rolled LSP-over-WebSocket client. One bundle per language; fans out across servers
@@ -173,15 +176,16 @@ Local-only UI keys (declared in `main.ts`): `lang-tutor:theme`, `lang-tutor:dasm
 
 ### AI provider plumbing
 
-`src/providerSettings.ts` defines three providers (`anthropic`, `openai`, `gemini`), each with its own model list, default model, and API key (`readProviderKey(provider)`). Keys live only in browser `localStorage` — they never leave the device, are not stored on the server, and are excluded from the `/state/local-storage` mirror. The "AI Provider" dialog lets the user paste a key, click **Load models** to fetch that provider's currently available chat/generation models live, and pick one. If the saved model disappears from the provider's list, the app warns and forces re-selection.
+`src/providerSettings.ts` defines three providers (`anthropic`, `openai`, `gemini`), each with its own API key (`readProviderKey(provider)`), saved model and cached model list. Keys live only in browser `localStorage` — they never leave the device, are not stored on the server, and are excluded from the `/state/local-storage` mirror. The "AI Provider" dialog lets the user paste a key, click **Load models** to fetch the provider's live model list, and pick a model or **Auto**.
+
+**Auto** (a saved model of `''`) is resolved by `src/modelResolution.ts` from the cached live list (refreshed in the background when older than 24 h): newest `claude-sonnet-*` / newest `gpt-<n>-mini` / `gemini-flash-latest` for chat; newest `claude-haiku-*` (else newest Sonnet) on Anthropic and the chat model elsewhere for memory extraction. Anthropic and OpenAI have no moving "latest" alias (every Claude ID is a pinned snapshot), so resolution happens in the app; `FALLBACK_MODELS` covers a missing list. A saved model that vanishes from the list falls back to Auto with a warning.
 
 Both LLM call sites go from the browser **directly to the provider** with the user's key — no local proxy:
 
-1. `callClaude()` (`src/api.ts`) — the tutoring conversation, streamed. Provider-aware (Anthropic / OpenAI / Gemini SSE parsers). System prompt is built by `buildSystem(progress, learnerProfile, lang)` in `main.ts` and embeds the active language's intro + lesson plan + strengths + struggles + resume context + shared learner profile.
-2. `fetchProgressExtraction()` (non-streaming) fires after each `evaluateCode()`. Takes `topics` as a parameter (so the schema reflects the active language). Result merged with prior progress (preserving any topic statuses the extractor didn't return) and persisted under the active language's key. Guarded against late-arriving results from a previous active language.
-3. `fetchLearnerProfileExtraction()` extracts the shared learner profile (`LEARNER_PROFILE_KEY`) from the active language's recent conversation.
+1. `callClaude()` (`src/api.ts`) — the tutoring conversation, streamed. Provider-aware (Anthropic / OpenAI / Gemini SSE parsers), 4000-token output limit (thinking counts toward it on current models). System prompt is built by `buildSystem(progress, lang, learnerProfile)` in `main.ts` and embeds the active language's intro + lesson plan + resume context + the shared learner profile. It is rebuilt only at load, language switch, session start and after a Profile-page edit (`refreshSystemPrompt()`), not after each extraction, so the provider's prompt cache holds across turns.
+2. `fetchMemoryExtraction()` (non-streaming) runs once per turn via `extractMemory()` on the memory model with reasoning turned down (retried at default reasoning if a model rejects the field, and on the chat model if the memory model is unavailable). It returns per-language progress plus a learner-profile delta in one JSON reply, checked by `validateExtraction`. Merging is code, not the model (`src/learnerMemory.ts`): topic statuses only advance, per-language strengths/struggles are unioned and capped at 8; profile facts are added deduped, removed only by id, capped at 8 per section, and user-added facts are never removed or evicted by the model. The profile delta applies even after a language switch (it is global); progress applies only if the language is unchanged. A request made while one runs triggers a single trailing rerun.
 
-There is no `CLAUDE_MODEL` constant. The active model lives in `providerSettings` keyed by provider; changing it is a per-provider dropdown in the UI, not a code edit.
+The learner profile (`LEARNER_PROFILE_KEY`, v2) holds `summary`, `knownLanguages` and facts in five sections (background, goals, preferences, strengths, struggles), each fact tagged with its source (`tutor` + language, or `user`). v1 profiles are migrated on load. The **Profile** aside tab shows it and lets the learner delete any fact or add their own. When the profile has content, a new language's tutor gets `returningLearnerPrompt` instead of the background interview.
 
 ### Code execution dispatch
 
@@ -266,7 +270,7 @@ Tailwind v4 utilities for layout, plus component classes in `src/style.css` (`.b
 
 ## Gotchas
 
-- `extractionQueued` is a single-flight guard within a page-load. Concurrent `evaluateCode()` calls within one language won't double-extract. After-language-switch results are dropped via the `langWhenStarted` check.
+- `extractMemory()` runs one extraction at a time; a request during a run sets `rerunRequested` for one trailing rerun. Progress from a run that outlived a language switch is dropped via the `langWhenStarted` check; its profile delta still applies.
 - `history` is sliced to the last `MAX_HISTORY` (30) entries on every persist; older context is gone from `localStorage` but may still be in memory for the current session until reload.
 - Refreshing the page restores the last active language and its full visible history.
 - The Reset button wipes only the **active** language's history, progress, and either code (single-buffer) or the user's workspace folder (project workspaces, via `POST /proj/reset` — confirmation dialog calls out the destructive on-disk delete). Switch language first if you want to reset a different one.
