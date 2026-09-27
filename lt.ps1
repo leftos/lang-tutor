@@ -14,7 +14,8 @@
                  if node_modules is missing, build if dist/ is older than its
                  sources, start Docker Desktop and build the toolchain image if
                  needed, run server.mjs hidden (logs in .tmp/serve*.log), wait
-                 until it answers, then open the browser.
+                 until it answers, then open the browser. Prints one line when
+                 the readiness report finds capabilities missing.
       stop       Stop what launch started, including every process it spawned
                  (project dev servers, LSPs). With -Docker, also quit Docker Desktop.
       status     Show whether the launched app and the Docker engine are running.
@@ -27,7 +28,12 @@
       format     Run biome format --write .
       toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
       install    Run pnpm install.
-      setup      Run scripts/setup.ps1.
+      doctor     Print the readiness report: every runtime, host checker and
+                 language server, what it enables, and the fix for what is
+                 missing. Installs nothing; exits 1 when anything is missing.
+                 --json prints the report as JSON.
+      setup      Run scripts/setup.ps1: install what the readiness report finds
+                 missing, then print the report again.
       clean      Remove generated build output.
       help       Print the subcommand summary.
 
@@ -38,10 +44,7 @@
     Applies to launch. The port server.mjs listens on; overrides PORT in .env.
 
 .PARAMETER NoBrowser
-    Applies to launch (do not open the browser) and setup (forwarded to scripts/setup.ps1).
-
-.PARAMETER SkipInstall
-    Applies to setup. Forwarded to scripts/setup.ps1.
+    Applies to launch. Do not open the browser.
 
 .PARAMETER Docker
     Applies to stop. Also quit Docker Desktop after stopping the app.
@@ -59,7 +62,8 @@
     .\lt.ps1 typecheck
     .\lt.ps1 toolchain
     .\lt.ps1 lint
-    .\lt.ps1 setup -NoBrowser
+    .\lt.ps1 doctor
+    .\lt.ps1 setup
 #>
 [CmdletBinding()]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
@@ -69,13 +73,12 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('', 'dev', 'launch', 'stop', 'status', 'serve', 'build', 'preview', 'typecheck', 'lint', 'format', 'toolchain',
-        'install', 'setup', 'clean', 'help')]
+        'install', 'doctor', 'setup', 'clean', 'help')]
     [string]$Command = '',
 
     [ValidateRange(1, 65535)]
     [int]$Port = 3000,
     [switch]$NoBrowser,
-    [switch]$SkipInstall,
     [switch]$Docker,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -91,6 +94,7 @@ $ServerPath = Join-Path $ScriptDir 'server.mjs'
 $EnvFile = Join-Path $ScriptDir '.env'
 $AssetScript = Join-Path $ScriptDir 'scripts\copy-html-to-image.mjs'
 $SetupScript = Join-Path $ScriptDir 'scripts\setup.ps1'
+$DoctorScript = Join-Path $ScriptDir 'scripts\doctor.mjs'
 $ToolchainScript = Join-Path $ScriptDir 'scripts\build-toolchain-image.ps1'
 $ServePidFile = Join-Path $ScriptDir '.tmp\serve.pid.json'
 $ServeLog = Join-Path $ScriptDir '.tmp\serve.log'
@@ -279,12 +283,53 @@ function Invoke-Install {
 
 function Invoke-Setup {
     Assert-File $SetupScript 'scripts\setup.ps1 is missing.'
-    $setupArgs = @()
-    if ($NoBrowser) { $setupArgs += '-NoBrowser' }
-    if ($SkipInstall) { $setupArgs += '-SkipInstall' }
-    $setupArgs += $Rest
-    & $SetupScript @setupArgs
-    Test-ExitOk 'setup'
+    if ($Rest.Count -gt 0) { throw "setup takes no arguments (got: $($Rest -join ' ')). Use .\lt.ps1 doctor for a report only." }
+    & $SetupScript
+    # setup ends with the readiness report; its exit code is the report's (1 when anything is still missing).
+    exit $LASTEXITCODE
+}
+
+function Assert-DoctorReady {
+    Assert-Node
+    Assert-File $DoctorScript 'scripts\doctor.mjs is missing.'
+    Assert-File (Join-Path $ScriptDir 'node_modules') 'Run .\lt.ps1 setup (or .\lt.ps1 install) first.'
+}
+
+# Runs doctor with the saved PATH merged in, so tools installed since this terminal opened are seen.
+function Invoke-DoctorScript {
+    param([string[]]$Arguments)
+
+    $previousPath = $env:Path
+    $env:Path = Get-CurrentPath
+    try {
+        & node $DoctorScript @Arguments
+    } finally {
+        $env:Path = $previousPath
+    }
+}
+
+function Invoke-Doctor {
+    Assert-DoctorReady
+    Invoke-DoctorScript -Arguments @($Rest | Where-Object { $_ })
+    exit $LASTEXITCODE
+}
+
+function Show-MissingCapability {
+    $lines = Invoke-DoctorScript -Arguments @('--json') 2>$null
+    # Missing capabilities are an answer, not an error: keep them out of the script's own exit code.
+    $global:LASTEXITCODE = 0
+    try {
+        $report = ($lines -join "`n") | ConvertFrom-Json
+    } catch {
+        Write-Warn "Readiness check did not run ($($_.Exception.Message)); .\lt.ps1 doctor shows why."
+        return
+    }
+    $missing = @($report.rows | Where-Object { $_.status -eq 'missing' }).Count
+    if ($missing -eq 1) {
+        Write-Warn '1 capability missing - run .\lt.ps1 doctor'
+    } elseif ($missing -gt 1) {
+        Write-Warn "$missing capabilities missing - run .\lt.ps1 doctor"
+    }
 }
 
 function Remove-RepoChildDirectory {
@@ -415,6 +460,21 @@ function Wait-ServerReady {
     throw "server.mjs did not answer on $Url within 30 s. It is still running; .\lt.ps1 stop to end it."
 }
 
+# Saved Machine + User PATH first, then entries only this session has, so tools setup just installed
+# (e.g. LLVM's bin) are found without opening a new terminal.
+function Get-CurrentPath {
+    $saved = @(
+        [System.Environment]::GetEnvironmentVariable('Path', 'Machine'),
+        [System.Environment]::GetEnvironmentVariable('Path', 'User')
+    ) -join ';'
+    $entries = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in (($saved, $env:Path) -join ';') -split ';') {
+        $trimmed = $entry.Trim()
+        if ($trimmed -and -not $entries.Contains($trimmed)) { $entries.Add($trimmed) }
+    }
+    return $entries -join ';'
+}
+
 function Start-ServeProcess {
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
@@ -427,12 +487,15 @@ function Start-ServeProcess {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ServePidFile) | Out-Null
     # Node's --env-file never overrides a variable already set, so -Port wins over PORT in .env.
     $previousPort = $env:PORT
+    $previousPath = $env:Path
     $env:PORT = "$Port"
+    $env:Path = Get-CurrentPath
     try {
         return Start-Process -FilePath 'node' -ArgumentList $nodeArgs -WorkingDirectory $ScriptDir -WindowStyle Hidden `
             -RedirectStandardOutput $ServeLog -RedirectStandardError $ServeErrLog -PassThru
     } finally {
         $env:PORT = $previousPort
+        $env:Path = $previousPath
     }
 }
 
@@ -447,6 +510,7 @@ function Invoke-Launch {
     if (Test-DistStale) { Invoke-Build } else { Write-Ok 'dist/ is up to date.' }
     Start-DockerEngine
     Initialize-ToolchainImage
+    Show-MissingCapability
 
     Write-Step "Starting server.mjs on port $Port..."
     $process = Start-ServeProcess
@@ -515,13 +579,16 @@ Commands:
              and the toolchain image if needed, run server.mjs, open the browser.
   stop       Stop what launch started, with every process it spawned.
   status     Show whether the app and the Docker engine are running.
-  setup      Run scripts/setup.ps1.
+  doctor     Readiness report: what is installed, what it enables, how to fix what is missing.
+             Installs nothing; exits 1 when anything is missing. --json for JSON.
+  setup      Install what doctor finds missing (winget, rustup, pip, pnpm, Docker image,
+             C# Dev Kit), then print the readiness report.
   clean      Remove dist/ and generated public/lang-tutor-assets/.
   help       This message.
 
 Options:
   -Port <n>    launch: port for server.mjs. Default: 3000.
-  -NoBrowser   launch: do not open the browser. setup: forwarded to setup.ps1.
+  -NoBrowser   launch: do not open the browser.
   -Docker      stop: also quit Docker Desktop.
 
 Examples:
@@ -535,7 +602,8 @@ Examples:
   .\lt.ps1 typecheck
   .\lt.ps1 toolchain
   .\lt.ps1 lint
-  .\lt.ps1 setup -NoBrowser
+  .\lt.ps1 doctor
+  .\lt.ps1 setup
 '@
     Write-Host $help
 }
@@ -552,6 +620,7 @@ switch ($effective) {
     'format'    { Invoke-Format }
     'toolchain' { Invoke-Toolchain }
     'install'   { Invoke-Install }
+    'doctor'    { Invoke-Doctor }
     'setup'     { Invoke-Setup }
     'clean'     { Invoke-Clean }
     'launch'    { Invoke-Launch }

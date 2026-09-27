@@ -41,9 +41,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
 const TMP_LSP_ROOT = join(REPO_ROOT, '.tmp', 'lsp');
 
-// Windows: `shell: true` lets spawn resolve .cmd / .bat shims (npm-global
-// installs like typescript-language-server) which Node otherwise can't run
-// directly. Safe here because every spawn argv is a hardcoded LSP_CONFIG
+// Windows: `shell: true` lets spawn run .cmd / .bat shims (the project's
+// node_modules/.bin language servers, or npm-global installs) which Node
+// otherwise can't run directly. Safe here because every spawn argv is a hardcoded LSP_CONFIG
 // constant — never user input — so there's no shell-injection vector.
 const IS_WIN = process.platform === 'win32';
 
@@ -87,7 +87,7 @@ function resolveCsharpRoslynBin() {
 
 /**
  * @typedef {object} LspConfig
- * @property {string} bin                   - executable on PATH
+ * @property {string} bin                   - executable in the project's node_modules/.bin, else on PATH
  * @property {string[]} args                - hardcoded argv (no user data)
  * @property {'fresh' | 'project'} [workspaceMode] - 'fresh' (default) creates `.tmp/lsp/<sid>/`
  *           and seeds files; 'project' uses the signed-in user's persistent project workspace and
@@ -222,15 +222,17 @@ const LSP_CONFIG = {
   },
 
   'web-html': {
-    // vscode-html-language-server (from `vscode-langservers-extracted`).
-    // The npm-global shim is `.cmd` on Windows so spawn needs `shell: true` —
-    // that's set globally by IS_WIN.
+    // vscode-html-language-server (from `vscode-langservers-extracted`, a
+    // devDependency). The node_modules/.bin shim is `.cmd` on Windows so spawn
+    // needs `shell: true` — that's set globally by IS_WIN.
     bin: 'vscode-html-language-server',
     args: ['--stdio'],
     workspaceMode: 'project',
     projectDir: 'web',
     acceptsLanguageIds: ['html'],
-    versionArgs: ['--version'],
+    // No --version: the server throws 'Connection input stream is not set' and
+    // exits 1 without a transport flag, so the probe locates the shim only.
+    versionArgs: [],
   },
 
   'web-css': {
@@ -239,7 +241,9 @@ const LSP_CONFIG = {
     workspaceMode: 'project',
     projectDir: 'web',
     acceptsLanguageIds: ['css', 'scss', 'less'],
-    versionArgs: ['--version'],
+    // No --version: the server throws 'Connection input stream is not set' and
+    // exits 1 without a transport flag, so the probe locates the shim only.
+    versionArgs: [],
   },
 
   'web-biome': {
@@ -514,136 +518,183 @@ function maybeSyncToDisk(session, jsonText) {
 
 // ── Availability probe ──────────────────────────────────────────────────────
 
+const WHICH_TIMEOUT_MS = 3_000;
+
 /**
- * Run `bin --version` once and cache. `available: false` means ENOENT or non-zero exit;
- * the frontend should silently fall back to the old `/check` path in that case.
+ * @typedef {object} CommandRun
+ * @property {number | null} code   - exit code; null when the process never ran or was killed
+ * @property {string} stdout
+ * @property {string} stderr
+ * @property {string} [spawnError]  - set when the command could not run (ENOENT, spawn failure, timeout)
+ */
+
+/**
+ * @typedef {(cmd: string, args: string[], options: { timeoutMs: number; shell: boolean }) => Promise<CommandRun>} CommandRunner
+ */
+
+/**
+ * @typedef {object} ProbeResult
+ * @property {boolean} available
+ * @property {string} [version]  - first line of the version output, or the resolved path when no version was fetched
+ * @property {string} [error]    - why the server is unavailable
+ * @property {string} [path]     - what the bridge spawns: an absolute path, or the bare `bin` for a PATH lookup
+ */
+
+/**
+ * Run a hardcoded command with a timeout and collect its output. Never rejects:
+ * a failure to start, or a timeout, is reported in `spawnError`.
  *
- * @param {string} lang
- * @returns {Promise<{ available: boolean; version?: string; error?: string }>}
+ * @type {CommandRunner}
  */
-/**
- * Run `where <bin>` (Windows) / `which <bin>` (POSIX) to check whether the
- * binary is reachable. Returns the resolved path on success, null otherwise.
- * Used in two scenarios:
- *  - Existence probe (always): confirms the LSP binary is installed.
- *  - Version-string fetch (optional, gated by config): some servers take too
- *    long or don't support a clean --version (e.g. OmniSharp starts the full
- *    server on `--version`); for those we report availability only.
- */
-function whichBin(bin) {
-  return new Promise((resolveWhich) => {
-    const lookup = IS_WIN ? 'where' : 'which';
-    let proc;
-    try {
-      proc = spawn(lookup, [bin], { stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
-    } catch {
-      resolveWhich(null);
-      return;
-    }
-    let stdout = '';
-    proc.stdout.on('data', (c) => {
-      stdout += c.toString('utf8');
-    });
-    proc.on('error', () => resolveWhich(null));
-    const timer = setTimeout(() => {
-      try {
-        proc.kill('SIGKILL');
-      } catch {
-        // ignore
-      }
-      resolveWhich(null);
-    }, 3_000);
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        resolveWhich(null);
-        return;
-      }
-      const first = stdout.split('\n')[0]?.trim() ?? '';
-      resolveWhich(first.length > 0 ? first : null);
-    });
-  });
-}
-
-async function probeAvailability(serverKey) {
-  const cached = availabilityCache.get(serverKey);
-  if (cached !== undefined) return cached;
-  const config = LSP_CONFIG[serverKey];
-  if (config === undefined) {
-    const result = { available: false, error: `unknown serverKey: ${serverKey}` };
-    availabilityCache.set(serverKey, result);
-    return result;
-  }
-
-  // Dynamic resolver path wins when configured (e.g. Roslyn LSP at the C#
-  // Dev Kit's install location — no PATH entry, but a known on-disk file).
-  if (typeof config.resolveBinPath === 'function') {
-    const resolvedPath = config.resolveBinPath();
-    if (typeof resolvedPath !== 'string' || resolvedPath.length === 0 || !existsSync(resolvedPath)) {
-      const result = { available: false, error: `${serverKey}: resolveBinPath did not yield an existing file` };
-      availabilityCache.set(serverKey, result);
-      return result;
-    }
-    const result = { available: true, version: resolvedPath };
-    availabilityCache.set(serverKey, result);
-    return result;
-  }
-
-  const probeBin = config.probeBin ?? config.bin;
-
-  // Step 1: PATH lookup. Fast (≤ 3s), reliable, doesn't spawn the LSP server.
-  const resolved = await whichBin(probeBin);
-  if (resolved === null) {
-    const result = { available: false, error: `${probeBin} not on PATH` };
-    availabilityCache.set(serverKey, result);
-    return result;
-  }
-
-  // Step 2: optional version-string fetch. Skipped when versionArgs is empty.
-  // Bounded by PROBE_TIMEOUT_MS so misbehaving --version commands (looking at
-  // you, OmniSharp) don't block availability.
-  const versionArgs = config.versionArgs ?? [];
-  if (versionArgs.length === 0) {
-    const result = { available: true, version: resolved };
-    availabilityCache.set(serverKey, result);
-    return result;
-  }
-  const version = await new Promise((resolveVer) => {
-    let proc;
-    try {
-      proc = spawn(probeBin, versionArgs, { stdio: ['ignore', 'pipe', 'pipe'], shell: IS_WIN });
-    } catch {
-      resolveVer(null);
-      return;
-    }
+export function runCommand(cmd, args, { timeoutMs, shell }) {
+  return new Promise((resolveRun) => {
     let stdout = '';
     let stderr = '';
+    let timer;
+    let settled = false;
+    const finish = (/** @type {CommandRun} */ result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveRun(result);
+    };
+    let proc;
+    try {
+      proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], shell });
+    } catch (e) {
+      finish({ code: null, stdout, stderr, spawnError: e instanceof Error ? e.message : String(e) });
+      return;
+    }
     proc.stdout.on('data', (c) => {
       stdout += c.toString('utf8');
     });
     proc.stderr.on('data', (c) => {
       stderr += c.toString('utf8');
     });
-    proc.on('error', () => resolveVer(null));
-    const timer = setTimeout(() => {
+    proc.on('error', (e) => finish({ code: null, stdout, stderr, spawnError: e.message }));
+    timer = setTimeout(() => {
       try {
         proc.kill('SIGKILL');
       } catch {
-        // ignore
+        // already gone
       }
-      resolveVer(null);
-    }, PROBE_TIMEOUT_MS);
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        resolveVer(null);
-        return;
-      }
-      const firstLine = (stdout + stderr).split('\n')[0]?.trim() ?? '';
-      resolveVer(firstLine.length > 0 ? firstLine : null);
-    });
+      finish({ code: null, stdout, stderr, spawnError: `timed out after ${timeoutMs} ms` });
+    }, timeoutMs);
+    proc.on('close', (code) => finish({ code, stdout, stderr }));
   });
-  const result = { available: true, version: version ?? resolved };
+}
+
+/** First non-empty trimmed line of `text`, or null. */
+function firstLine(text) {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return null;
+}
+
+/**
+ * Classify a `<bin> --version` run: exit 0 is available (version from the first
+ * output line); a spawn failure, timeout or non-zero exit is unavailable. The
+ * rustup proxy is the reason a non-zero exit counts: `rust-analyzer.exe` sits on
+ * PATH even when the component is not installed, and exits 1 with
+ * "Unknown binary 'rust-analyzer.exe' in official toolchain …".
+ *
+ * @param {CommandRun} run
+ * @param {string} label  - the binary name, for the error text
+ * @returns {{ available: boolean; version?: string; error?: string }}
+ */
+export function classifyVersionRun(run, label) {
+  if (run.spawnError !== undefined) return { available: false, error: `${label}: ${run.spawnError}` };
+  if (run.code !== 0) {
+    const detail = firstLine(run.stderr) ?? firstLine(run.stdout) ?? `exited with code ${run.code}`;
+    return { available: false, error: `${label}: ${detail}` };
+  }
+  const version = firstLine(run.stdout) ?? firstLine(run.stderr);
+  return version === null ? { available: true } : { available: true, version };
+}
+
+/**
+ * The project-local shim for `bin` under `<root>/node_modules/.bin` (the `.cmd`
+ * shim on Windows), or null when the project does not install it. The npm
+ * language servers are devDependencies, so this wins over PATH.
+ *
+ * @param {string} bin
+ * @param {string} [root]
+ * @returns {string | null}
+ */
+export function resolveLocalBin(bin, root = REPO_ROOT) {
+  const candidate = join(root, 'node_modules', '.bin', IS_WIN ? `${bin}.cmd` : bin);
+  return existsSync(candidate) ? candidate : null;
+}
+
+/**
+ * Quote an absolute path for a `shell: true` spawn on Windows, where Node joins
+ * the command and argv with spaces and cmd.exe would split a path at a space.
+ */
+function shellCommand(path) {
+  return IS_WIN && /\s/.test(path) && !path.startsWith('"') ? `"${path}"` : path;
+}
+
+/**
+ * Run `where <bin>` (Windows) / `which <bin>` (POSIX). Returns the first
+ * resolved path, or null when the binary is not on PATH.
+ *
+ * @param {string} bin
+ * @param {CommandRunner} run
+ * @returns {Promise<string | null>}
+ */
+async function whichBin(bin, run) {
+  const result = await run(IS_WIN ? 'where' : 'which', [bin], { timeoutMs: WHICH_TIMEOUT_MS, shell: IS_WIN });
+  if (result.spawnError !== undefined || result.code !== 0) return null;
+  return firstLine(result.stdout);
+}
+
+/**
+ * Probe one server without caching: locate its binary (`resolveBinPath`, then
+ * `node_modules/.bin`, then PATH) and, unless its `versionArgs` are empty, run
+ * the version command and require exit 0. Servers whose version flag starts the
+ * full server (OmniSharp) and Roslyn (an absolute path) are located only.
+ *
+ * @param {string} serverKey
+ * @param {{ run?: CommandRunner; root?: string }} [deps]
+ * @returns {Promise<ProbeResult>}
+ */
+export async function probeServer(serverKey, { run = runCommand, root = REPO_ROOT } = {}) {
+  const config = LSP_CONFIG[serverKey];
+  if (config === undefined) return { available: false, error: `unknown serverKey: ${serverKey}` };
+  if (typeof config.resolveBinPath === 'function') {
+    const resolvedPath = config.resolveBinPath();
+    if (typeof resolvedPath !== 'string' || resolvedPath.length === 0 || !existsSync(resolvedPath)) {
+      return { available: false, error: `${serverKey}: resolveBinPath did not yield an existing file` };
+    }
+    return { available: true, version: resolvedPath, path: resolvedPath };
+  }
+
+  const probeBin = config.probeBin ?? config.bin;
+  const localProbe = resolveLocalBin(probeBin, root);
+  const located = localProbe ?? (await whichBin(probeBin, run));
+  if (located === null) return { available: false, error: `${probeBin} not found in node_modules/.bin or on PATH` };
+  const path = resolveLocalBin(config.bin, root) ?? config.bin;
+
+  const versionArgs = config.versionArgs ?? [];
+  if (versionArgs.length === 0) return { available: true, version: located, path };
+  const cmd = localProbe === null ? probeBin : shellCommand(localProbe);
+  const outcome = classifyVersionRun(await run(cmd, versionArgs, { timeoutMs: PROBE_TIMEOUT_MS, shell: IS_WIN }), probeBin);
+  if (!outcome.available) return outcome;
+  return { available: true, version: outcome.version ?? located, path };
+}
+
+/**
+ * Cached `probeServer`: the bridge probes each server once per server process.
+ *
+ * @param {string} serverKey
+ * @returns {Promise<ProbeResult>}
+ */
+async function probeAvailability(serverKey) {
+  const cached = availabilityCache.get(serverKey);
+  if (cached !== undefined) return cached;
+  const result = await probeServer(serverKey);
   availabilityCache.set(serverKey, result);
   return result;
 }
@@ -743,10 +794,14 @@ async function startSession(scope, serverKey) {
   const sessionId = randomUUID();
   const { dir: workspaceDir, ephemeral } = createWorkspace(scope, serverKey, sessionId);
 
-  // When resolveBinPath produced an absolute path during probing, prefer it
-  // over `config.bin` for the spawn (the cached probe stored that path under
-  // `version`). Falls through to PATH-resolved `config.bin` otherwise.
-  const binToSpawn = typeof config.resolveBinPath === 'function' && typeof probe.version === 'string' ? probe.version : config.bin;
+  // The probe resolved what to spawn: Roslyn's absolute path, the project's
+  // node_modules/.bin shim, or the bare `config.bin` for a PATH lookup.
+  // resolveBinPath yields an exe node can spawn directly; everything else may
+  // be a .cmd shim that needs the shell on Windows.
+  const useShell = IS_WIN && typeof config.resolveBinPath !== 'function';
+  const resolvedBin = probe.path ?? config.bin;
+  const binToSpawn = useShell ? shellCommand(resolvedBin) : resolvedBin;
+  console.log(`[lsp:${serverKey}] spawning ${resolvedBin}`);
   // The Roslyn LSP --extensionLogDirectory needs to exist before spawn.
   for (let i = 0; i < config.args.length - 1; i += 1) {
     if (config.args[i] === '--extensionLogDirectory') {
@@ -763,9 +818,7 @@ async function startSession(scope, serverKey) {
     proc = spawn(binToSpawn, config.args, {
       cwd: workspaceDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // resolveBinPath returns an absolute exe path that node can spawn
-      // directly, no shell shim resolution needed.
-      shell: IS_WIN && typeof config.resolveBinPath !== 'function',
+      shell: useShell,
     });
   } catch (e) {
     if (ephemeral) destroyWorkspace(workspaceDir);
