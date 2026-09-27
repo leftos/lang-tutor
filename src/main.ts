@@ -22,6 +22,7 @@ import {
   MAX_HISTORY,
   openTabsKey,
   progressKey,
+  treeStateKey,
 } from './constants';
 import { createEditor, type TutorEditor } from './editor';
 import { createFileTree, type FileTreeHandle, type OpenInOption } from './fileTree';
@@ -57,7 +58,7 @@ import {
 } from './providerSettings';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
-import { hydrateStorageFromDisk, storageDelete, storageGet, storageSet } from './storage';
+import { hydrateStorageFromDisk, markResetEpoch, storageDelete, storageDeleteKeys, storageGet, storageSet } from './storage';
 import type {
   AiProvider,
   ContentBlock,
@@ -3296,21 +3297,24 @@ function switchTab(tab: 'chat' | 'progress'): void {
 
 async function resetCurrentLanguage(): Promise<void> {
   const lang = getLanguage(activeLang);
+  const single = isSingleBufferLanguage(lang);
   // Project-kind languages also have on-disk files we need to wipe — call out
   // the destructive step so the user knows their edited XAML / cs / config is
   // about to vanish, not just chat history and progress.
-  const prompt = isSingleBufferLanguage(lang)
+  const prompt = single
     ? `Reset all ${lang.name} progress and start fresh?`
     : `Reset all ${lang.name} progress, delete projects/${lang.scaffoldDir}/, and re-scaffold from the template?`;
   if (!confirm(prompt)) return;
 
-  storageDelete(progressKey(activeLang));
-  storageDelete(historyKey(activeLang));
-  if (isSingleBufferLanguage(lang)) {
-    storageDelete(codeKey(activeLang));
+  const keys = [progressKey(activeLang), historyKey(activeLang)];
+  if (single) {
+    keys.push(codeKey(activeLang));
   } else {
-    storageDelete(openTabsKey(activeLang));
-    storageDelete(activeTabKey(activeLang));
+    keys.push(openTabsKey(activeLang), activeTabKey(activeLang), treeStateKey(activeLang));
+  }
+  await storageDeleteKeys(keys);
+
+  if (!single) {
     projectStates.delete(activeLang);
     try {
       await resetProject(activeLang);
@@ -3320,6 +3324,57 @@ async function resetCurrentLanguage(): Promise<void> {
       );
       return;
     }
+  }
+
+  await markResetEpoch();
+  location.reload();
+}
+
+function projectLanguageIds(): LanguageId[] {
+  return LANGUAGE_IDS.filter((id) => !isSingleBufferLanguage(getLanguage(id)));
+}
+
+function allLanguageStorageKeys(): string[] {
+  const keys = [LEARNER_PROFILE_KEY];
+  for (const id of LANGUAGE_IDS) {
+    keys.push(historyKey(id), progressKey(id), codeKey(id), openTabsKey(id), activeTabKey(id), treeStateKey(id));
+  }
+  return keys;
+}
+
+// Erases every language's chat history, lesson progress, saved code, UI state
+// and on-disk project folders, plus the shared learner profile. Display
+// preferences and the provider key survive.
+async function resetAllLanguages(): Promise<void> {
+  const projectIds = projectLanguageIds();
+  const projectNames = projectIds.map((id) => getLanguage(id).name).join(' and ');
+  const prompt =
+    'Reset ALL languages? This erases chat history, lesson progress, saved code and the learner profile for every language, ' +
+    `and deletes and re-scaffolds the ${projectNames} project folders. ` +
+    'Your AI provider key and display settings are kept. This cannot be undone.';
+  if (!confirm(prompt)) return;
+
+  const btn = el<HTMLButtonElement>('resetAllBtn');
+  btn.disabled = true;
+
+  const failures: string[] = [];
+  for (const id of projectIds) {
+    try {
+      await resetProject(id);
+    } catch (e) {
+      failures.push(`${getLanguage(id).name} (${(e as Error).message})`);
+    }
+    projectStates.delete(id);
+  }
+
+  await storageDeleteKeys(allLanguageStorageKeys());
+  await markResetEpoch();
+
+  if (failures.length > 0) {
+    alert(
+      `Failed to reset project files for: ${failures.join('; ')}\n\n` +
+        'Progress, chat history and saved code were cleared, but the listed on-disk project folders may be in a half-deleted state.'
+    );
   }
   location.reload();
 }
@@ -3703,6 +3758,7 @@ el('projectResetDialog').addEventListener('close', () => {
   projectResetLang = null;
 });
 el('resetBtn').addEventListener('click', () => void resetCurrentLanguage());
+el('resetAllBtn').addEventListener('click', () => void resetAllLanguages());
 el('themeToggle').addEventListener('click', toggleTheme);
 el('providerBtn').addEventListener('click', () => {
   renderProviderSettings();
