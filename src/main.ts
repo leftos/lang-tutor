@@ -1,5 +1,5 @@
 import './style.css';
-import { callClaude, fetchLearnerProfileExtraction, fetchProgressExtraction } from './api';
+import { callClaude, fetchMemoryExtraction } from './api';
 import {
   type AccountSession,
   canUseHostedTooling,
@@ -22,11 +22,24 @@ import {
   MAX_HISTORY,
   openTabsKey,
   progressKey,
+  returningLearnerPrompt,
   treeStateKey,
 } from './constants';
 import { createEditor, type TutorEditor } from './editor';
 import { createFileTree, type FileTreeHandle, type OpenInOption } from './fileTree';
+import {
+  addUserFact,
+  applyProfileDelta,
+  emptyProfile,
+  hasProfileContent,
+  mergeProgress,
+  migrateProfile,
+  needsProfileMigration,
+  PROFILE_SECTIONS,
+  removeFact,
+} from './learnerMemory';
 import type { LspDiagnostic } from './lspClient';
+import { resolveChatModel } from './modelResolution';
 import {
   deleteFile as apiDeleteFile,
   mkdir as apiMkdir,
@@ -48,13 +61,14 @@ import {
 import { createProjectEditor, type ProjectEditor } from './projectEditor';
 import { createProjectPreview, type ProjectPreview, type ScreenshotPair } from './projectPreview';
 import {
-  DEFAULT_PROVIDER_MODELS,
+  cachedProviderModels,
   fetchProviderModels,
   loadProviderSettings,
   PROVIDER_LABELS,
-  type ProviderModel,
   readProviderKey,
+  refreshStaleProviderModels,
   saveProviderSettings,
+  storeProviderModels,
 } from './providerSettings';
 import { renderMarkdown, renderPlainWithFences } from './render';
 import { runCode } from './runners';
@@ -67,12 +81,14 @@ import type {
   LanguageId,
   LearnerProfile,
   Message,
+  ProfileFact,
+  ProfileSection,
   Progress,
   ProjectLanguage,
   ProjectState,
+  ProviderModel,
   SingleBufferLanguageId,
   TextBlock,
-  TopicStatus,
 } from './types';
 import { isSingleBufferLanguage } from './types';
 
@@ -90,9 +106,12 @@ const DASM_FLAG_PRESETS = [
 let activeLang: LanguageId = DEFAULT_LANGUAGE;
 let history: Message[] = [];
 let progress: Progress | null = null;
-let learnerProfile: LearnerProfile | null = null;
+let learnerProfile: LearnerProfile = emptyProfile();
 let currentSystemPrompt = '';
-let extractionQueued = false;
+let extractionRunning = false;
+let rerunRequested = false;
+/** Languages whose sessionCount has already been bumped during this page load. */
+const sessionCountedLangs = new Set<LanguageId>();
 let isSending = false;
 let focusMode = false;
 let editor: TutorEditor;
@@ -293,72 +312,67 @@ function updateProviderSaveAvailability(): void {
   const provider = selectedProvider();
   const select = el<HTMLSelectElement>('providerModelSelect');
   const hasKey = providerFormKey(provider).trim().length > 0;
-  const hasModel = !select.disabled && select.value.trim().length > 0;
-  el<HTMLButtonElement>('saveProviderBtn').disabled = !hasKey || !hasModel;
+  // An empty value is the Auto option, which is always a valid choice.
+  el<HTMLButtonElement>('saveProviderBtn').disabled = !hasKey || select.disabled;
 }
 
-function renderProviderModelPlaceholder(message: string, selectedModel = ''): void {
+function appendModelOption(select: HTMLSelectElement, value: string, text: string, disabled = false): void {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = text;
+  option.disabled = disabled;
+  select.appendChild(option);
+}
+
+/** The Auto option's label names the model Auto currently resolves to. */
+function autoModelLabel(provider: AiProvider, models: readonly ProviderModel[] | null): string {
+  return `Auto (newest) — ${resolveChatModel(provider, models)}`;
+}
+
+/** Before a live list is loaded: Auto (resolved from the cached list), the saved model if any, and a status line. */
+function renderProviderModelPlaceholder(provider: AiProvider, message: string, selectedModel: string): void {
   const select = el<HTMLSelectElement>('providerModelSelect');
   select.textContent = '';
-  const option = document.createElement('option');
-  option.value = selectedModel;
-  option.textContent = selectedModel ? `${message}: ${selectedModel}` : message;
-  select.appendChild(option);
+  appendModelOption(select, '', autoModelLabel(provider, cachedProviderModels(provider)));
+  if (selectedModel) appendModelOption(select, selectedModel, `${message}: ${selectedModel}`);
+  else appendModelOption(select, '__status__', message, true);
   select.value = selectedModel;
-  select.disabled = true;
+  select.disabled = false;
   updateProviderSaveAvailability();
 }
 
 function renderProviderModelOptions(provider: AiProvider, models: readonly ProviderModel[], selectedModel: string): void {
   const select = el<HTMLSelectElement>('providerModelSelect');
   const savedModel = selectedModel.trim();
-  const hasSavedModel = savedModel.length > 0;
-  const savedStillAvailable = models.some((model) => model.id === savedModel);
+  const savedStillAvailable = savedModel === '' || models.some((model) => model.id === savedModel);
 
   select.textContent = '';
-  if (models.length === 0) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'No compatible chat models returned';
-    select.appendChild(option);
-    select.value = '';
-    select.disabled = true;
-    setProviderModelWarning(`${PROVIDER_LABELS[provider]} did not return any compatible text-generation models for this key.`);
-    updateProviderSaveAvailability();
-    return;
-  }
+  appendModelOption(select, '', autoModelLabel(provider, models));
+  for (const model of models) appendModelOption(select, model.id, model.label);
 
-  if (hasSavedModel && !savedStillAvailable) {
-    const option = document.createElement('option');
-    option.value = '';
-    option.textContent = 'Select an available model';
-    select.appendChild(option);
-    setProviderModelWarning(`Previously selected model "${savedModel}" is no longer available. Pick a new model.`);
+  if (models.length === 0) {
+    setProviderModelWarning(
+      `${PROVIDER_LABELS[provider]} did not return any compatible text-generation models for this key; Auto uses ${resolveChatModel(provider, models)}.`
+    );
+  } else if (!savedStillAvailable) {
+    setProviderModelWarning(`Previously selected model "${savedModel}" is no longer available. Auto is selected; pick a model to override it.`);
   } else {
     setProviderModelWarning('');
   }
 
-  for (const model of models) {
-    const option = document.createElement('option');
-    option.value = model.id;
-    option.textContent = model.label;
-    select.appendChild(option);
-  }
-
   select.disabled = false;
   select.value = savedStillAvailable ? savedModel : '';
-  if (!select.value && !hasSavedModel) select.selectedIndex = 0;
   updateProviderSaveAvailability();
 }
 
 async function refreshProviderModels(provider = selectedProvider()): Promise<void> {
   const apiKey = providerFormKey(provider).trim();
-  const selectedModel = loadProviderSettings().providers[provider].model || DEFAULT_PROVIDER_MODELS[provider];
+  const selectedModel = loadProviderSettings().providers[provider].model;
   const select = el<HTMLSelectElement>('providerModelSelect');
   const refreshBtn = el<HTMLButtonElement>('refreshProviderModelsBtn');
 
   if (!apiKey) {
-    renderProviderModelPlaceholder('Enter an API key, then load models');
+    renderProviderModelPlaceholder(provider, 'Enter an API key, then load models', selectedModel);
     setProviderModelWarning('Paste this provider API key before loading models.');
     return;
   }
@@ -377,10 +391,11 @@ async function refreshProviderModels(provider = selectedProvider()): Promise<voi
     const models = await fetchProviderModels(provider, apiKey);
     if (requestId !== providerModelRequestId || provider !== selectedProvider()) return;
     providerModelCache.set(provider, { apiKey, models });
+    storeProviderModels(provider, models);
     renderProviderModelOptions(provider, models, selectedModel);
   } catch (e) {
     if (requestId !== providerModelRequestId || provider !== selectedProvider()) return;
-    renderProviderModelPlaceholder('Could not load models');
+    renderProviderModelPlaceholder(provider, 'Could not load models', selectedModel);
     setProviderModelWarning(e instanceof Error ? e.message : String(e));
   } finally {
     if (requestId === providerModelRequestId) {
@@ -414,7 +429,7 @@ function renderProviderHelp(provider: AiProvider): void {
 function renderProviderSettings(providerOverride?: AiProvider): void {
   const settings = loadProviderSettings();
   const provider = providerOverride ?? settings.activeProvider;
-  const model = settings.providers[provider].model || DEFAULT_PROVIDER_MODELS[provider];
+  const model = settings.providers[provider].model;
   const apiKey = readProviderKey(provider);
   el<HTMLSelectElement>('providerSelect').value = provider;
   el<HTMLInputElement>('providerApiKey').value = apiKey;
@@ -423,10 +438,14 @@ function renderProviderSettings(providerOverride?: AiProvider): void {
   renderProviderHelp(provider);
   setProviderModelWarning('');
   const cached = providerModelCache.get(provider);
+  const stored = settings.providers[provider].modelList;
   if (apiKey && cached !== undefined && cached.apiKey === apiKey) {
     renderProviderModelOptions(provider, cached.models, model);
+  } else if (apiKey && stored !== undefined) {
+    // The cached list belongs to the saved key; the load-time background refresh keeps it under a day old.
+    renderProviderModelOptions(provider, stored.models, model);
   } else {
-    renderProviderModelPlaceholder(apiKey ? 'Load models to choose' : 'Enter an API key, then load models', model);
+    renderProviderModelPlaceholder(provider, apiKey ? 'Load models to choose' : 'Enter an API key, then load models', model);
     if (apiKey) void refreshProviderModels(provider);
   }
 }
@@ -442,19 +461,13 @@ function saveProviderForm(): void {
     updateProviderSaveAvailability();
     return;
   }
-  if (!model) {
-    setProviderModelWarning('Pick an available model from the live provider list before saving.');
-    updateProviderSaveAvailability();
-    return;
-  }
   settings.activeProvider = provider;
   settings.rememberKeys = rememberKeys;
-  settings.providers[provider] = apiKey ? { model, apiKey } : { model };
+  settings.providers[provider] = { ...settings.providers[provider], model, apiKey };
   saveProviderSettings(settings);
   renderProviderSettings(provider);
-  el('providerStatus').textContent = apiKey
-    ? `Using ${PROVIDER_LABELS[provider]} with ${model}.`
-    : `Saved ${PROVIDER_LABELS[provider]} model. Paste an API key before chatting.`;
+  const modelText = model || `Auto (${resolveChatModel(provider, cachedProviderModels(provider))})`;
+  el('providerStatus').textContent = `Using ${PROVIDER_LABELS[provider]} with ${modelText}.`;
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────
@@ -486,37 +499,44 @@ function toggleTheme(): void {
 }
 
 // ── System prompt builder ─────────────────────────────────────────────────
-function listProfileItems(items: readonly string[] | undefined, limit = 6): string {
-  if (items === undefined || items.length === 0) return '  (none recorded)';
-  return items
-    .slice(0, limit)
-    .map((item) => `  - ${item}`)
-    .join('\n');
+const PROFILE_SECTION_LABELS: Record<ProfileSection, string> = {
+  background: 'Background',
+  goals: 'Goals',
+  preferences: 'Teaching preferences',
+  strengths: 'Cross-language strengths',
+  struggles: 'Cross-language struggles',
+};
+
+function languagesWithProgress(): string[] {
+  return LANGUAGE_IDS.filter((id) => storageGet<Progress>(progressKey(id)) !== null).map((id) => getLanguage(id).name);
 }
 
-function learnerProfileBlock(profile: LearnerProfile | null): string {
-  if (profile === null) return '';
-  return (
-    '\n\nGLOBAL LEARNER PROFILE — use across all language courses.\n' +
-    `Summary: ${profile.summary ?? 'No summary recorded yet.'}\n` +
-    `Known languages:\n${listProfileItems(profile.knownLanguages)}\n` +
-    `Experience notes:\n${listProfileItems(profile.experienceNotes)}\n` +
-    `Goals:\n${listProfileItems(profile.goals)}\n` +
-    `Teaching preferences:\n${listProfileItems(profile.preferences)}\n` +
-    `Cross-language strengths:\n${listProfileItems(profile.strengths)}\n` +
-    `Cross-language struggles:\n${listProfileItems(profile.struggles)}\n` +
+function learnerProfileBlock(profile: LearnerProfile): string {
+  const withProgress = languagesWithProgress();
+  if (!hasProfileContent(profile) && withProgress.length === 0) return '';
+
+  const lines = ['\n\nGLOBAL LEARNER PROFILE — use across all language courses.'];
+  if (profile.summary) lines.push(`Summary: ${profile.summary}`);
+  if (profile.knownLanguages !== undefined && profile.knownLanguages.length > 0) {
+    lines.push(`Known languages: ${profile.knownLanguages.join(', ')}`);
+  }
+  for (const section of PROFILE_SECTIONS) {
+    const facts = profile.facts[section];
+    if (facts.length === 0) continue;
+    lines.push(`${PROFILE_SECTION_LABELS[section]}:`, ...facts.map((f) => `  - ${f.text}`));
+  }
+  if (withProgress.length > 0) lines.push(`Courses with saved progress: ${withProgress.join(', ')}`);
+  lines.push(
     'Do not re-ask for background already captured here. Ask only missing course-specific context, and update your assumptions when the student corrects you.'
   );
+  return lines.join('\n');
 }
 
-function buildSystem(prog: Progress | null, lang: Language, profile: LearnerProfile | null): string {
+function buildSystem(prog: Progress | null, lang: Language, profile: LearnerProfile): string {
   const profileText = learnerProfileBlock(profile);
   if (prog === null) {
-    const profileGuidance =
-      profile === null
-        ? ''
-        : '\n\nIf the global learner profile already answers any background question above, do not ask that question again; use the recorded answer and ask only for missing details specific to this course.';
-    return `${lang.systemPromptIntro}${profileText}\n\n${lang.firstSessionPrompt}${profileGuidance}`;
+    const opening = hasProfileContent(profile) ? returningLearnerPrompt(lang.name) : lang.firstSessionPrompt;
+    return `${lang.systemPromptIntro}${profileText}\n\n${opening}`;
   }
 
   const topicLines = lang.topics
@@ -774,44 +794,10 @@ function progSectionLabel(text: string): HTMLDivElement {
   return d;
 }
 
-function appendLearnerProfileSection(scroll: HTMLElement): void {
-  if (learnerProfile === null) return;
-
-  const section = div('prog-section');
-  section.appendChild(progSectionLabel('Cross-language profile'));
-
-  if (learnerProfile.summary) {
-    const notesText = div('prog-notes');
-    notesText.textContent = learnerProfile.summary;
-    section.appendChild(notesText);
-  }
-
-  const chips = div('note-row');
-  const items = [
-    ...(learnerProfile.knownLanguages ?? []).slice(0, 4),
-    ...(learnerProfile.goals ?? []).slice(0, 2),
-    ...(learnerProfile.preferences ?? []).slice(0, 2),
-  ];
-
-  if (items.length === 0) {
-    chips.appendChild(span('No cross-language notes recorded yet', 'muted'));
-  } else {
-    for (const item of items) {
-      const pill = div('note-pill');
-      pill.appendChild(document.createTextNode(item));
-      chips.appendChild(pill);
-    }
-  }
-
-  section.appendChild(chips);
-  scroll.appendChild(section);
-}
-
 function renderProgressTab(): void {
   const lang = getLanguage(activeLang);
   const scroll = el('progressScroll');
   scroll.textContent = '';
-  appendLearnerProfileSection(scroll);
 
   if (progress === null) {
     const empty = div('prog-empty');
@@ -930,6 +916,139 @@ function renderProgressTab(): void {
     notesSection.appendChild(notesText);
     scroll.appendChild(notesSection);
   }
+}
+
+// ── Profile tab ───────────────────────────────────────────────────────────
+/** The tab's own headings. The prompt builder's `PROFILE_SECTION_LABELS` stays model-facing. */
+const PROFILE_TAB_LABELS: Record<ProfileSection, string> = {
+  background: 'Background',
+  goals: 'Goals',
+  preferences: 'Preferences',
+  strengths: 'Strengths',
+  struggles: 'Struggles',
+};
+
+/** Persists a profile edit, rebuilds the cached system prompt and repaints the tab. */
+function applyProfileEdit(next: LearnerProfile, focusSection: ProfileSection | undefined): void {
+  learnerProfile = next;
+  storageSet(LEARNER_PROFILE_KEY, learnerProfile);
+  refreshSystemPrompt();
+  renderProfileTab(focusSection);
+}
+
+/** A fact's badge: the language a tutor noted it in, `you` for the learner's own, `shared` for a
+ *  fact the profile carried before per-language tracking. */
+function profileFactBadge(fact: ProfileFact): HTMLSpanElement {
+  if (fact.source === 'user') return span('you', 'profile-fact-badge', 'is-user');
+  if (fact.lang === undefined) return span('shared', 'profile-fact-badge');
+  return span(getLanguage(fact.lang).name, 'profile-fact-badge');
+}
+
+function profileFactRow(fact: ProfileFact): HTMLDivElement {
+  const row = div('profile-fact');
+  row.appendChild(span(fact.text, 'profile-fact-text'));
+  row.appendChild(profileFactBadge(fact));
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'profile-fact-remove';
+  remove.textContent = '×';
+  remove.setAttribute('aria-label', `Remove: ${fact.text}`);
+  remove.addEventListener('click', () => applyProfileEdit(removeFact(learnerProfile, fact.id), undefined));
+  row.appendChild(remove);
+  return row;
+}
+
+/** Enter-to-add input under a section. A refused add is reported beside it, and the message
+ *  clears on the next keystroke. */
+function profileAddRow(section: ProfileSection): HTMLDivElement {
+  const row = div('profile-add');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'profile-add-input';
+  input.placeholder = 'Add…';
+  input.maxLength = 200;
+  input.dataset.section = section;
+  input.setAttribute('aria-label', `Add to ${PROFILE_TAB_LABELS[section]}`);
+  const message = div('profile-add-msg');
+  input.addEventListener('input', () => {
+    message.textContent = '';
+  });
+  input.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    const result = addUserFact(learnerProfile, section, input.value, new Date().toISOString());
+    if (result.added) {
+      applyProfileEdit(result.profile, section);
+    } else if (result.reason === 'duplicate') {
+      message.textContent = 'Already noted';
+    } else if (result.reason === 'full') {
+      message.textContent = 'Section full — remove one first';
+    }
+  });
+  row.appendChild(input);
+  row.appendChild(message);
+  return row;
+}
+
+function profileSectionBlock(section: ProfileSection): HTMLDivElement {
+  const block = div('prog-section');
+  block.appendChild(progSectionLabel(PROFILE_TAB_LABELS[section]));
+  for (const fact of learnerProfile.facts[section]) block.appendChild(profileFactRow(fact));
+  block.appendChild(profileAddRow(section));
+  return block;
+}
+
+/** Summary and known languages are the model's; the Profile tab shows them read-only. */
+function profileSummaryBlock(summary: string): HTMLDivElement {
+  const block = div('prog-section');
+  block.appendChild(progSectionLabel('Summary'));
+  const notes = div('prog-notes');
+  notes.textContent = summary;
+  block.appendChild(notes);
+  return block;
+}
+
+function profileLanguagesBlock(languages: readonly string[]): HTMLDivElement {
+  const block = div('prog-section');
+  block.appendChild(progSectionLabel('Languages known'));
+  const chips = div('profile-chips');
+  for (const language of languages) chips.appendChild(span(language, 'profile-chip'));
+  block.appendChild(chips);
+  return block;
+}
+
+/**
+ * Paints the Profile tab: the shared, cross-language view of the learner, a delete button on every
+ * fact and an add input under every section.
+ *
+ * Args:
+ *   focusSection: Section whose add input takes the caret after the repaint, or `undefined` when
+ *     nothing should be focused.
+ */
+function renderProfileTab(focusSection: ProfileSection | undefined): void {
+  const scroll = el('profileScroll');
+  scroll.textContent = '';
+  scroll.appendChild(span('What your tutors know about you — shared by every language.', 'profile-lead'));
+
+  if (!hasProfileContent(learnerProfile)) {
+    const empty = div('profile-empty');
+    empty.textContent = 'Nothing noted yet — tutors add to this as you chat.';
+    scroll.appendChild(empty);
+  }
+  if (learnerProfile.summary !== undefined) scroll.appendChild(profileSummaryBlock(learnerProfile.summary));
+  const known = learnerProfile.knownLanguages ?? [];
+  if (known.length > 0) scroll.appendChild(profileLanguagesBlock(known));
+  for (const section of PROFILE_SECTIONS) scroll.appendChild(profileSectionBlock(section));
+
+  if (focusSection !== undefined) {
+    scroll.querySelector<HTMLInputElement>(`.profile-add-input[data-section="${focusSection}"]`)?.focus();
+  }
+}
+
+/** Repaints the Profile tab after an extraction, unless the learner is mid-edit on it. */
+function refreshProfileTab(): void {
+  if (el('profileView').style.display === 'none') return;
+  if (document.activeElement?.classList.contains('profile-add-input') === true) return;
+  renderProfileTab(undefined);
 }
 
 // ── Message rendering ─────────────────────────────────────────────────────
@@ -2539,59 +2658,69 @@ async function hydrateProjectState(id: LanguageId, lang: Language): Promise<void
   }
 }
 
-// ── Progress extraction ───────────────────────────────────────────────────
-async function extractProgress(): Promise<void> {
-  if (extractionQueued) return;
-  extractionQueued = true;
-  updateProgBadge('Updating');
+// ── Memory extraction ─────────────────────────────────────────────────────
+/**
+ * Rebuilds the tutor's system prompt from the active language's progress and the shared profile.
+ * Called only at load, language switch, session start and after a learner edits their profile, so the
+ * prompt stays byte-identical between turns and the provider's prompt cache keeps hitting.
+ */
+function refreshSystemPrompt(): void {
+  currentSystemPrompt = buildSystem(progress, getLanguage(activeLang), learnerProfile);
+}
 
-  const lang = getLanguage(activeLang);
+/** Bumps the active language's sessionCount on its first user message of this page load. */
+function countSessionOnce(): void {
+  if (sessionCountedLangs.has(activeLang)) return;
+  sessionCountedLangs.add(activeLang);
+  if (progress === null) return; // the first extraction creates progress with sessionCount 1
+  progress = { ...progress, sessionCount: (progress.sessionCount ?? 0) + 1 };
+  storageSet(progressKey(activeLang), progress);
+}
+
+async function runMemoryExtraction(): Promise<void> {
   const langWhenStarted = activeLang;
-  const profileWhenStarted = learnerProfile;
+  const lang = getLanguage(langWhenStarted);
+  const extracted = await fetchMemoryExtraction(history, lang.topics, progress, learnerProfile, lang.name);
+  if (extracted === null) return;
 
+  const now = new Date().toISOString();
+  learnerProfile = applyProfileDelta(learnerProfile, extracted.profileDelta, langWhenStarted, now);
+  storageSet(LEARNER_PROFILE_KEY, learnerProfile);
+
+  if (langWhenStarted === activeLang) {
+    const merged = mergeProgress(progress, extracted.progress, lang.topics);
+    const [date] = now.split('T');
+    progress = { ...merged, sessionCount: merged.sessionCount ?? 1, lastSeen: date ?? '' };
+    storageSet(progressKey(activeLang), progress);
+  }
+
+  renderProgressTab();
+  refreshProfileTab();
+  renderChapterStrip();
+  renderLanguageRail();
+  updateProgCount();
+}
+
+/** Runs one memory extraction; a request made while one is running triggers a single trailing rerun. */
+async function extractMemory(): Promise<void> {
+  if (extractionRunning) {
+    rerunRequested = true;
+    return;
+  }
+  extractionRunning = true;
+  updateProgBadge('Updating');
   try {
-    const extracted = await fetchProgressExtraction(history, lang.topics);
-    const extractedProfile = await fetchLearnerProfileExtraction(history, lang.name, profileWhenStarted);
-    if (langWhenStarted !== activeLang) return;
-
-    const [datePart] = new Date().toISOString().split('T');
-    const date = datePart ?? '';
-
-    if (extractedProfile !== null) {
-      learnerProfile = {
-        ...extractedProfile,
-        updatedAt: date,
-      };
-      storageSet(LEARNER_PROFILE_KEY, learnerProfile);
-    }
-
-    if (extracted !== null) {
-      const mergedTopics: TopicStatus[] = lang.topics.map((t) => {
-        const found = extracted.topics?.find((p) => p.id === t.id);
-        const prev = progress?.topics?.find((p) => p.id === t.id);
-        return { id: t.id, title: t.title, status: found?.status ?? prev?.status ?? 'not-started' };
-      });
-
-      progress = {
-        ...extracted,
-        topics: mergedTopics,
-        sessionCount: (progress?.sessionCount ?? 0) + (progress !== null ? 0 : 1),
-        lastSeen: date,
-      };
-
-      storageSet(progressKey(activeLang), progress);
-    }
-
-    currentSystemPrompt = buildSystem(progress, getLanguage(activeLang), learnerProfile);
-    renderProgressTab();
-    renderChapterStrip();
-    renderLanguageRail();
-    updateProgCount();
-  } catch (e) {
-    console.error('Progress extraction error:', e);
+    do {
+      rerunRequested = false;
+      try {
+        await runMemoryExtraction();
+      } catch (e) {
+        console.error('[memory] Extraction error:', e);
+      }
+    } while (rerunRequested);
   } finally {
     updateProgBadge(null);
-    extractionQueued = false;
+    extractionRunning = false;
   }
 }
 
@@ -2645,6 +2774,8 @@ async function startSession(): Promise<void> {
 
   const lang = getLanguage(activeLang);
   const initMsg = `Hello! I'd like to start a ${lang.name} tutoring session.`;
+  refreshSystemPrompt();
+  countSessionOnce();
   history.push({ role: 'user', content: initMsg });
 
   await deliverReply();
@@ -2690,9 +2821,10 @@ async function sendMessage(text: string, attachment?: ScreenshotPair | null): Pr
   history.push({ role: 'user', content: storedContent });
   appendMsg('user', storedContent);
   if (consumePending && pendingAttachment !== null) setChatAttachment(null);
+  countSessionOnce();
 
   const ok = await deliverReply(apiOverride);
-  if (ok) void extractProgress();
+  if (ok) void extractMemory();
 }
 
 function draftNoteBlock(): string | null {
@@ -3288,11 +3420,14 @@ async function buildProjectLspBlock(): Promise<string | null> {
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────
-function switchTab(tab: 'chat' | 'progress'): void {
+function switchTab(tab: 'chat' | 'progress' | 'profile'): void {
   el('chatView').style.display = tab === 'chat' ? 'flex' : 'none';
   el('progressView').style.display = tab === 'progress' ? 'flex' : 'none';
+  el('profileView').style.display = tab === 'profile' ? 'flex' : 'none';
   el('tabChatBtn').classList.toggle('is-active', tab === 'chat');
   el('tabProgBtn').classList.toggle('is-active', tab === 'progress');
+  el('tabProfileBtn').classList.toggle('is-active', tab === 'profile');
+  if (tab === 'profile') renderProfileTab(undefined);
 }
 
 async function resetCurrentLanguage(): Promise<void> {
@@ -3441,7 +3576,7 @@ function loadLanguageState(id: LanguageId): void {
   history = storageGet<Message[]>(historyKey(activeLang)) ?? [];
   progress = storageGet<Progress>(progressKey(activeLang));
   const lang = getLanguage(activeLang);
-  currentSystemPrompt = buildSystem(progress, lang, learnerProfile);
+  refreshSystemPrompt();
 
   renderFileSpec();
   renderDasmFlagsControl();
@@ -3725,6 +3860,7 @@ function makeDebouncedCodeSaver(): (doc: string) => void {
 // ── Event wiring ──────────────────────────────────────────────────────────
 el('tabChatBtn').addEventListener('click', () => switchTab('chat'));
 el('tabProgBtn').addEventListener('click', () => switchTab('progress'));
+el('tabProfileBtn').addEventListener('click', () => switchTab('profile'));
 el('sendBtn').addEventListener('click', () => void sendMessage(el<HTMLTextAreaElement>('chatInput').value));
 el<HTMLTextAreaElement>('chatInput').addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -3785,7 +3921,7 @@ el<HTMLInputElement>('providerApiKey').addEventListener('input', () => {
   providerModelRequestId++;
   const provider = selectedProvider();
   providerModelCache.delete(provider);
-  renderProviderModelPlaceholder('Load models with this API key');
+  renderProviderModelPlaceholder(provider, 'Load models with this API key', loadProviderSettings().providers[provider].model);
   setProviderModelWarning('');
 });
 el('refreshProviderModelsBtn').addEventListener('click', () => void refreshProviderModels());
@@ -3825,10 +3961,13 @@ initChatTextSelection();
 renderProviderSettings();
 await initializeAuth();
 await hydrateStorageFromDisk();
+void refreshStaleProviderModels();
 applyStoredTheme();
 applyStoredFocusMode();
 migrateOldStorage();
-learnerProfile = storageGet<LearnerProfile>(LEARNER_PROFILE_KEY);
+const storedProfile = storageGet<unknown>(LEARNER_PROFILE_KEY);
+learnerProfile = migrateProfile(storedProfile, new Date().toISOString());
+if (needsProfileMigration(storedProfile)) storageSet(LEARNER_PROFILE_KEY, learnerProfile);
 const initialLang = loadInitialActiveLang();
 const initialLangObj = getLanguage(initialLang);
 

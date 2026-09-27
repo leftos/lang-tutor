@@ -1,5 +1,17 @@
-import { resolveProviderConfig } from './providerSettings';
-import type { ClaudeResponse, ContentBlock, ImageBlock, LearnerProfile, Message, Progress, ProviderConfig, TextBlock, Topic } from './types';
+import { PROFILE_SECTIONS, validateExtraction } from './learnerMemory';
+import { resolveProviderConfig, resolveProviderMemoryModel } from './providerSettings';
+import type {
+  ClaudeResponse,
+  ContentBlock,
+  ImageBlock,
+  LearnerProfile,
+  MemoryExtraction,
+  Message,
+  Progress,
+  ProviderConfig,
+  TextBlock,
+  Topic,
+} from './types';
 
 /** Extract the plain-text content of a message, ignoring any image blocks. */
 function messageText(m: Message): string {
@@ -10,7 +22,8 @@ function messageText(m: Message): string {
     .join('\n');
 }
 
-function learnerProfileText(m: Message): string {
+/** Message text with bulky bundle blocks ([CODE], [OUTPUT], [LSP], …) stripped; [NOTE] is kept. */
+function conversationText(m: Message): string {
   const text = messageText(m);
   return text
     .replace(/\n?\[(?:COMPILER FLAGS|CODE|OUTPUT|LSP|FILES|DOM|CONSOLE|SERVER|BUILD|SCREENSHOT)\][\s\S]*?(?=\n\n\[[A-Z ]+\]|\s*$)/g, '')
@@ -19,6 +32,8 @@ function learnerProfileText(m: Message): string {
 
 interface PostResult {
   ok: boolean;
+  /** HTTP status of the response; 0 when the request never got one. */
+  status: number;
   text: string;
 }
 
@@ -50,6 +65,9 @@ export interface CallResult {
   ok: boolean;
   text: string;
 }
+
+/** Output limit for a chat reply; on thinking models it also covers the thinking tokens. */
+const CHAT_MAX_TOKENS = 4000;
 
 function missingProviderResult(): CallResult {
   return {
@@ -162,7 +180,7 @@ async function callAnthropic(config: ProviderConfig, msgs: Message[], sys: strin
       },
       body: JSON.stringify({
         model: config.model,
-        max_tokens: 1000,
+        max_tokens: CHAT_MAX_TOKENS,
         system: [{ type: 'text', text: sys, cache_control: { type: 'ephemeral' } }],
         messages: withAnthropicCache(msgs).map((m) => ({ role: m.role, content: anthropicMessageContent(m.content) })),
         stream: true,
@@ -219,7 +237,7 @@ async function callOpenAi(config: ProviderConfig, msgs: Message[], sys: string, 
       },
       body: JSON.stringify({
         model: config.model,
-        max_completion_tokens: 1000,
+        max_completion_tokens: CHAT_MAX_TOKENS,
         messages: [{ role: 'system', content: sys }, ...msgs.map((m) => ({ role: m.role, content: toOpenAiContent(m.content) }))],
         stream: true,
       }),
@@ -274,7 +292,7 @@ async function callGemini(config: ProviderConfig, msgs: Message[], sys: string, 
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: sys }] },
         contents: msgs.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: toGeminiParts(m.content) })),
-        generationConfig: { maxOutputTokens: 1000 },
+        generationConfig: { maxOutputTokens: CHAT_MAX_TOKENS },
       }),
     });
   } catch (e) {
@@ -327,7 +345,44 @@ export async function callClaude(msgs: Message[], sys: string, onDelta?: (chunk:
   }
 }
 
-async function postAnthropic(config: ProviderConfig, prompt: string): Promise<PostResult> {
+const MEMORY_MAX_TOKENS = 4000;
+const MEMORY_MESSAGE_COUNT = 16;
+const MEMORY_MESSAGE_CHARS = 1200;
+
+/**
+ * Request fields that turn a model's reasoning down as far as its provider allows, for the extraction call.
+ *
+ * Anthropic: every Claude model accepts `thinking: {type: "disabled"}` except the always-on Fable/Mythos ones.
+ * OpenAI: `none` is the lowest `reasoning_effort` on gpt-5.1 and later; earlier models get no field.
+ * Gemini: 2.5 models take `thinkingBudget` (0 turns thinking off on Flash, 128 is the Pro minimum), 3.x and the
+ * `-latest` aliases take `thinkingLevel`, where `low` is the lowest level every current model accepts.
+ * A model that rejects the field anyway is retried without it by {@link postWithReasoningFallback}.
+ */
+function lowReasoningFields(config: ProviderConfig): Record<string, unknown> {
+  switch (config.provider) {
+    case 'anthropic':
+      return { thinking: { type: 'disabled' } };
+    case 'openai': {
+      const major = Number(/^gpt-(\d+)/.exec(config.model)?.[1] ?? 0);
+      return major >= 5 ? { reasoning_effort: 'none' } : {};
+    }
+    case 'gemini':
+      return { thinkingConfig: geminiLowThinking(config.model) };
+  }
+}
+
+function geminiLowThinking(model: string): Record<string, unknown> {
+  if (model.startsWith('gemini-2.5-pro')) return { thinkingBudget: 128 };
+  if (model.startsWith('gemini-2.5-')) return { thinkingBudget: 0 };
+  return { thinkingLevel: 'low' };
+}
+
+/** Gemini models before 2.5 do not think, so they get no thinking config. */
+function geminiThinks(model: string): boolean {
+  return !/^gemini-(1\.|2\.0)/.test(model);
+}
+
+async function postAnthropic(config: ProviderConfig, prompt: string, lowReasoning: boolean): Promise<PostResult> {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -338,16 +393,17 @@ async function postAnthropic(config: ProviderConfig, prompt: string): Promise<Po
     },
     body: JSON.stringify({
       model: config.model,
-      max_tokens: 700,
+      max_tokens: MEMORY_MAX_TOKENS,
       messages: [{ role: 'user', content: prompt }],
+      ...(lowReasoning ? lowReasoningFields(config) : {}),
     }),
   });
-  if (!response.ok) return { ok: false, text: await parseError(response) };
+  if (!response.ok) return { ok: false, status: response.status, text: await parseError(response) };
   const parsed = (await response.json()) as ClaudeResponse;
-  return { ok: true, text: parsed.content?.find((b) => b.type === 'text')?.text ?? '' };
+  return { ok: true, status: response.status, text: parsed.content?.find((b) => b.type === 'text')?.text ?? '' };
 }
 
-async function postOpenAi(config: ProviderConfig, prompt: string): Promise<PostResult> {
+async function postOpenAi(config: ProviderConfig, prompt: string, lowReasoning: boolean): Promise<PostResult> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -356,16 +412,18 @@ async function postOpenAi(config: ProviderConfig, prompt: string): Promise<PostR
     },
     body: JSON.stringify({
       model: config.model,
-      max_completion_tokens: 700,
+      max_completion_tokens: MEMORY_MAX_TOKENS,
       messages: [{ role: 'user', content: prompt }],
+      ...(lowReasoning ? lowReasoningFields(config) : {}),
     }),
   });
-  if (!response.ok) return { ok: false, text: await parseError(response) };
+  if (!response.ok) return { ok: false, status: response.status, text: await parseError(response) };
   const parsed = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return { ok: true, text: parsed.choices?.[0]?.message?.content ?? '' };
+  return { ok: true, status: response.status, text: parsed.choices?.[0]?.message?.content ?? '' };
 }
 
-async function postGemini(config: ProviderConfig, prompt: string): Promise<PostResult> {
+async function postGemini(config: ProviderConfig, prompt: string, lowReasoning: boolean): Promise<PostResult> {
+  const thinking = lowReasoning && geminiThinks(config.model) ? lowReasoningFields(config) : {};
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.model)}:generateContent`, {
     method: 'POST',
     headers: {
@@ -374,120 +432,177 @@ async function postGemini(config: ProviderConfig, prompt: string): Promise<PostR
     },
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 700 },
+      generationConfig: { maxOutputTokens: MEMORY_MAX_TOKENS, ...thinking },
     }),
   });
-  if (!response.ok) return { ok: false, text: await parseError(response) };
+  if (!response.ok) return { ok: false, status: response.status, text: await parseError(response) };
   const parsed = (await response.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-  return { ok: true, text: parsed.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '' };
+  return { ok: true, status: response.status, text: parsed.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '' };
 }
 
-async function postCompletion(prompt: string): Promise<PostResult> {
-  const config = resolveProviderConfig();
-  if (config === null) return missingProviderResult();
-
+async function postCompletion(config: ProviderConfig, prompt: string, lowReasoning: boolean): Promise<PostResult> {
   try {
     switch (config.provider) {
       case 'anthropic':
-        return await postAnthropic(config, prompt);
+        return await postAnthropic(config, prompt, lowReasoning);
       case 'openai':
-        return await postOpenAi(config, prompt);
+        return await postOpenAi(config, prompt, lowReasoning);
       case 'gemini':
-        return await postGemini(config, prompt);
+        return await postGemini(config, prompt, lowReasoning);
     }
   } catch (e) {
-    return { ok: false, text: e instanceof Error ? e.message : String(e) };
+    return { ok: false, status: 0, text: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export async function fetchProgressExtraction(history: Message[], topics: readonly Topic[]): Promise<Progress | null> {
-  const topicSchema = topics.map((t) => `{"id":"${t.id}","title":"${t.title}","status":"?"}`).join(',');
-  const snippet = history
-    .slice(-14)
-    .map((m) => `${m.role.toUpperCase()}: ${messageText(m).slice(0, 280)}`)
-    .join('\n\n');
-
-  const prompt = `Analyze this tutoring conversation and return ONLY valid JSON (no markdown, no other text) with this schema. Set each topic status to "not-started", "in-progress", or "mastered".
-
-{
-  "experienceLevel": "beginner|intermediate|advanced",
-  "currentTopic": "topic currently being worked on",
-  "topics": [${topicSchema}],
-  "strengths": ["specific strength observed"],
-  "struggles": ["specific struggle observed"],
-  "overallNotes": "1-2 sentence summary"
+function isReasoningRejected(result: PostResult): boolean {
+  return result.status === 400 && /thinking|reasoning|effort/i.test(result.text);
 }
 
-Conversation:\n${snippet}`;
-
-  const result = await postCompletion(prompt);
-
-  if (!result.ok) {
-    console.error('[api] Progress extraction failed:', result.text);
-    return null;
-  }
-
-  const raw = result.text.replace(/```json|```/g, '').trim();
-  try {
-    return JSON.parse(raw) as Progress;
-  } catch (e) {
-    console.error('[api] Progress extraction JSON parse failed:', e, 'raw:', raw);
-    return null;
-  }
+function isModelUnavailable(result: PostResult): boolean {
+  return (result.status === 400 || result.status === 404) && /model/i.test(result.text);
 }
 
-export async function fetchLearnerProfileExtraction(
-  history: Message[],
-  languageName: string,
-  previous: LearnerProfile | null
-): Promise<LearnerProfile | null> {
-  const snippet = history
-    .slice(-16)
+/** Posts with reasoning turned down, and once more at the model's default when the model rejects that setting. */
+async function postWithReasoningFallback(config: ProviderConfig, prompt: string): Promise<PostResult> {
+  const result = await postCompletion(config, prompt, true);
+  if (result.ok || !isReasoningRejected(result)) return result;
+  console.warn(`[api] ${config.model} rejected the low-reasoning setting (${result.text}); retrying at its default.`);
+  return postCompletion(config, prompt, false);
+}
+
+/** Posts on the provider's memory model, retrying once on the chat model when the memory model is rejected. */
+async function postMemoryCompletion(config: ProviderConfig, prompt: string): Promise<PostResult> {
+  const memoryModel = resolveProviderMemoryModel(config);
+  const result = await postWithReasoningFallback({ ...config, model: memoryModel }, prompt);
+  if (result.ok || memoryModel === config.model || !isModelUnavailable(result)) return result;
+  console.warn(`[api] Memory model ${memoryModel} unavailable (${result.text}); retrying on chat model ${config.model}.`);
+  return postWithReasoningFallback(config, prompt);
+}
+
+function conversationSnippet(history: readonly Message[]): string {
+  return history
+    .slice(-MEMORY_MESSAGE_COUNT)
     .map((m) => {
-      const text = learnerProfileText(m);
-      return text === '' ? null : `${m.role.toUpperCase()}: ${text.slice(0, 420)}`;
+      const text = conversationText(m);
+      return text === '' ? null : `${m.role.toUpperCase()}: ${text.slice(0, MEMORY_MESSAGE_CHARS)}`;
     })
     .filter((line): line is string => line !== null)
     .join('\n\n');
-
-  const previousJson = previous === null ? '{}' : JSON.stringify(previous, null, 2);
-  const prompt = `Analyze this ${languageName} tutoring conversation and update a language-independent learner profile.
-
-Return ONLY valid JSON (no markdown, no other text) with this schema:
-
-{
-  "summary": "2-4 sentence stable learner profile useful across all programming courses",
-  "knownLanguages": ["language or ecosystem the learner knows, with short qualifier if useful"],
-  "experienceNotes": ["stable learning-relevant background fact"],
-  "goals": ["stable learning goal or project interest"],
-  "preferences": ["teaching preference or comparison style that helps future tutors"],
-  "strengths": ["cross-language strength observed"],
-  "struggles": ["cross-language struggle or recurring confusion observed"],
-  "recentSignals": ["brief recent observation that may help the next session"]
 }
 
-Merge the previous profile with the new conversation. Preserve useful stable facts unless the conversation clearly contradicts them.
-Do NOT store API keys, passwords, access tokens, emails, billing details, private URLs, or unrelated personal data.
-Avoid inventing facts. If a field has no evidence, return an empty array or omit it.
+function profileFactsText(profile: LearnerProfile): string {
+  const lines: string[] = [
+    `summary: ${profile.summary ?? '(none)'}`,
+    `knownLanguages: ${profile.knownLanguages?.length ? profile.knownLanguages.join(', ') : '(none)'}`,
+  ];
+  for (const section of PROFILE_SECTIONS) {
+    const facts = profile.facts[section];
+    lines.push(`${section}:`);
+    if (facts.length === 0) lines.push('  (none)');
+    for (const fact of facts) lines.push(`  - [${fact.id}] ${fact.text}${fact.source === 'user' ? ' (added by the learner)' : ''}`);
+  }
+  return lines.join('\n');
+}
 
-Previous profile:
-${previousJson}
+function memoryPrompt(
+  history: readonly Message[],
+  topics: readonly Topic[],
+  prevProgress: Progress | null,
+  profile: LearnerProfile,
+  langName: string
+): string {
+  const topicSchema = topics.map((t) => `{"id":"${t.id}","status":"not-started|in-progress|mastered"}`).join(', ');
+  const topicList = topics.map((t) => `${t.id} = ${t.title}`).join('; ');
+  const previousProgress = prevProgress === null ? '(none yet)' : JSON.stringify(prevProgress, null, 2);
+
+  return `You maintain a programming tutor's memory of one learner. Read this ${langName} tutoring conversation and update two things:
+
+1. PROGRESS — observations specific to ${langName}: topic statuses, current topic, ${langName}-specific strengths and struggles, notes about their ${langName} work.
+2. PROFILE DELTA — facts true of the learner regardless of language: background, other languages they know, goals, teaching preferences, learning style, general strengths and struggles. These are shared with the tutors of every other language.
+
+Put each observation in exactly one of the two. Do not put ${langName}-specific observations in the profile, and do not put language-independent facts in progress.
+
+Return JSON only — no markdown fences, no other text — with this exact schema:
+
+{
+  "progress": {
+    "experienceLevel": "beginner|intermediate|advanced",
+    "currentTopic": "title of the ${langName} topic currently being worked on",
+    "topics": [${topicSchema}],
+    "strengths": ["specific ${langName} strength observed"],
+    "struggles": ["specific ${langName} struggle observed"],
+    "overallNotes": "1-2 sentence summary of their ${langName} progress"
+  },
+  "profileDelta": {
+    "summary": "2-4 sentence learner summary, only if it should replace the current one",
+    "knownLanguages": ["full replacement list, only if it changed"],
+    "add": {
+      "background": ["new fact"],
+      "goals": ["new fact"],
+      "preferences": ["new fact"],
+      "strengths": ["new fact"],
+      "struggles": ["new fact"]
+    },
+    "remove": ["id of an existing profile fact"]
+  }
+}
+
+Topics for this course (id = title): ${topicList}. Use only these ids; a topic status reflects the whole conversation, so do not mark a topic lower than the previous progress shows.
+Previous progress is below: keep what still holds and return the updated values.
+Under "add", list only facts that are new — not ones already in the current profile. Omit sections with nothing to add.
+Propose removals only for facts the conversation contradicts, by id. Facts marked "(added by the learner)" stay regardless.
+Do NOT store API keys, passwords, access tokens, emails, billing details, private URLs, or unrelated personal data.
+Avoid inventing facts. If there is no evidence for a field, omit it or return an empty array.
+
+Previous ${langName} progress:
+${previousProgress}
+
+Current learner profile (fact ids in brackets):
+${profileFactsText(profile)}
 
 Conversation:
-${snippet}`;
+${conversationSnippet(history)}`;
+}
 
-  const result = await postCompletion(prompt);
+/**
+ * Runs the one per-turn memory extraction: language-specific progress plus a delta to the shared profile.
+ *
+ * Returns `null` (and logs why) when no provider is configured, the call fails, or the reply is not
+ * valid JSON of the expected shape.
+ */
+export async function fetchMemoryExtraction(
+  history: readonly Message[],
+  topics: readonly Topic[],
+  prevProgress: Progress | null,
+  profile: LearnerProfile,
+  langName: string
+): Promise<MemoryExtraction | null> {
+  const config = resolveProviderConfig();
+  if (config === null) {
+    console.error('[api] Memory extraction skipped:', missingProviderResult().text);
+    return null;
+  }
 
+  const result = await postMemoryCompletion(config, memoryPrompt(history, topics, prevProgress, profile, langName));
   if (!result.ok) {
-    console.error('[api] Learner profile extraction failed:', result.text);
+    console.error(`[api] Memory extraction failed (${langName}, HTTP ${result.status}):`, result.text);
     return null;
   }
 
   const raw = result.text.replace(/```json|```/g, '').trim();
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as LearnerProfile;
+    parsed = JSON.parse(raw);
   } catch (e) {
-    console.error('[api] Learner profile extraction JSON parse failed:', e, 'raw:', raw);
+    console.error(`[api] Memory extraction JSON parse failed (${langName}):`, e, 'raw:', raw);
     return null;
   }
+
+  const extraction = validateExtraction(
+    parsed,
+    topics.map((t) => t.id)
+  );
+  if (extraction === null) console.error(`[api] Memory extraction returned an unexpected shape (${langName}):`, parsed);
+  return extraction;
 }

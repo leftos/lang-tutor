@@ -24,16 +24,46 @@ export interface Progress {
   lastSeen?: string;
 }
 
+export type ProfileSection = 'background' | 'goals' | 'preferences' | 'strengths' | 'struggles';
+
+export interface ProfileFact {
+  id: string;
+  text: string;
+  source: 'tutor' | 'user';
+  lang?: LanguageId;
+  at: string;
+}
+
 export interface LearnerProfile {
+  version: 2;
   summary?: string;
   knownLanguages?: string[];
-  experienceNotes?: string[];
-  goals?: string[];
-  preferences?: string[];
+  facts: Record<ProfileSection, ProfileFact[]>;
+  updatedAt?: string;
+}
+
+/** Changes the memory extractor proposes to the shared learner profile; code decides what lands. */
+export interface ProfileDelta {
+  summary?: string;
+  knownLanguages?: string[];
+  add?: Partial<Record<ProfileSection, string[]>>;
+  /** Ids of existing facts the conversation contradicts. */
+  remove?: string[];
+}
+
+/** Language-specific progress fields as the memory extractor returns them. */
+export interface ExtractedProgress {
+  experienceLevel?: string;
+  currentTopic?: string;
+  topics?: Array<Pick<TopicStatus, 'id' | 'status'>>;
   strengths?: string[];
   struggles?: string[];
-  recentSignals?: string[];
-  updatedAt?: string;
+  overallNotes?: string;
+}
+
+export interface MemoryExtraction {
+  progress: ExtractedProgress;
+  profileDelta: ProfileDelta;
 }
 
 export interface TextBlock {
@@ -72,10 +102,31 @@ export interface ProviderConfig {
   apiKey: string;
 }
 
+export interface ProviderModel {
+  readonly id: string;
+  readonly label: string;
+  /** ISO timestamp of the model's release, when the provider's list reports one. */
+  readonly createdAt?: string;
+}
+
+/** A provider's live model list as last fetched, kept so Auto can resolve without a network call. */
+export interface CachedModelList {
+  /** ISO timestamp of the fetch. */
+  fetchedAt: string;
+  models: ProviderModel[];
+}
+
+export interface ProviderEntry {
+  /** The chosen model id; `''` means Auto (resolved from the cached list, else a pinned fallback). */
+  model: string;
+  apiKey?: string;
+  modelList?: CachedModelList;
+}
+
 export interface ProviderSettings {
   activeProvider: AiProvider;
   rememberKeys: boolean;
-  providers: Record<AiProvider, { model: string; apiKey?: string }>;
+  providers: Record<AiProvider, ProviderEntry>;
 }
 
 export interface RunResult {

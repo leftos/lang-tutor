@@ -1,5 +1,6 @@
+import { resolveChatModel, resolveMemoryModel } from './modelResolution';
 import { storageGet, storageSet } from './storage';
-import type { AiProvider, ProviderConfig, ProviderSettings } from './types';
+import type { AiProvider, CachedModelList, ProviderConfig, ProviderEntry, ProviderModel, ProviderSettings } from './types';
 
 export const PROVIDER_SETTINGS_KEY = 'lang-tutor:provider-settings';
 
@@ -9,16 +10,11 @@ export const PROVIDER_LABELS: Record<AiProvider, string> = {
   gemini: 'Google Gemini',
 };
 
-export const DEFAULT_PROVIDER_MODELS: Record<AiProvider, string> = {
-  anthropic: 'claude-sonnet-4-20250514',
-  openai: 'gpt-5.4-mini',
-  gemini: 'gemini-2.5-flash',
-};
+/** The Anthropic default the app used to hard-code; a stored model equal to it migrates to Auto. */
+const LEGACY_DEFAULT_MODEL = 'claude-sonnet-4-20250514';
 
-export interface ProviderModel {
-  readonly id: string;
-  readonly label: string;
-}
+/** A cached model list older than this is refreshed in the background at load. */
+const MODEL_LIST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 let sessionOnlyKeys: Partial<Record<AiProvider, string>> = {};
 
@@ -43,6 +39,15 @@ const notOpenAiSpecialPurpose = (id: string): boolean =>
   !['audio', 'babbage', 'codex', 'dall-e', 'embedding', 'image', 'moderation', 'realtime', 'search', 'sora', 'tts', 'transcribe', 'whisper'].some(
     (needle) => id.toLowerCase().includes(needle)
   );
+
+/** OpenAI reports `created` in Unix seconds. */
+function openAiModelFromRow(row: Record<string, unknown>): ProviderModel | null {
+  const id = asString(row.id);
+  if (id === null) return null;
+  return typeof row.created === 'number' && Number.isFinite(row.created)
+    ? { id, label: id, createdAt: new Date(row.created * 1000).toISOString() }
+    : { id, label: id };
+}
 
 function compactText(value: string, maxLength = 700): string {
   const compacted = value.replace(/\s+/g, ' ').trim();
@@ -158,11 +163,37 @@ export function defaultProviderSettings(): ProviderSettings {
     activeProvider: 'anthropic',
     rememberKeys: true,
     providers: {
-      anthropic: { model: DEFAULT_PROVIDER_MODELS.anthropic },
-      openai: { model: DEFAULT_PROVIDER_MODELS.openai },
-      gemini: { model: DEFAULT_PROVIDER_MODELS.gemini },
+      anthropic: { model: '' },
+      openai: { model: '' },
+      gemini: { model: '' },
     },
   };
+}
+
+function parseCachedModel(value: unknown): ProviderModel | null {
+  if (!isRecord(value)) return null;
+  const id = asString(value.id);
+  if (id === null) return null;
+  const label = asString(value.label) ?? id;
+  const createdAt = asString(value.createdAt);
+  return createdAt === null ? { id, label } : { id, label, createdAt };
+}
+
+function parseCachedModelList(value: unknown): CachedModelList | null {
+  if (!isRecord(value) || !Array.isArray(value.models)) return null;
+  const fetchedAt = asString(value.fetchedAt);
+  if (fetchedAt === null) return null;
+  const models = value.models.map(parseCachedModel).filter((model): model is ProviderModel => model !== null);
+  return { fetchedAt, models };
+}
+
+function parseProviderEntry(candidate: Record<string, unknown>): ProviderEntry {
+  const stored = asString(candidate.model) ?? '';
+  const entry: ProviderEntry = { model: stored === LEGACY_DEFAULT_MODEL ? '' : stored };
+  if (typeof candidate.apiKey === 'string' && candidate.apiKey) entry.apiKey = candidate.apiKey;
+  const modelList = parseCachedModelList(candidate.modelList);
+  if (modelList !== null) entry.modelList = modelList;
+  return entry;
 }
 
 export function loadProviderSettings(): ProviderSettings {
@@ -176,11 +207,9 @@ export function loadProviderSettings(): ProviderSettings {
   const providers = { ...defaults.providers };
   if (raw.providers && typeof raw.providers === 'object') {
     for (const provider of PROVIDER_IDS) {
-      const candidate = raw.providers[provider];
-      if (!candidate || typeof candidate !== 'object') continue;
-      const model = typeof candidate.model === 'string' && candidate.model.trim() ? candidate.model.trim() : providers[provider].model;
-      const apiKey = typeof candidate.apiKey === 'string' && candidate.apiKey ? candidate.apiKey : undefined;
-      providers[provider] = apiKey !== undefined ? { model, apiKey } : { model };
+      const candidate: unknown = raw.providers[provider];
+      if (!isRecord(candidate)) continue;
+      providers[provider] = parseProviderEntry(candidate);
     }
   }
 
@@ -226,9 +255,48 @@ export function resolveProviderConfig(): ProviderConfig | null {
   return {
     provider,
     label: PROVIDER_LABELS[provider],
-    model: providerSettings.model.trim() || DEFAULT_PROVIDER_MODELS[provider],
+    model: providerSettings.model.trim() || resolveChatModel(provider, cachedProviderModels(provider)),
     apiKey,
   };
+}
+
+/** The provider's model list as last fetched, or `null` when none is cached. */
+export function cachedProviderModels(provider: AiProvider): ProviderModel[] | null {
+  return loadProviderSettings().providers[provider].modelList?.models ?? null;
+}
+
+/** The model the per-turn memory extraction runs on for this chat configuration. */
+export function resolveProviderMemoryModel(config: ProviderConfig): string {
+  return resolveMemoryModel(config.provider, cachedProviderModels(config.provider), config.model);
+}
+
+/** Stores a freshly fetched model list for the provider, stamped with the current time. */
+export function storeProviderModels(provider: AiProvider, models: readonly ProviderModel[]): void {
+  const settings = loadProviderSettings();
+  settings.providers[provider] = { ...settings.providers[provider], modelList: { fetchedAt: new Date().toISOString(), models: [...models] } };
+  saveProviderSettings(settings);
+}
+
+function isModelListStale(list: CachedModelList | undefined, now: number): boolean {
+  if (list === undefined) return true;
+  const fetchedAt = Date.parse(list.fetchedAt);
+  return Number.isNaN(fetchedAt) || now - fetchedAt > MODEL_LIST_MAX_AGE_MS;
+}
+
+/**
+ * Refreshes the active provider's cached model list when it is missing or older than 24 hours and a key is
+ * present. A failure is logged and the previous cache kept.
+ */
+export async function refreshStaleProviderModels(): Promise<void> {
+  const settings = loadProviderSettings();
+  const provider = settings.activeProvider;
+  const apiKey = readProviderKey(provider).trim();
+  if (!apiKey || !isModelListStale(settings.providers[provider].modelList, Date.now())) return;
+  try {
+    storeProviderModels(provider, await fetchProviderModels(provider, apiKey));
+  } catch (error) {
+    console.warn(`[provider-models] Background refresh of the ${PROVIDER_LABELS[provider]} model list failed; keeping the cached list.`, error);
+  }
 }
 
 export function providerSetupUrl(provider: AiProvider): string {
@@ -266,8 +334,11 @@ export async function fetchProviderModels(provider: AiProvider, apiKey: string):
           .filter(isRecord)
           .map((row) => {
             const id = asString(row.id);
+            if (!id) return null;
             const displayName = asString(row.display_name);
-            return id ? { id, label: displayName ? `${displayName} (${id})` : id } : null;
+            const label = displayName ? `${displayName} (${id})` : id;
+            const createdAt = asString(row.created_at);
+            return createdAt === null ? { id, label } : { id, label, createdAt };
           })
           .filter((model): model is ProviderModel => model !== null)
       );
@@ -285,9 +356,8 @@ export async function fetchProviderModels(provider: AiProvider, apiKey: string):
       return uniqueSortedModels(
         rows
           .filter(isRecord)
-          .map((row) => asString(row.id))
-          .filter((id): id is string => id !== null && openAiTextModel(id) && notOpenAiSpecialPurpose(id))
-          .map((id) => ({ id, label: id }))
+          .map(openAiModelFromRow)
+          .filter((model): model is ProviderModel => model !== null && openAiTextModel(model.id) && notOpenAiSpecialPurpose(model.id))
       );
     }
     case 'gemini': {
