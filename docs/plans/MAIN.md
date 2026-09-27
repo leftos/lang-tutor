@@ -41,6 +41,7 @@ Shared: `src/api.ts` (extraction calls), `src/main.ts` (`buildSystem`, `extractP
 
 - [x] One command prepares this PC to run the server with full capabilities (runtimes, host checkers/formatters, every LSP, Docker + toolchain image) and reports what is missing
 - [x] Rust Error list shows only `main.rs:L:C` + severity with no message text (e.g. "warning --> main.rs:2:9"); the editor tooltips have the messages
+- [x] Tab accepts the open autocomplete suggestion instead of indenting (single-buffer and project editors)
 - [x] Copy buttons: a copy icon on every code block in chat, and a copy button on every tutor reply and user message in the history
 
 ## Backlog

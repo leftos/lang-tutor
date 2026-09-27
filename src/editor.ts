@@ -1,5 +1,5 @@
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { cpp } from '@codemirror/lang-cpp';
 import { python } from '@codemirror/lang-python';
 import { rust } from '@codemirror/lang-rust';
@@ -31,6 +31,7 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { csharp } from '@replit/codemirror-lang-csharp';
 
+import { tabBinding } from './editorKeys';
 import { fetchDiagnostics, fetchFormatted } from './lint';
 import type { LspDiagnostic } from './lspClient';
 import { connectLsp, type LspClient } from './lspClient';
@@ -325,7 +326,7 @@ export function createEditor(opts: EditorOptions): TutorEditor {
       ...foldKeymap,
       ...completionKeymap,
       ...lintKeymap,
-      indentWithTab,
+      tabBinding,
       {
         key: 'Mod-s',
         run: () => {

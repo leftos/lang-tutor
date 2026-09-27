@@ -11,7 +11,7 @@
  */
 
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { css } from '@codemirror/lang-css';
 import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
@@ -39,6 +39,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 
 import { tutorHighlight, tutorTheme } from './editor';
+import { tabBinding } from './editorKeys';
 import { connectLsp, type LspClient, type LspDiagnostic } from './lspClient';
 import { lspToCmDiagnostic } from './lspEditor';
 import { fetchFile, writeFile } from './projectApi';
@@ -231,7 +232,7 @@ function baseExtensions(): Extension[] {
       ...foldKeymap,
       ...completionKeymap,
       ...lintKeymap,
-      indentWithTab,
+      tabBinding,
     ]),
   ];
 }
