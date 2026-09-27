@@ -34,7 +34,8 @@ Shared: `src/api.ts` (extraction calls), `src/main.ts` (`buildSystem`, `extractP
 
 ### Wave 4 — rewind the conversation
 
-- [ ] Resend one of my earlier messages and restore the conversation to that point: later tutor and user turns drop out of the context (design interview pending)
+- [x] Resend one of my earlier messages and restore the conversation to that point: later tutor and user turns drop out of the context (Edit & resend, PR #7)
+- [ ] Live check: Edit & resend a plain message and a Send-to-tutor message with a real key; the tutor answers from the rewound point, and lesson progress matches that point
 
 ## Backlog
 
@@ -45,6 +46,8 @@ Shared: `src/projectEditor.ts`, `src/lspEditor.ts`. Gate: `.\lt.ps1 typecheck` +
 - [ ] Wire signature help, inlay hints and code actions (with a multi-file `WorkspaceEdit` applier) into `projectEditor.ts`; today only the single-buffer editor has them
 
 ### Singles
+
+- [ ] `.claude/hooks/biome-on-edit.mjs` runs `biome check --write` after every edit, so its fixes land mid-change: it rewrote a new `let` to `const` before the variable's first assignment existed (seen twice in implementer runs). Run the check without `--write` in the hook and leave fixing to `.\lt.ps1 lint`
 
 - [ ] `.\lt.ps1 launch` never returns when its output is piped (`launch | rg ...`): the hidden server inherits the pipe handle, so the reader waits for ever; redirecting to a file works. Start the server without inheriting the console handles
 - [ ] Drop the droplet-only `NODE_ENV === 'production'` defaults now that nothing sets it: the `/var/lib/lang-tutor/workspaces` workspace root (`tools/projects.mjs:35`) and the secure-cookie default (`tools/auth-routes.mjs:14`), plus the `/var/lib` example in the `src/projectPreview.ts:69` comment
