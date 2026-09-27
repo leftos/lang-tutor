@@ -14,10 +14,6 @@ Shared: `lt.ps1`, `README.md`, `CLAUDE.md`. Gate: `Invoke-ScriptAnalyzer ./lt.ps
 - [ ] Human check under `launch`: Run the web workspace (Vite on :5180 in the iframe) and the C# workspace (WPF window + Send-to-tutor screenshot); the API-level checks (sandboxed Python run, state mirror) passed
 - [ ] Outside this repo: remove the `location ^~ /lang-tutor/` proxy block from the leftos.dev site's Nginx config (`server-setup.sh` in the leftos.dev repo), then destroy the droplet `24.199.111.154` after copying any `/var/lib/lang-tutor` data worth keeping
 
-## Next up
-
-- [ ] Add a "Claude subscription" AI provider that runs `claude -p` on the local server instead of calling the API with a key (design interview first: streaming, images, tool lockdown, isolation from the user's Claude Code config)
-
 ## Backlog
 
 ### Wave 2 — LSP features in project workspaces
