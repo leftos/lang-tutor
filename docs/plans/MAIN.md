@@ -32,6 +32,10 @@ Shared: `src/api.ts` (extraction calls), `src/main.ts` (`buildSystem`, `extractP
 - [ ] Live check with an API key: tell one tutor a background fact and a goal, open a fresh language and confirm its first message uses them without re-asking; the Profile tab shows them with that language's badge; Anthropic `[api] cache: HIT` on a session's second turn; Auto resolves to the expected model in the AI Provider dialog
 - [ ] Unit-test the per-model reasoning fields (`lowReasoningFields` / `geminiLowThinking` / `isReasoningRejected` in `src/api.ts`) by moving them into `src/modelResolution.ts`
 
+### Wave 4 — rewind the conversation
+
+- [ ] Resend one of my earlier messages and restore the conversation to that point: later tutor and user turns drop out of the context (design interview pending)
+
 ## Backlog
 
 ### Wave 3 — LSP features in project workspaces
