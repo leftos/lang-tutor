@@ -2,7 +2,7 @@
 
 ## Context
 
-The tutor should know the learner across languages: a new language's tutor should not re-interview them, and per-language progress should be accurate. The audit (oracle, 2026-09-27) found the shared learner profile exists (`LEARNER_PROFILE_KEY`, `fetchLearnerProfileExtraction`) but:
+The tutor should know the learner across languages: a new language's tutor should not re-interview them, and per-language progress should be accurate. The audit (oracle) found the shared learner profile exists (`LEARNER_PROFILE_KEY`, `fetchLearnerProfileExtraction`) but:
 
 - every `firstSessionPrompt` (`src/constants.ts:41-43` and one per language) unconditionally interviews and "waits before teaching", overriding the profile's "do not re-ask" line;
 - the profile is rewritten whole by the LLM each turn, arrays are uncapped, and at `max_tokens: 700` (`src/api.ts:341`) the JSON eventually truncates → parse fails → the profile silently freezes forever;
@@ -65,7 +65,7 @@ interface LearnerProfile { version: 2; summary?: string; knownLanguages?: string
 
 No test runner exists. Add `vitest` as a devDependency (current stable looked up at install) with `"test": "vitest run"` and `src/learnerMemory.test.ts` covering: v1→v2 migration (every field, empty, malformed); dedupe (case, whitespace); cap eviction order and user facts surviving; removal ignoring user facts and unknown ids; topic monotonicity (mastered never regresses, in-progress advances); strengths union + cap; `validateExtraction` rejecting wrong shapes, non-arrays, missing sections.
 
-### Default models that stay current (brief 1b, decided 2026-09-27)
+### Default models that stay current (brief 1b)
 
 Facts (checked 2026-09-27): Gemini documents `gemini-flash-latest` / `gemini-pro-latest` / `gemini-flash-lite-latest` aliases that hot-swap to each new release (two weeks' notice for breaking changes). Anthropic has no moving alias: "every Claude model ID is a pinned snapshot, including the dateless IDs" (platform.claude.com models overview); Claude Haiku 4.5 retires no sooner than 2026-10-15 and has no successor listed. OpenAI aliases only track snapshots within one generation.
 
