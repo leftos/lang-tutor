@@ -10,8 +10,10 @@ import {
   foldKeymap,
   HighlightStyle,
   indentOnInput,
+  StreamLanguage,
   syntaxHighlighting,
 } from '@codemirror/language';
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell';
 import { linter, lintGutter, lintKeymap } from '@codemirror/lint';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, type Extension, StateEffect, StateField } from '@codemirror/state';
@@ -54,6 +56,7 @@ const langExtension: Record<SingleBufferLanguageId, () => Extension> = {
   cpp: () => cpp(),
   dasm: () => cpp(),
   python: () => python(),
+  powershell: () => StreamLanguage.define(powerShell),
   csharp: () => csharp(),
 };
 

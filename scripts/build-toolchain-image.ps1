@@ -1,12 +1,13 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Build the local sandbox image used to run Rust, C++, DASM, Python, and C# snippets.
+    Build the local sandbox image used to run Rust, C++, DASM, Python, PowerShell, and C# snippets.
 
 .DESCRIPTION
     Produces lang-tutor-toolchains:latest from docker/toolchains/. The image
     contains Clang/LLVM/binutils for C++ and DASM, rustc/rustfmt/rust-analyzer,
-    Python 3.13 with black/basedpyright, and the .NET SDK for C# console snippets.
+    Python 3.13 with black/basedpyright, PowerShell 7 (pwsh), and the .NET SDK
+    for C# console snippets.
 #>
 [CmdletBinding()]
 param(
@@ -54,6 +55,10 @@ if ($LASTEXITCODE -ne 0) {
 & docker run --rm --entrypoint python3 $Tag --version *> $null
 if ($LASTEXITCODE -ne 0) {
     throw 'python3 verification failed inside the toolchain image.'
+}
+& docker run --rm --entrypoint pwsh $Tag --version
+if ($LASTEXITCODE -ne 0) {
+    throw 'pwsh verification failed inside the toolchain image.'
 }
 & docker run --rm --entrypoint dotnet $Tag --version *> $null
 if ($LASTEXITCODE -ne 0) {

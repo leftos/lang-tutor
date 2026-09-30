@@ -35,6 +35,18 @@ COPY --from=dotnet /usr/share/dotnet /opt/dotnet
 RUN ln -s /opt/dotnet/dotnet /usr/local/bin/dotnet \
     && dotnet --info
 
+ARG PWSH_VERSION=7.6.6
+ARG PWSH_SHA256=ddbc4a2d113bbd46d283cfedcbcd117a70caefd7673f41f2b4e0000badf103bc
+RUN curl --proto '=https' --tlsv1.2 -sSfL -o /tmp/powershell.tar.gz \
+        "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell-${PWSH_VERSION}-linux-x64.tar.gz" \
+    && echo "${PWSH_SHA256}  /tmp/powershell.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/microsoft/powershell/7 \
+    && tar -xzf /tmp/powershell.tar.gz -C /opt/microsoft/powershell/7 \
+    && rm /tmp/powershell.tar.gz \
+    && chmod +x /opt/microsoft/powershell/7/pwsh \
+    && ln -s /opt/microsoft/powershell/7/pwsh /usr/local/bin/pwsh \
+    && POWERSHELL_TELEMETRY_OPTOUT=1 pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,rust-analyzer
 

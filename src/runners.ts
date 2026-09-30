@@ -12,7 +12,11 @@ export interface RunOptions {
   compilerFlags?: string;
 }
 
-export async function runLocalSnippet(lang: 'rust' | 'cpp' | 'dasm' | 'python' | 'csharp', code: string, options?: RunOptions): Promise<RunResult> {
+export async function runLocalSnippet(
+  lang: 'rust' | 'cpp' | 'dasm' | 'python' | 'powershell' | 'csharp',
+  code: string,
+  options?: RunOptions
+): Promise<RunResult> {
   if (!canUseHostedTooling()) {
     return { ok: false, output: 'Sign in to run code on the hosted server.' };
   }
@@ -52,6 +56,9 @@ export async function runCode(
     case 'python':
       onProgress?.('Running Python in local sandbox…');
       return runLocalSnippet('python', code);
+    case 'powershell':
+      onProgress?.('Running PowerShell in local sandbox…');
+      return runLocalSnippet('powershell', code);
     case 'csharp':
       onProgress?.('Running C# in local sandbox…');
       return runLocalSnippet('csharp', code);

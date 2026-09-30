@@ -26,7 +26,7 @@
       typecheck  Run tsc --noEmit.
       lint       Run biome check --write .
       format     Run biome format --write .
-      toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
+      toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/PowerShell/C# snippets.
       install    Run pnpm install.
       doctor     Print the readiness report: every runtime, host checker and
                  language server, what it enables, and the fix for what is
@@ -578,7 +578,7 @@ Commands:
   typecheck  Run tsc --noEmit.
   lint       Run biome check --write .
   format     Run biome format --write .
-  toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/C# snippets.
+  toolchain  Build the local Docker sandbox image for Rust/C++/DASM/Python/PowerShell/C# snippets.
   install    Run pnpm install.
   launch     Start the app in the background: install and build if needed, start Docker Desktop
              and the toolchain image if needed, run server.mjs, open the browser.

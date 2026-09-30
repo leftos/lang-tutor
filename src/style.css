@@ -135,6 +135,10 @@
   --sig: #3a7a3a;
   --sig-soft: rgba(58, 122, 58, 0.1);
 }
+[data-lang="powershell"] {
+  --sig: #0a6f94;
+  --sig-soft: rgba(10, 111, 148, 0.1);
+}
 
 [data-theme="dark"][data-lang="rust"] {
   --sig: #e8804a;
@@ -151,6 +155,10 @@
 [data-theme="dark"][data-lang="python"] {
   --sig: #6caf6c;
   --sig-soft: rgba(108, 175, 108, 0.16);
+}
+[data-theme="dark"][data-lang="powershell"] {
+  --sig: #4fb3d9;
+  --sig-soft: rgba(79, 179, 217, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -169,6 +177,10 @@
   :root:not([data-theme="light"])[data-lang="python"] {
     --sig: #6caf6c;
     --sig-soft: rgba(108, 175, 108, 0.16);
+  }
+  :root:not([data-theme="light"])[data-lang="powershell"] {
+    --sig: #4fb3d9;
+    --sig-soft: rgba(79, 179, 217, 0.16);
   }
 }
 

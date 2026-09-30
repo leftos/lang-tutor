@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-page, multi-language programming tutor (Rust, C++, DASM, Python, C#, Web). Two workspace shapes:
+A single-page, multi-language programming tutor (Rust, C++, DASM, Python, PowerShell, C#, Web). Two workspace shapes:
 
-- **Single-buffer** (`rust` / `cpp` / `dasm` / `python`): one editor, one Run, one output pane. Code runs in the local Docker sandbox image (`lang-tutor-toolchains:latest`).
+- **Single-buffer** (`rust` / `cpp` / `dasm` / `python` / `powershell`): one editor, one Run, one output pane. Code runs in the local Docker sandbox image (`lang-tutor-toolchains:latest`).
 - **Project workspace** (`csharp` / `web`): on-disk project with sidebar file tree, multi-tab editor, Run / Send controls above the code, supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Run/Stop wired to the supervisor; logs streamed via SSE.
 
 The user chats with their selected AI provider (Anthropic Claude, OpenAI ChatGPT, or Google Gemini) directly from the browser using their own API key. They write code, run it, and click "Send to tutor" to submit a structured bundle (note + code + output + LSP diagnostics, plus DOM/console/server logs for project workspaces, plus a screenshot of the WPF window or rendered iframe). Lesson progress is extracted by a second LLM call into structured JSON and persisted independently per language. A shared learner profile is also extracted and mirrored across languages so tutors can reuse stable background, goals, preferences, and learning trends. Switching language is non-destructive — each language has its own conversation history, lesson progress, and saved editor / tab state.
@@ -19,7 +19,7 @@ The user chats with their selected AI provider (Anthropic Claude, OpenAI ChatGPT
 - **CodeMirror 6** for the editor (syntax highlight, autocomplete, search, lint, multi-cursor, fold gutter), driven by real LSP diagnostics for inline errors
 - **Vite 7** for dev server, HMR, and production builds
 - **Tailwind CSS 4** via `@tailwindcss/vite` plugin (config-in-CSS via `@theme`)
-- **Docker Desktop** for the local sandbox image used by Rust / C++ / DASM / Python / C# console runs
+- **Docker Desktop** for the local sandbox image used by Rust / C++ / DASM / Python / PowerShell / C# console runs
 - **Biome** for linting and formatting
 - **pnpm** for package management
 - **Node 20.6+** runtime for the production server (`server.mjs`) and the local `/run` + `/check` + `/format` + `/lsp` + `/proj` + `/fs` + `/state` + `/auth` endpoints
@@ -29,7 +29,7 @@ The user chats with their selected AI provider (Anthropic Claude, OpenAI ChatGPT
 - **dompurify** + **marked** for XSS-safe markdown rendering of assistant messages
 - **html-to-image** for rasterising the web preview iframe into a PNG vision block
 - Optional local toolchains (auto-detected; features silently disable if missing):
-  - Single-buffer host tools: `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`
+  - Single-buffer host tools: `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`, `pwsh`
   - Project: `dotnet` (.NET 8+ SDK), `pnpm`, `code` / `devenv` / `explorer.exe` for the "Open in" launchers
   - LSP binaries: machine-level `clangd`, `rust-analyzer` (rustup component) and Roslyn LSP (discovered from the C# Dev Kit install, OmniSharp as fallback); project devDependencies `typescript-language-server`, `vscode-langservers-extracted` (html + css), `basedpyright` (`basedpyright-langserver`), `@biomejs/biome`. `tools/lsp.mjs` resolves `node_modules/.bin` before PATH.
   - `.\lt.ps1 doctor` (`scripts/doctor.mjs`) lists every one of these as ready or missing, built from `LSP_CONFIG` and `CHECKER_TOOLS` so a new server or checker is reported automatically; each probe runs the tool (a rustup proxy for an uninstalled component exits non-zero and counts as missing). `.\lt.ps1 setup` installs what doctor reports missing by each row's `recipe`.

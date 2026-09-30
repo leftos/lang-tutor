@@ -68,6 +68,21 @@ case "$lang" in
     cd "$run_dir"
     python3 main.py 2>&1
     ;;
+  powershell)
+    if [[ ! -f main.ps1 ]]; then
+      echo "main.ps1 not found in sandbox workspace" >&2
+      exit 64
+    fi
+    export HOME=/tmp/home
+    export POWERSHELL_TELEMETRY_OPTOUT=1
+    export POWERSHELL_UPDATECHECK=Off
+    export NO_COLOR=1
+    export DOTNET_CLI_TELEMETRY_OPTOUT=1
+    mkdir -p "$HOME"
+    cp /workspace/main.ps1 "$run_dir/main.ps1"
+    cd "$run_dir"
+    pwsh -NoLogo -NoProfile -NonInteractive -File main.ps1 2>&1
+    ;;
   csharp)
     if [[ ! -f main.cs ]]; then
       echo "main.cs not found in sandbox workspace" >&2

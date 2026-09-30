@@ -13,7 +13,7 @@ Prepare this PC to run everything, then check what's ready:
 .\lt.ps1 doctor    # the readiness report only: each capability, ready or missing, and the command that fixes it
 ```
 
-`setup` is idempotent and needs no admin: it runs `doctor`, installs each missing piece (winget for Node, pnpm, Docker Desktop, .NET SDK, Rust, Python and LLVM; `rustup component add rust-analyzer`; `uv tool install black`; `pnpm install`, which brings the TypeScript, HTML/CSS, Biome and basedpyright language servers; starting Docker and building the toolchain image; the C# Dev Kit for Roslyn when VS Code is installed), then prints the report again. `doctor` runs each tool rather than just finding it on PATH, so a rustup stub for an uninstalled component shows as missing. First run takes 5–10 minutes of downloads; later runs take seconds.
+`setup` is idempotent and needs no admin: it runs `doctor`, installs each missing piece (winget for Node, pnpm, Docker Desktop, .NET SDK, Rust, Python, PowerShell 7 and LLVM; `rustup component add rust-analyzer`; `uv tool install black`; `pnpm install`, which brings the TypeScript, HTML/CSS, Biome and basedpyright language servers; starting Docker and building the toolchain image; the C# Dev Kit for Roslyn when VS Code is installed), then prints the report again. `doctor` runs each tool rather than just finding it on PATH, so a rustup stub for an uninstalled component shows as missing. First run takes 5–10 minutes of downloads; later runs take seconds.
 
 Then use `.\lt.ps1 dev` for development, or `.\lt.ps1 launch` / `.\lt.ps1 stop` to run the built app on demand (see [Running it for real](#running-it-for-real)); `launch` prints a one-line warning when `doctor` finds anything missing.
 
@@ -21,7 +21,7 @@ Then use `.\lt.ps1 dev` for development, or `.\lt.ps1 launch` / `.\lt.ps1 stop` 
 
 Two workspace shapes:
 
-- **Single-buffer** (Rust / C++ / Python): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted in a local Docker sandbox.
+- **Single-buffer** (Rust / C++ / Python / PowerShell): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted in a local Docker sandbox.
 - **Project workspace** (C# / Web): on-disk project under `projects/<lang>/` with a sidebar file tree, multi-tab editor, Run / Send controls above the code, integrated supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Edits autosave; the supervisor streams stdout/stderr into the Output tab.
 
 | Language | Workspace | Lesson focus | Run target | Live errors | Format on save |
@@ -29,6 +29,7 @@ Two workspace shapes:
 | **Rust** | single-buffer | Beginner-to-intermediate fundamentals | local Docker sandbox (`rustc`) | local `rustc` | local `rustfmt` |
 | **C++** | single-buffer | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | local Docker sandbox (`clang++ -std=c++23`) | local `clang -fsyntax-only` | local `clang-format` |
 | **Python** | single-buffer | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | local Docker sandbox (`python3`) | local `python ast.parse` | local `black` |
+| **PowerShell** | single-buffer | Cross-platform PowerShell 7: the object pipeline, functions and parameters, error handling, classes, regex, JSON/CSV | local Docker sandbox (`pwsh`) | local `pwsh` parser | — |
 | **C#** | project workspace | Modern C# 12 → WPF fundamentals → MVVM patterns | local `dotnet run` for the WPF project, plus console snippets in Docker | dotnet build (streamed into the Build errors tab) | — |
 | **Web** | project workspace | Vanilla HTML/CSS/JS → TS → React → Hono → SQLite | private Vite server, same-origin Preview tab | TS compile via Vite | — |
 
@@ -54,12 +55,12 @@ mirror and account sync.
 - **CodeMirror 6** for the editor (syntax highlighting, autocomplete, search, lint, fold gutter, multi-cursor)
 - **Vite 7** for dev server, HMR, and production builds
 - **Tailwind CSS 4** via the `@tailwindcss/vite` plugin (config-in-CSS)
-- **Docker Desktop** for local sandboxed Rust / C++ / Python / C# console runs
+- **Docker Desktop** for local sandboxed Rust / C++ / Python / PowerShell / C# console runs
 - **Biome** for linting and formatting
 - **pnpm** for package management
 - **Node 20+** runtime for the production proxy (`server.mjs`) and for the `/run` / `/check` / `/format` toolchain endpoints
 
-Optional local toolchains (auto-detected; gracefully disabled if missing; `.\lt.ps1 doctor` lists them all): `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`, and the machine-level language servers `clangd`, `rust-analyzer` and Roslyn or OmniSharp. The npm-published language servers are project devDependencies.
+Optional local toolchains (auto-detected; gracefully disabled if missing; `.\lt.ps1 doctor` lists them all): `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`, `pwsh`, and the machine-level language servers `clangd`, `rust-analyzer` and Roslyn or OmniSharp. The npm-published language servers are project devDependencies.
 
 ## Prerequisites
 
@@ -159,14 +160,14 @@ When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so 
 │   ├── types.ts       TypeScript interfaces
 │   └── style.css      Tailwind import + design tokens + component classes
 ├── tools/
-│   ├── checker.mjs    Backend: spawns rustc/clang/python/rustfmt/clang-format/black
+│   ├── checker.mjs    Backend: spawns rustc/clang/python/pwsh/rustfmt/clang-format/black
 │   └── runner.mjs     Backend: runs single-buffer code in the Docker sandbox image
 ├── scripts/
 │   ├── build-toolchain-image.ps1  Builds lang-tutor-toolchains:latest
 │   ├── doctor.mjs     Readiness report behind `lt.ps1 doctor`
 │   └── setup.ps1      Installs what doctor reports missing (`lt.ps1 setup`)
 ├── docker/
-│   └── toolchains/    Docker image with Clang/LLVM, Rust, Python, .NET, formatters, and LSPs
+│   └── toolchains/    Docker image with Clang/LLVM, Rust, Python, PowerShell, .NET, formatters, and LSPs
 ├── index.html         Vite entry HTML
 ├── vite.config.ts     Dev server proxy + Tailwind plugin + /check + /format middleware
 ├── tsconfig.json      Strict TypeScript config
@@ -182,7 +183,7 @@ When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so 
 
 Each language has its own `localStorage` namespace:
 
-- `lang-tutor:active` — currently selected language (`rust` | `cpp` | `python` | `csharp` | `web`)
+- `lang-tutor:active` — currently selected language (`rust` | `cpp` | `python` | `powershell` | `csharp` | `web`)
 - `lang-tutor:{lang}:history` — last 30 messages
 - `lang-tutor:{lang}:progress` — structured progress blob (topic statuses, strengths, struggles, notes)
 - `lang-tutor:{lang}:code` — saved editor content (single-buffer languages only)
@@ -204,6 +205,7 @@ The **Profile** tab shows everything the tutors have noted about you across lang
 - **Rust** → browser `POST /run`, backend runs `rustc --edition=2021` inside `lang-tutor-toolchains:latest`.
 - **C++** → browser `POST /run`, backend runs `clang++ -std=c++23` inside `lang-tutor-toolchains:latest`.
 - **Python** → browser `POST /run`, backend runs `python3` inside `lang-tutor-toolchains:latest`.
+- **PowerShell** → browser `POST /run`, backend runs `pwsh -NoProfile -NonInteractive -File main.ps1` inside `lang-tutor-toolchains:latest`.
 - **C#** → local `dotnet run --project LangTutor.Wpf/LangTutor.Wpf.csproj --verbosity minimal` supervised by `tools/projects.mjs`. The default scaffold is `projects/csharp/LangTutor.sln` with `LangTutor.Wpf/` for WPF/XAML work and `LangTutor.Console/Program.cs` for console exercises. The Run button starts the WPF project; status pill shows `restoring NuGet…` → `building…` → `running (PID …)` derived from dotnet's stdout. The WPF window opens on the user's desktop. Stop or close the window → status flips to `stopped` or `exited (code N)`. For non-GUI lessons, the terminal button above the editor runs the active `.cs` file as a temporary console app inside `lang-tutor-toolchains:latest`.
 - **Web** → local `pnpm dev` Vite server supervised by `tools/projects.mjs`, rendered into a sandboxed iframe at `http://127.0.0.1:5180/`.
 
@@ -211,7 +213,7 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
 
 ### Evaluate flow
 
-`evaluateCode()` (single-buffer) formats the editor contents and last output as a `[CODE]…[OUTPUT]…` user message in a fence appropriate to the active language (`rust` / `cpp` / `python`), sends it through the normal chat path, then triggers progress extraction.
+`evaluateCode()` (single-buffer) formats the editor contents and last output as a `[CODE]…[OUTPUT]…` user message in a fence appropriate to the active language (`rust` / `cpp` / `python` / `powershell`), sends it through the normal chat path, then triggers progress extraction.
 
 `evaluateProjectCode()` (project workspaces) bundles richer context:
 
@@ -225,7 +227,7 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
   entered. If a saved model disappears from that provider's model list, the app
   warns the user and requires a new selection.
 - Resetting progress only affects the **active** language. Switch first if you want to reset a different one.
-- Rust, C++, DASM, Python, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
+- Rust, C++, DASM, Python, PowerShell, and C# console snippets run locally in Docker. If Run reports that `lang-tutor-toolchains:latest` is missing, run `.\lt.ps1 toolchain`.
 - The XSS-safe DOM construction means you can paste arbitrary content from the AI without risk.
 
 ## Glossary

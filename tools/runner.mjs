@@ -26,6 +26,7 @@ const LANG_CONFIG = Object.freeze({
   dasm: { file: 'main.cpp' },
   rust: { file: 'main.rs' },
   python: { file: 'main.py' },
+  powershell: { file: 'main.ps1' },
   csharp: { file: 'main.cs' },
 });
 

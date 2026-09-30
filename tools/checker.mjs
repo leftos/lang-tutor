@@ -33,6 +33,7 @@ export const CHECKER_TOOLS = [
   { bin: 'clang-format' },
   { bin: 'python', fallbackBin: 'py' },
   { bin: 'black' },
+  { bin: 'pwsh' },
 ];
 
 /**
@@ -220,6 +221,57 @@ async function pythonFormat(code) {
   return { ok: true, available: true, code: result.stdout };
 }
 
+// ── PowerShell ──────────────────────────────────────────────────────────────
+
+const PS_CHECK_SCRIPT = `
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$src = [Console]::In.ReadToEnd()
+$errors = $null
+$null = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$null, [ref]$errors)
+$errors | ForEach-Object {
+  $endColumn = $_.Extent.EndColumnNumber
+  if ($_.Extent.EndLineNumber -eq $_.Extent.StartLineNumber -and $endColumn -le $_.Extent.StartColumnNumber) {
+    $endColumn = $_.Extent.StartColumnNumber + 1
+  }
+  [ordered]@{
+    severity = 'error'
+    line = $_.Extent.StartLineNumber
+    column = $_.Extent.StartColumnNumber
+    endLine = $_.Extent.EndLineNumber
+    endColumn = $endColumn
+    message = $_.Message
+  }
+} | ConvertTo-Json -AsArray -Compress
+`;
+
+/**
+ * Parse PS_CHECK_SCRIPT's stdout (a JSON array of diagnostics). Malformed
+ * output yields no diagnostics rather than an error, as parsePythonOutput does.
+ *
+ * @param {string} stdout
+ * @returns {{ available: true; diagnostics: unknown[] }}
+ */
+export function parsePowershellOutput(stdout) {
+  try {
+    const arr = JSON.parse(stdout.trim() || '[]');
+    return { available: true, diagnostics: Array.isArray(arr) ? arr : [] };
+  } catch {
+    return { available: true, diagnostics: [] };
+  }
+}
+
+export async function powershellCheck(code) {
+  const result = await spawnTool('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PS_CHECK_SCRIPT], code);
+  if (!result.available) return { available: false, diagnostics: [] };
+  return parsePowershellOutput(result.stdout);
+}
+
+async function powershellFormat() {
+  return { ok: false, available: false, error: 'PowerShell formatting needs PowerShell Editor Services — run .\\lt.ps1 setup' };
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 export async function checkCode(lang, code) {
@@ -231,6 +283,8 @@ export async function checkCode(lang, code) {
       return cppCheck(code);
     case 'python':
       return pythonCheck(code);
+    case 'powershell':
+      return powershellCheck(code);
     default:
       return { available: false, diagnostics: [] };
   }
@@ -245,6 +299,8 @@ export async function formatCode(lang, code) {
       return cppFormat(code);
     case 'python':
       return pythonFormat(code);
+    case 'powershell':
+      return powershellFormat();
     default:
       return { ok: false, error: `unknown language: ${lang}` };
   }

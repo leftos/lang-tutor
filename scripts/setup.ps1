@@ -24,6 +24,7 @@
     rustup           winget Rustlang.Rustup if rustup is missing, then
                      rustup component add rustfmt rust-analyzer
     python           winget Python.Python.3.13
+    pwsh             winget Microsoft.PowerShell
     black            winget astral-sh.uv if uv is missing, then uv tool install
                      black, then uv's tool bin folder onto the user PATH
     llvm             winget LLVM.LLVM, then its bin folder onto the user PATH
@@ -49,7 +50,7 @@ $toolchainScript = Join-Path $PSScriptRoot 'build-toolchain-image.ps1'
 
 $RecipeOrder = @(
     'node', 'pnpm', 'pnpm-install', 'docker-desktop', 'docker-engine', 'toolchain-image',
-    'dotnet-sdk', 'rustup', 'python', 'black', 'llvm', 'csdevkit'
+    'dotnet-sdk', 'rustup', 'python', 'black', 'pwsh', 'llvm', 'csdevkit'
 )
 
 function Write-Step {
@@ -253,6 +254,10 @@ function Install-Python {
     Install-WingetPackage -Id 'Python.Python.3.13' -DisplayName 'Python 3.13'
 }
 
+function Install-Pwsh {
+    Install-WingetPackage -Id 'Microsoft.PowerShell' -DisplayName 'PowerShell 7'
+}
+
 function Test-UvReady {
     if (-not (Test-Tool 'uv')) { return $false }
     & uv --version *> $null
@@ -320,6 +325,7 @@ $Recipes = @{
     'rustup'          = { Install-RustComponent }
     'python'          = { Install-Python }
     'black'           = { Install-Black }
+    'pwsh'            = { Install-Pwsh }
     'llvm'            = { Install-Llvm }
     'csdevkit'        = { Install-CsharpDevKit }
 }

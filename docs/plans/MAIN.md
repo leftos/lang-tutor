@@ -39,6 +39,8 @@ Shared: `src/api.ts` (extraction calls), `src/main.ts` (`buildSystem`, `extractP
 
 ### Singles (current)
 
+- [ ] PowerShell course: single-buffer `powershell` language (PowerShell 7 core curriculum, `pwsh` in the sandbox image, host `pwsh` parser check), then PowerShell Editor Services as its language server with `Invoke-Formatter` for format
+
 - [x] One command prepares this PC to run the server with full capabilities (runtimes, host checkers/formatters, every LSP, Docker + toolchain image) and reports what is missing
 - [x] Rust Error list shows only `main.rs:L:C` + severity with no message text (e.g. "warning --> main.rs:2:9"); the editor tooltips have the messages
 - [x] Autocomplete opens on its own only after a partial identifier or a trigger character (not after `;`), so Enter after `;` makes a new line
@@ -59,4 +61,6 @@ Shared: `src/projectEditor.ts`, `src/lspEditor.ts`. Gate: `.\lt.ps1 typecheck` +
 
 - [ ] `.\lt.ps1 launch` never returns when its output is piped (`launch | rg ...`): the hidden server inherits the pipe handle, so the reader waits for ever; redirecting to a file works. Start the server without inheriting the console handles
 - [ ] Drop the droplet-only `NODE_ENV === 'production'` defaults now that nothing sets it: the `/var/lib/lang-tutor/workspaces` workspace root (`tools/projects.mjs:35`) and the secure-cookie default (`tools/auth-routes.mjs:14`), plus the `/var/lib` example in the `src/projectPreview.ts:69` comment
+- [ ] DASM missing from language lists: `CheckBody.lang` in `vite.config.ts:15` omits `'dasm'` though `/check` serves it (`tools/checker.mjs` `case 'dasm'`); `README.md` "Single-buffer" line (§ Languages) and the `lang-tutor:active` values (§ Per-language state) omit `dasm`
+- [ ] `docs/README.md` is absent: the docs start page the glossary and architecture doc should hang from; today the glossary lives in the root `README.md`
 - [ ] `.env.example` sets `NODE_ENV=production`, against the CLAUDE.md rule to leave `NODE_ENV` unset on Windows; drop it with the defaults above (found 2026-09-30 while folding CLAUDE.md into `docs/ARCHITECTURE.md`).

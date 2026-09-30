@@ -3,7 +3,7 @@ export const ACTIVE_LANG_KEY = 'lang-tutor:active';
 export const LEARNER_PROFILE_KEY = 'lang-tutor:learner-profile';
 export const MAX_HISTORY = 30;
 
-export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'dasm', 'python', 'csharp', 'web'] as const;
+export const LANGUAGE_IDS: readonly LanguageId[] = ['rust', 'cpp', 'dasm', 'python', 'powershell', 'csharp', 'web'] as const;
 export const DEFAULT_LANGUAGE: LanguageId = 'rust';
 
 /**
@@ -196,6 +196,59 @@ const PYTHON: Language = {
     'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
 };
 
+const POWERSHELL: Language = {
+  kind: 'single',
+  id: 'powershell',
+  name: 'PowerShell',
+  fileName: 'main.ps1',
+  fenceLang: 'powershell',
+  starterCode: `$books = @(
+  [pscustomobject]@{ Title = 'Dune'; Year = 1965; Pages = 412 }
+  [pscustomobject]@{ Title = 'Neuromancer'; Year = 1984; Pages = 271 }
+  [pscustomobject]@{ Title = 'Hyperion'; Year = 1989; Pages = 482 }
+)
+
+$books |
+  Where-Object Pages -gt 300 |
+  Sort-Object Year -Descending |
+  Format-Table Title, Year, Pages`,
+  topics: [
+    { id: 'pipeline-objects', title: 'The pipeline & objects' },
+    { id: 'discovery', title: 'Cmdlets & discovery (Get-Command, Get-Help, Get-Member)' },
+    { id: 'variables-types', title: 'Variables & types' },
+    { id: 'operators', title: 'Operators & comparison' },
+    { id: 'strings', title: 'Strings & formatting' },
+    { id: 'collections', title: 'Arrays & hashtables' },
+    { id: 'control-flow', title: 'Control flow' },
+    { id: 'functions', title: 'Functions & parameters (param, [CmdletBinding()])' },
+    { id: 'pipeline-functions', title: 'Pipeline functions (begin/process/end, ValueFromPipeline)' },
+    { id: 'errors', title: 'Error handling (try/catch, -ErrorAction, $ErrorActionPreference)' },
+    { id: 'objects', title: 'Working with objects ([pscustomobject], Select/Where/Sort/Group-Object)' },
+    { id: 'classes-enums', title: 'Classes & enums' },
+    { id: 'regex', title: 'Regex (-match, -replace, Select-String)' },
+    { id: 'data-files', title: 'Data formats & files (JSON, CSV, files)' },
+  ],
+  systemPromptIntro:
+    'You are an expert, friendly PowerShell teacher. ' +
+    'Adapt depth and pacing to whatever programming and shell background the student tells you about — never assume prior experience they have not described. ' +
+    'If they already know other languages or shells well, lean into what makes PowerShell different rather than re-teaching basic control flow: ' +
+    'the pipeline passes .NET objects, not text, so learners coming from bash or cmd should stop parsing strings and reach for properties, Get-Member, Select-Object, Where-Object and Group-Object instead; ' +
+    'also cover Verb-Noun cmdlet naming and discovery, the output stream (anything not captured is returned), comparison operators like -eq and -like, splatting, and advanced functions. If they are new to programming generally, start with fundamentals. ' +
+    'Format all code examples in ```powershell fenced blocks using PowerShell 7.x syntax (ternary, null-coalescing, pipeline chain operators and [pscustomobject] where appropriate). ' +
+    'Be concise and encouraging. After each concept give a hands-on exercise with clear success criteria. ' +
+    singleFileWorkspace(
+      'main.ps1',
+      'runs it with `pwsh -NoProfile -NonInteractive` (PowerShell 7) on Linux (Install-Module and the PowerShell Gallery are unavailable; when a lesson touches modules, explain it without asking them to install anything)'
+    ) +
+    'The sandbox is Linux with no network, so avoid Windows-only cmdlets and features (the registry, WMI/CIM, services, COM) and never use Read-Host or anything else that reads stdin; build exercise data in memory or write scratch files under /tmp. ' +
+    "The student has a 'Send to tutor' button in their code editor that auto-bundles their optional [NOTE], editor code, last run output, and diagnostics as a [NOTE]/[CODE]/[OUTPUT]/[LSP] message — when you want them to share code with you, ALWAYS tell them to click 'Send to tutor' rather than asking them to paste. When you receive a [NOTE], treat it as the student's specific question or confusion and answer it first. When you receive a [CODE]/[OUTPUT] message, evaluate both the code and its output specifically. " +
+    'When the message includes an [LSP] block, those are diagnostics straight from PowerShell Editor Services (parse errors plus PSScriptAnalyzer rules) — `error`, `warning`, `info`, or `hint` lines with `file:line:col` locations and the rule name in brackets when present (e.g. `[PSAvoidUsingCmdletAliases]`, `[PSUseDeclaredVarsMoreThanAssignments]`). They are authoritative: lead with the specific reported issues (quoting the line/column and rule) before any general advice. PowerShell is interpreted, so a mistake the analyzer flags often only surfaces at runtime as an error record in [OUTPUT] — the [LSP] block is your chance to fix it before it ever runs. If [LSP] shows no diagnostics, the code is clean at the source level — discuss runtime behaviour from [OUTPUT] instead.',
+  firstSessionPrompt:
+    "This is the student's FIRST PowerShell session. Greet them and ask about their background: " +
+    'which other languages and shells (bash, cmd, zsh) they already know well, whether they have written any PowerShell before (even small scripts), and what they want to use PowerShell for. ' +
+    'Wait for their answer before teaching anything — use it to decide where in the lesson plan to start and how much to assume.',
+};
+
 const CSHARP: Language = {
   kind: 'project',
   id: 'csharp',
@@ -307,6 +360,7 @@ export const LANGUAGES: Record<LanguageId, Language> = {
   cpp: CPP,
   dasm: DASM,
   python: PYTHON,
+  powershell: POWERSHELL,
   csharp: CSHARP,
   web: WEB,
 };

@@ -17,7 +17,7 @@ You audit one specific invariant in this codebase: the per-language system promp
 
 2. **Read the prompts.** Open `src/constants.ts` and locate every `systemPromptIntro` in the `LANGUAGES` record. For each language:
    - Does the prompt describe the exact markers the emitter for that workspace shape will send?
-   - Single-buffer (`rust`, `cpp`, `python`): expect `[CODE]` and `[OUTPUT]`. If the prompt describes anything else, flag it.
+   - Single-buffer (`rust`, `cpp`, `dasm`, `python`, `powershell`): expect `[CODE]` and `[OUTPUT]`. If the prompt describes anything else, flag it.
    - Project, web-vite (`web`): expect `[FILES]`, `[DOM]`, `[CONSOLE]`, `[SERVER]`. If the prompt mentions `[OUTPUT]` instead of any of those, flag it.
    - Project, desktop-process (`csharp`): expect `[FILES]` and `[OUTPUT]`. The prompt should also mention the regex hints (`error CS\d+:`, `error MSB\d+:`, `Unhandled exception:`) and instruct the model to ask for screenshots when UI behavior matters — the agent has no DOM for csharp.
 

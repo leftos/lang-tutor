@@ -6,7 +6,7 @@ A single-page, multi-language programming tutor: the browser talks to the learne
 
 | Task | Files, in order | Deep doc |
 |---|---|---|
-| Add a language (single-buffer or project) | `src/types.ts` (`LanguageId`) → `src/constants.ts` (`LANGUAGE_IDS`, `LANGUAGES`) → `index.html` → `src/editor.ts` (`langExtension`) → `tools/runner.mjs` (`LANG_CONFIG`) → `tools/checker.mjs` → `tools/lsp.mjs` → `tools/projects.mjs` (`PROJECT_CONFIG`) | `.claude/skills/add-language/SKILL.md` |
+| Add a language (single-buffer or project) | `src/types.ts` (`LanguageId`) → `src/constants.ts` (`LANGUAGE_IDS`, `LANGUAGES`) → `index.html` (rail button and its numbering) → `src/style.css` (`[data-lang]` colours) → `src/editor.ts` (`langExtension`) → `src/runners.ts` → `src/main.ts` (`renderFileSpec`, `OPEN_TARGETS_BY_LANG`) → `tools/runner.mjs` (`LANG_CONFIG`) → `docker/toolchains/run-code.sh` and `Dockerfile` → `tools/checker.mjs` and `CheckBody` in `vite.config.ts` → `scripts/doctor.mjs` (`SANDBOX_LANGS`, `CHECKER_META`, `LSP_META`) and `scripts/setup.ps1` → `tools/lsp.mjs` → `tools/projects.mjs` (`PROJECT_CONFIG`) | `.claude/skills/add-language/SKILL.md` |
 | Change a lesson plan or tutor system prompt | `src/constants.ts` → `buildSystem` in `src/main.ts` → `.claude/agents/tutor-prompt-reviewer.md` | none |
 | Change what Send to tutor bundles (`[CODE]`, `[OUTPUT]`, `[LSP]`, `[FILES]`, `[DOM]`) | `evaluateCode` / `evaluateProjectCode` in `src/main.ts` → the matching prompt text in `src/constants.ts` | none |
 | Change learner memory or progress merging | `src/learnerMemory.ts` → `fetchMemoryExtraction` in `src/api.ts` → `extractMemory` in `src/main.ts` → `src/learnerMemory.test.ts` | [`plans/learner-memory.md`](plans/learner-memory.md) |
@@ -34,7 +34,7 @@ A single-page, multi-language programming tutor: the browser talks to the learne
 
 Flows across the layers:
 
-- **Language model**: `Language` (`src/types.ts`) is `SingleBufferLanguage` (`kind: 'single'`: rust, cpp, dasm, python; one editor, runs through `/run`) or `ProjectLanguage` (`kind: 'project'`: csharp, web; on-disk workspace, multi-tab editor, supervised process). A project's `runtime.kind` (`web-vite` or `desktop-process`) picks `createWebVitePreview` or `createDesktopPreview` in `src/projectPreview.ts`, the branch in `evaluateProjectCode`, and the `PROJECT_CONFIG` readiness probe (`http-probe` or `process-alive`). DASM compiles the C++ buffer and returns an `objdump` excerpt of the user's symbols (`docker/toolchains/run-code.sh`); its compiler flags are allowlisted by `DASM_ALLOWED_FLAGS` in `tools/runner.mjs`.
+- **Language model**: `Language` (`src/types.ts`) is `SingleBufferLanguage` (`kind: 'single'`: rust, cpp, dasm, python, powershell; one editor, runs through `/run`) or `ProjectLanguage` (`kind: 'project'`: csharp, web; on-disk workspace, multi-tab editor, supervised process). A project's `runtime.kind` (`web-vite` or `desktop-process`) picks `createWebVitePreview` or `createDesktopPreview` in `src/projectPreview.ts`, the branch in `evaluateProjectCode`, and the `PROJECT_CONFIG` readiness probe (`http-probe` or `process-alive`). DASM compiles the C++ buffer and returns an `objdump` excerpt of the user's symbols (`docker/toolchains/run-code.sh`); its compiler flags are allowlisted by `DASM_ALLOWED_FLAGS` in `tools/runner.mjs`.
 - **Sandbox runs**: `tools/runner.mjs` writes the code into `.tmp/runs/` (`LANG_TUTOR_RUN_ROOT`) and runs the toolchain image with no network, a read-only root, dropped capabilities, `no-new-privileges` and CPU, memory and process limits. C# console snippets use the same `/run` path with `lang: 'csharp'`.
 - **LLM calls**: `callClaude` (streamed chat) and `fetchMemoryExtraction` (once per turn, via `extractMemory`) go from the browser straight to the provider. The system prompt comes from `buildSystem` in `src/main.ts`; Auto (a saved model of `''`) is resolved in the app from the provider's cached live model list, with `FALLBACK_MODELS` when the list is missing.
 - **Send to tutor**: `evaluateCode` / `evaluateProjectCode` build a marker-tagged bundle sent through the normal chat path. The web screenshot is rasterised inside the iframe by `html-to-image`; the WPF screenshot comes from `POST /proj/screenshot` through `tools/wgc-capture/`. A failed capture becomes a `[SCREENSHOT]` note, so the text bundle still goes out.
@@ -45,7 +45,7 @@ Flows across the layers:
 
 ## Integration Footguns
 
-- **Add a `LanguageId`** → also extend `LANGUAGE_IDS` (`src/constants.ts`), `LSP_LANGUAGE_IDS` (`src/lspClient.ts`), `langExtension` (`src/editor.ts`, single-buffer only), `LANG_CONFIG` (`tools/runner.mjs`), the `checker.mjs` switch, `LANG_SERVERS` (`tools/lsp.mjs`) and `PROJECT_CONFIG` plus `SCAFFOLDS` (`tools/projects.mjs`, project languages); the union and the array are separate declarations and only `tsc` catches some of the misses.
+- **Add a `LanguageId`** → also extend `LANGUAGE_IDS` (`src/constants.ts`), `LSP_LANGUAGE_IDS` (`src/lspClient.ts`), `langExtension` (`src/editor.ts`, single-buffer only), `renderFileSpec` and `OPEN_TARGETS_BY_LANG` (`src/main.ts`), the rail in `index.html` and a `[data-lang]` colour in `src/style.css`, `LANG_CONFIG` (`tools/runner.mjs`) with a matching branch in `docker/toolchains/run-code.sh`, the `checker.mjs` switch with `CheckBody` in `vite.config.ts`, `SANDBOX_LANGS` (`scripts/doctor.mjs`), `LANG_SERVERS` (`tools/lsp.mjs`) and `PROJECT_CONFIG` plus `SCAFFOLDS` (`tools/projects.mjs`, project languages); the union and the array are separate declarations and only `tsc` catches some of the misses.
 - **Add a language server or checker** → list it in `LSP_CONFIG` / `CHECKER_TOOLS`; `scripts/doctor.test.mjs` fails if doctor has no row for a key.
 - **Change the Send-to-tutor bundle markers** → also change the `systemPromptIntro` text in `src/constants.ts`; nothing enforces the match except `.claude/agents/tutor-prompt-reviewer.md`.
 - **Change the provider-key exclusion** → `SENSITIVE_KEYS` is declared twice, in `src/storage.ts` and `tools/app-state.mjs`; both must list `lang-tutor:provider-settings` or a key reaches the server mirror.
@@ -58,6 +58,7 @@ Flows across the layers:
 Vitest (`pnpm test`) runs `*.test.*` under `src/`, `tools/` and `scripts/`; there is no separate test project.
 
 - `src/*.test.ts`: the pure frontend modules (`learnerMemory`, `modelResolution`, `rewind`, `outputProblems`, `editorKeys`, `lspEditor`).
+- `tools/checker.test.mjs`: the PowerShell `/check` output parsing, plus a host `pwsh` parse run skipped when `pwsh` is absent.
 - `tools/lsp.test.mjs`: local binary resolution and version-probe classification for the LSP bridge.
 - `scripts/doctor.test.mjs`: doctor covers every `LSP_CONFIG` key and `CHECKER_TOOLS` entry.
 - A new test goes beside its module as `<module>.test.ts` or `.test.mjs`. `main.ts`, `runners.ts`, `tools/projects.mjs` and `tools/runner.mjs` have no unit tests; they are checked by hand under `.\lt.ps1 dev` or `launch`.

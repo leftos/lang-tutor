@@ -22,7 +22,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WIN = process.platform === 'win32';
 const PROBE_TIMEOUT_MS = 5_000;
 const TOOLCHAIN_IMAGE = 'lang-tutor-toolchains:latest';
-const SANDBOX_LANGS = ['rust', 'cpp', 'dasm', 'python', 'csharp'];
+const SANDBOX_LANGS = ['rust', 'cpp', 'dasm', 'python', 'powershell', 'csharp'];
 
 /**
  * @typedef {import('../tools/lsp.mjs').CommandRunner} CommandRunner
@@ -52,6 +52,7 @@ const RECIPE_FIX = {
   rustup: 'winget install Rustlang.Rustup, then rustup component add rustfmt rust-analyzer',
   python: 'winget install Python.Python.3.13',
   black: 'uv tool install black',
+  pwsh: 'winget install Microsoft.PowerShell',
   llvm: 'winget install LLVM.LLVM, then add its bin folder to PATH',
   csdevkit: 'code --install-extension ms-dotnettools.csdevkit',
 };
@@ -63,6 +64,7 @@ const CHECKER_META = {
   'clang-format': { capability: 'C++ formatting', languages: ['cpp', 'dasm'], recipe: 'llvm' },
   python: { capability: 'Python syntax check when basedpyright is unavailable', languages: ['python'], recipe: 'python' },
   black: { capability: 'Python formatting', languages: ['python'], recipe: 'black' },
+  pwsh: { capability: 'PowerShell syntax check', languages: ['powershell'], recipe: 'pwsh' },
 };
 
 const LSP_META = {
@@ -184,8 +186,8 @@ async function runtimeRows(run) {
     probeCommand(run, 'pnpm', ['--version']),
     probeDotnetSdk(run),
   ]);
-  const all = ['rust', 'cpp', 'dasm', 'python', 'csharp', 'web'];
-  const sandbox = 'Run button for Rust, C++, DASM, Python and C# console snippets';
+  const all = ['rust', 'cpp', 'dasm', 'python', 'powershell', 'csharp', 'web'];
+  const sandbox = 'Run button for Rust, C++, DASM, Python, PowerShell and C# console snippets';
   return [
     makeRow(
       { id: 'node', section: 'runtime', name: 'Node >= 20.6', capability: 'The app server and its tooling', languages: all, recipe: 'node' },

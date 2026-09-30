@@ -640,6 +640,7 @@ function renderFileSpec(): void {
     cpp: 'clang · c++23',
     dasm: 'clang · objdump · x86-64',
     python: 'local python · 3.13',
+    powershell: 'pwsh · 7.6',
     csharp: 'dotnet 8 · c# 12',
     web: `vite · http://${window.location.hostname || 'localhost'}:5180`,
   };
@@ -2281,6 +2282,7 @@ const OPEN_TARGETS_BY_LANG: Record<LanguageId, readonly { id: OpenTarget; label:
   cpp: [],
   dasm: [],
   python: [],
+  powershell: [],
   csharp: [
     { id: 'vscode', label: 'VS Code' },
     { id: 'vs', label: 'Visual Studio' },

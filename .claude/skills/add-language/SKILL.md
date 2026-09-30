@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 This codebase supports two workspace shapes (`src/types.ts`). Pick one before starting:
 
-- **Single-buffer** (`rust`/`cpp`/`python` today): one editor, one Run, code runs through a remote sandbox or in-browser runtime. No on-disk project.
+- **Single-buffer** (`rust`/`cpp`/`dasm`/`python`/`powershell` today): one editor, one Run, code runs through a remote sandbox or in-browser runtime. No on-disk project.
 - **Project workspace** (`csharp`/`web` today): on-disk project under `projects/<lang>/`, multi-tab editor, supervised process for `pnpm dev` / `dotnet run` / etc.
 
 Ask the user which shape they want if it isn't obvious.
@@ -26,13 +26,14 @@ Ask the user which shape they want if it isn't obvious.
 2. **`src/constants.ts`** — add a new entry to `LANGUAGES`. Required:
    - `id`, `kind`, `label`, `topics: string[]`, `firstSessionPrompt`, `systemPromptIntro` (lesson plan + describe to the model the marker format it will receive — copy from an existing language with the same workspace shape and adapt).
 3. **`index.html`** — add a button to the language rail (`#langRail`) with `data-lang="<id>"`. Match the existing pattern (icon, label, ARIA).
-4. **`src/editor.ts`** — register a CodeMirror language pack for syntax highlighting in the `LANG_PACKS` map (or wherever the compartment is fed). If no pack exists in `@codemirror/lang-*`, fall back to plain text and document.
+4. **`src/editor.ts`** — register a CodeMirror language pack for syntax highlighting in the `langExtension` map. If no pack exists in `@codemirror/lang-*`, use a `StreamLanguage` mode from `@codemirror/legacy-modes` (PowerShell does), else fall back to plain text.
+4a. **`index.html` rail numbering, `src/style.css` `[data-lang]` colours, `renderFileSpec` / `OPEN_TARGETS_BY_LANG` in `src/main.ts`** — the full site list is the "Add a language" row of `docs/ARCHITECTURE.md`'s Task Index.
 
 ## Single-buffer-only
 
 5. Add `starterCode`, `fileName`, `fenceLang` to the LANGUAGES record. The `fenceLang` value MUST match what `evaluateCode()` writes inside the ` ```{fenceLang} ` fence — Claude reads this to know how to interpret submissions.
-6. Add a runner in `src/runners.ts`: a function returning `Promise<{ ok: boolean; output: string }>`. Wire into `runCode()`'s dispatch table.
-7. (Optional) Add `/check` and `/format` cases in `tools/checker.mjs` if a local toolchain exists. Spawn with `child_process.spawn(cmd, args[])` (array form — never shell form). On `ENOENT`, return `{ available: false }` so the editor silently disables the feature.
+6. Add a runner in `src/runners.ts`: a function returning `Promise<{ ok: boolean; output: string }>`. Wire into `runCode()`'s switch, add a `LANG_CONFIG` entry in `tools/runner.mjs`, and a branch in `docker/toolchains/run-code.sh` (install the toolchain in `docker/toolchains/Dockerfile` and add a verify step to `scripts/build-toolchain-image.ps1`). Add the language to `SANDBOX_LANGS` in `scripts/doctor.mjs`.
+7. (Optional) Add `/check` and `/format` cases in `tools/checker.mjs` if a local toolchain exists. Spawn with `child_process.spawn(cmd, args[])` (array form — never shell form). On `ENOENT`, return `{ available: false }` so the editor silently disables the feature. Add the language to `CheckBody` in `vite.config.ts`, the tool to `CHECKER_TOOLS`, and a `CHECKER_META` row (plus a `scripts/setup.ps1` recipe) in `scripts/doctor.mjs`.
 
 ## Project-workspace-only
 
