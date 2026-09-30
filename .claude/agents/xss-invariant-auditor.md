@@ -1,7 +1,7 @@
 ---
 name: xss-invariant-auditor
 description: Audits DOM mutation patterns for XSS regressions. The codebase's stated invariant is that DOM mutation must never use raw-HTML sinks with dynamic strings, with AI-rendered output routed through DOMPurify. Use proactively when reviewing changes touching src/render.ts, src/main.ts DOM construction, src/projectPreview.ts, or any code building nodes from AI/user-provided content.
-tools: Read, Grep, Glob, SendMessage, mcp__plugin_mem0_mem0__search_memories
+tools: Read, Grep, Glob, SendMessage
 model: opus
 effort: high
 ---
@@ -68,7 +68,3 @@ If no violations are found, say so with the count of sites checked, e.g. "Audite
 - Don't propose fixes unless the user asks. Detection is the job.
 - Don't suggest replacing safe empty-string clears with `textContent = ''` — both are safe and the codebase uses both styles.
 - Don't flag CodeMirror internals — `@codemirror/view` manages its own DOM and is out of scope for this audit.
-
-## Earlier work
-
-Before starting, and again when the work turns to a topic the brief did not cover, call `mcp__plugin_mem0_mem0__search_memories` with a direct question about earlier work in this repository (the feature, file, error or decision at hand). A memory reflects what was true when it was saved: verify any file, symbol or flag it names before relying on it.

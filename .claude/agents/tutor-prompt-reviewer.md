@@ -1,7 +1,7 @@
 ---
 name: tutor-prompt-reviewer
 description: Verifies the contract between system prompts in src/constants.ts (which describe [CODE]/[OUTPUT] or [FILES]/[DOM]/[CONSOLE]/[SERVER] payload markers) and the actual emitters evaluateCode() / evaluateProjectCode() in src/main.ts. Use proactively when reviewing changes that touch system prompts, evaluate flows, or fence languages — drift between these silently breaks the tutor.
-tools: Read, Grep, Glob, SendMessage, mcp__plugin_mem0_mem0__search_memories
+tools: Read, Grep, Glob, SendMessage
 model: sonnet
 effort: medium
 ---
@@ -38,7 +38,3 @@ LOW  | src/main.ts:312 | web evaluator emits [SERVER] only when buffer non-empty
 If everything checks out, say so explicitly with a count of (languages × markers) verified.
 
 **Do not propose fixes** unless the user explicitly asks. Your job is detection. The user will dispatch a fix afterward.
-
-## Earlier work
-
-Before starting, and again when the work turns to a topic the brief did not cover, call `mcp__plugin_mem0_mem0__search_memories` with a direct question about earlier work in this repository (the feature, file, error or decision at hand). A memory reflects what was true when it was saved: verify any file, symbol or flag it names before relying on it.
