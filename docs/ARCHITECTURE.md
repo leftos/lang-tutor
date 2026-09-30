@@ -57,7 +57,7 @@ Flows across the layers:
 
 Vitest (`pnpm test`) runs `*.test.*` under `src/`, `tools/` and `scripts/`; there is no separate test project.
 
-- `src/*.test.ts`: the pure frontend modules (`learnerMemory`, `modelResolution`, `rewind`, `outputProblems`, `editorKeys`, `lspEditor`).
+- `src/*.test.ts`: the pure frontend modules (`learnerMemory`, `modelResolution`, `rewind`, `outputProblems`, `editorKeys`, `lspEditor`, and `lspClient`'s `workspace/configuration` lookup).
 - `tools/checker.test.mjs`: the PowerShell `/check` output parsing, plus a host `pwsh` parse run and an `Invoke-Formatter` run. Each is skipped when `pwsh` or the PSES bundle is absent.
 - `tools/lsp.test.mjs`: local binary resolution and version-probe classification for the LSP bridge.
 - `scripts/doctor.test.mjs`: doctor covers every `LSP_CONFIG` key and `CHECKER_TOOLS` entry.

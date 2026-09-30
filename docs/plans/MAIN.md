@@ -39,7 +39,7 @@ Shared: `src/api.ts` (extraction calls), `src/main.ts` (`buildSystem`, `extractP
 
 ### Singles (current)
 
-- [ ] PowerShell course: single-buffer `powershell` language (PowerShell 7 core curriculum, `pwsh` in the sandbox image, host `pwsh` parser check), then PowerShell Editor Services as its language server with `Invoke-Formatter` for format
+- [x] PowerShell course: single-buffer `powershell` language (PowerShell 7 core curriculum, `pwsh` in the sandbox image, host `pwsh` parser check), then PowerShell Editor Services as its language server in OTBS style (LSP server settings); checked end to end in Edge against the dev server
 
 - [x] One command prepares this PC to run the server with full capabilities (runtimes, host checkers/formatters, every LSP, Docker + toolchain image) and reports what is missing
 - [x] Rust Error list shows only `main.rs:L:C` + severity with no message text (e.g. "warning --> main.rs:2:9"); the editor tooltips have the messages

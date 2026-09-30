@@ -6,7 +6,7 @@
  *
  * Lifecycle:
  *   POST /lsp/spawn { lang }                   → { ok, rootUri, mainFileUri?,
- *                                                  servers: [{ serverKey, sessionId, acceptsLanguageIds }],
+ *                                                  servers: [{ serverKey, sessionId, acceptsLanguageIds, settings? }],
  *                                                  unavailable: [...] }
  *                                                One bundle per language: a single LSP_CONFIG entry
  *                                                for single-server langs (cpp/rust/python/csharp), or a
@@ -146,6 +146,10 @@ function resolvePwshBin() {
  *           repo root (the probe's `root`). Any missing one makes the server unavailable.
  * @property {string} [requiredPathsLabel]  - what `requiredPaths` belong to, for the unavailable error
  *           (e.g. 'PowerShell Editor Services bundle').
+ * @property {Record<string, unknown>} [settings] - workspace settings for the server, keyed by top-level
+ *           section (e.g. `{ powershell: {...} }`). Returned in the spawn response; the frontend
+ *           sends them as `workspace/didChangeConfiguration` after `initialized` and answers
+ *           `workspace/configuration` requests from them. Omit to send no configuration.
  */
 
 /**
@@ -245,6 +249,36 @@ const LSP_CONFIG = {
     requiredPathsLabel: 'PowerShell Editor Services bundle',
     mainFile: 'main.ps1',
     versionArgs: [],
+    // The VS Code PowerShell extension's formatting defaults with the OTBS
+    // preset. PSES replaces its whole codeFormatting block on each update, so
+    // every key is listed; the preset overrides the brace keys it covers.
+    settings: {
+      powershell: {
+        scriptAnalysis: { enable: true },
+        codeFormatting: {
+          preset: 'OTBS',
+          openBraceOnSameLine: true,
+          newLineAfterOpenBrace: true,
+          newLineAfterCloseBrace: true,
+          pipelineIndentationStyle: 'NoIndentation',
+          whitespaceBeforeOpenBrace: true,
+          whitespaceBeforeOpenParen: true,
+          whitespaceAroundOperator: true,
+          whitespaceAfterSeparator: true,
+          whitespaceInsideBrace: true,
+          whitespaceBetweenParameters: false,
+          addWhitespaceAroundPipe: true,
+          trimWhitespaceAroundPipe: false,
+          ignoreOneLineBlock: true,
+          alignPropertyValuePairs: true,
+          alignEnumMemberValues: true,
+          autoCorrectAliases: false,
+          avoidSemicolonsAsLineTerminators: false,
+          useConstantStrings: false,
+          useCorrectCasing: false,
+        },
+      },
+    },
   },
 
   // Roslyn LSP — preferred over OmniSharp when the C# Dev Kit is installed.
@@ -994,6 +1028,20 @@ async function startSession(scope, serverKey) {
 }
 
 /**
+ * The spawn response's entry for one started server. `settings` is present
+ * only when the server's LSP_CONFIG entry defines it.
+ *
+ * @param {string} serverKey
+ * @param {string} sessionId
+ * @returns {{ serverKey: string; sessionId: string; acceptsLanguageIds: string[]; settings?: Record<string, unknown> }}
+ */
+function spawnedServerEntry(serverKey, sessionId) {
+  const config = LSP_CONFIG[serverKey];
+  const entry = { serverKey, sessionId, acceptsLanguageIds: config?.acceptsLanguageIds ?? [] };
+  return config?.settings === undefined ? entry : { ...entry, settings: config.settings };
+}
+
+/**
  * Spawn every available server for a user-facing language. Skips servers
  * whose binary is not installed and reports them under `unavailable`. Returns
  * `ok: false` only when no server in LANG_SERVERS[lang] could start.
@@ -1001,7 +1049,7 @@ async function startSession(scope, serverKey) {
  * @param {string} lang
  * @returns {Promise<
  *   | { ok: true; rootUri: string; mainFileUri?: string;
- *       servers: Array<{ serverKey: string; sessionId: string; acceptsLanguageIds: string[] }>;
+ *       servers: Array<{ serverKey: string; sessionId: string; acceptsLanguageIds: string[]; settings?: Record<string, unknown> }>;
  *       unavailable: Array<{ serverKey: string; error: string }>; }
  *   | { ok: false; error: string }>}
  */
@@ -1026,11 +1074,7 @@ async function startBundle(scope, lang) {
       }
       if (rootUri === undefined) rootUri = result.rootUri;
       if (mainFileUri === undefined && result.mainFileUri !== undefined) mainFileUri = result.mainFileUri;
-      servers.push({
-        serverKey: entry,
-        sessionId: result.sessionId,
-        acceptsLanguageIds: LSP_CONFIG[entry]?.acceptsLanguageIds ?? [],
-      });
+      servers.push(spawnedServerEntry(entry, result.sessionId));
       continue;
     }
     // Fallback group — try each in order, take the first that starts. The
@@ -1045,11 +1089,7 @@ async function startBundle(scope, lang) {
       }
       if (rootUri === undefined) rootUri = result.rootUri;
       if (mainFileUri === undefined && result.mainFileUri !== undefined) mainFileUri = result.mainFileUri;
-      servers.push({
-        serverKey,
-        sessionId: result.sessionId,
-        acceptsLanguageIds: LSP_CONFIG[serverKey]?.acceptsLanguageIds ?? [],
-      });
+      servers.push(spawnedServerEntry(serverKey, result.sessionId));
       groupChosen = true;
       break;
     }

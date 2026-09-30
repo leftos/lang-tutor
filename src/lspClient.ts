@@ -185,6 +185,27 @@ interface JsonRpcResponse {
 
 type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
+// ── Workspace settings ──────────────────────────────────────────────────────
+
+export type LspSettings = Readonly<Record<string, unknown>>;
+
+/**
+ * Answer a `workspace/configuration` request: for each item, the value at its
+ * dotted `section` path inside `settings`, or null when the section is absent,
+ * missing from the settings, or the server has no settings.
+ */
+export function resolveConfigurationItems(settings: LspSettings | undefined, items: ReadonlyArray<{ section?: string }>): unknown[] {
+  return items.map((item) => {
+    if (settings === undefined || item.section === undefined || item.section === '') return null;
+    let value: unknown = settings;
+    for (const key of item.section.split('.')) {
+      if (typeof value !== 'object' || value === null || !Object.hasOwn(value, key)) return null;
+      value = (value as Record<string, unknown>)[key];
+    }
+    return value ?? null;
+  });
+}
+
 // ── Spawn endpoint response shape ───────────────────────────────────────────
 
 interface SpawnSuccess {
@@ -196,6 +217,8 @@ interface SpawnSuccess {
     serverKey: string;
     sessionId: string;
     acceptsLanguageIds: readonly string[];
+    /** Workspace settings keyed by top-level section; absent when the server takes none. */
+    settings?: LspSettings;
   }>;
   unavailable: ReadonlyArray<{ serverKey: string; error: string }>;
 }
@@ -342,7 +365,7 @@ export async function connectLsp(lang: LanguageId): Promise<LspClient | null> {
       void disposeRemoteSession(meta.sessionId);
       continue;
     }
-    const session = new ServerSession(ws, meta.sessionId, meta.serverKey, rootUri, [...meta.acceptsLanguageIds]);
+    const session = new ServerSession(ws, meta.sessionId, meta.serverKey, rootUri, [...meta.acceptsLanguageIds], meta.settings);
     try {
       await session.initialize();
     } catch (e) {
@@ -399,7 +422,8 @@ class ServerSession {
     readonly sessionId: string,
     readonly serverKey: string,
     readonly rootUri: string,
-    readonly acceptsLanguageIds: readonly string[]
+    readonly acceptsLanguageIds: readonly string[],
+    readonly settings: LspSettings | undefined
   ) {
     ws.addEventListener('message', (ev) => this.onMessage(ev.data as string));
     ws.addEventListener('close', () => this.handleClose());
@@ -423,7 +447,7 @@ class ServerSession {
         processId: null,
         clientInfo: { name: 'lang-tutor' },
         rootUri: this.rootUri,
-        capabilities: clientCapabilities(),
+        capabilities: clientCapabilities(this.settings !== undefined),
         trace: 'off',
         workspaceFolders: [{ uri: this.rootUri, name: 'lesson' }],
       },
@@ -431,6 +455,7 @@ class ServerSession {
     )) as { capabilities?: LspServerCapabilities };
     this.capabilities = result?.capabilities ?? {};
     this.notify('initialized', {});
+    if (this.settings !== undefined) this.notify('workspace/didChangeConfiguration', { settings: this.settings });
   }
 
   didOpen(uri: string, languageId: string, text: string): void {
@@ -562,9 +587,15 @@ class ServerSession {
       return;
     }
 
-    // Server-initiated request (rare — clangd uses a few; respond with empty
-    // result to keep the protocol unblocked).
+    // Server-initiated request. `workspace/configuration` is answered from the
+    // server's settings; anything else (rare — clangd uses a few) gets an empty
+    // result to keep the protocol unblocked.
     if ('method' in msg && 'id' in msg && msg.id !== null) {
+      if (msg.method === 'workspace/configuration') {
+        const params = (msg as JsonRpcRequest).params as { items?: Array<{ section?: string }> } | undefined;
+        this.send({ jsonrpc: '2.0', id: msg.id, result: resolveConfigurationItems(this.settings, params?.items ?? []) });
+        return;
+      }
       this.send({ jsonrpc: '2.0', id: msg.id, result: null });
       return;
     }
@@ -979,7 +1010,12 @@ class LspClientImpl implements LspClient {
   }
 }
 
-function clientCapabilities() {
+/**
+ * Client capabilities for `initialize`. `withConfiguration` advertises
+ * workspace configuration support; it is set only for servers that have
+ * settings, so servers without them never start pulling configuration.
+ */
+function clientCapabilities(withConfiguration: boolean) {
   return {
     textDocument: {
       synchronization: { dynamicRegistration: false, willSave: false, didSave: false },
@@ -1014,7 +1050,9 @@ function clientCapabilities() {
         resolveSupport: { properties: ['edit', 'command'] },
       },
     },
-    workspace: { workspaceFolders: true },
+    workspace: withConfiguration
+      ? { workspaceFolders: true, configuration: true, didChangeConfiguration: { dynamicRegistration: false } }
+      : { workspaceFolders: true },
     general: { positionEncodings: ['utf-16'] },
   };
 }
