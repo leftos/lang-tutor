@@ -60,6 +60,8 @@ pnpm test                   # vitest run (src/, tools/, scripts/ *.test.*)
 
 ## Architecture
 
+The architecture entry point is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): Task Index, layers, integration footguns, test locations and the deep docs.
+
 **Source layout (frontend):**
 
 ```
