@@ -59,3 +59,4 @@ Shared: `src/projectEditor.ts`, `src/lspEditor.ts`. Gate: `.\lt.ps1 typecheck` +
 
 - [ ] `.\lt.ps1 launch` never returns when its output is piped (`launch | rg ...`): the hidden server inherits the pipe handle, so the reader waits for ever; redirecting to a file works. Start the server without inheriting the console handles
 - [ ] Drop the droplet-only `NODE_ENV === 'production'` defaults now that nothing sets it: the `/var/lib/lang-tutor/workspaces` workspace root (`tools/projects.mjs:35`) and the secure-cookie default (`tools/auth-routes.mjs:14`), plus the `/var/lib` example in the `src/projectPreview.ts:69` comment
+- [ ] `.env.example` sets `NODE_ENV=production`, against the CLAUDE.md rule to leave `NODE_ENV` unset on Windows; drop it with the defaults above (found 2026-09-30 while folding CLAUDE.md into `docs/ARCHITECTURE.md`).

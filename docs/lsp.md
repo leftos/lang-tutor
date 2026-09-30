@@ -1,6 +1,6 @@
 # LSP bridge: decisions and caveats
 
-How the pieces fit is in `CLAUDE.md` ("LSP integration"). This page keeps the decisions behind them and the traps that are not visible from the code.
+How the pieces fit is in [`ARCHITECTURE.md`](ARCHITECTURE.md) (Layers, the LSP flow). This page keeps the decisions behind them and the traps that are not visible from the code.
 
 ## Decisions
 
