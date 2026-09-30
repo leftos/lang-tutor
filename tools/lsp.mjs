@@ -9,7 +9,7 @@
  *                                                  servers: [{ serverKey, sessionId, acceptsLanguageIds, settings? }],
  *                                                  unavailable: [...] }
  *                                                One bundle per language: a single LSP_CONFIG entry
- *                                                for single-server langs (cpp/rust/python/csharp), or a
+ *                                                for single-server langs (cpp/dasm/rust/python/powershell/csharp), or a
  *                                                fan-out across tsserver+html+css+biome for `web`.
  *   GET  /lsp/availability?lang=<lang>         → { available, version?, error? } (per-server, takes a
  *                                                serverKey — used by setup probes; the spawn endpoint
@@ -782,7 +782,7 @@ export async function probeServer(serverKey, { run = runCommand, root = REPO_ROO
   if (typeof config.resolveBinPath === 'function') {
     const resolvedPath = config.resolveBinPath();
     if (typeof resolvedPath !== 'string' || resolvedPath.length === 0 || !pathPresent(resolvedPath)) {
-      return { available: false, error: `${serverKey}: resolveBinPath did not yield an existing file` };
+      return { available: false, error: `${serverKey}: ${config.bin} not found` };
     }
     return { available: true, version: resolvedPath, path: resolvedPath };
   }

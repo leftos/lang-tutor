@@ -21,7 +21,7 @@ Then use `.\lt.ps1 dev` for development, or `.\lt.ps1 launch` / `.\lt.ps1 stop` 
 
 Two workspace shapes:
 
-- **Single-buffer** (Rust / C++ / Python / PowerShell): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted in a local Docker sandbox.
+- **Single-buffer** (Rust / C++ / DASM / Python / PowerShell): one editor, one Run button, one output pane. Lessons are short snippets compiled or interpreted in a local Docker sandbox.
 - **Project workspace** (C# / Web): on-disk project under `projects/<lang>/` with a sidebar file tree, multi-tab editor, Run / Send controls above the code, integrated supervisor that runs `dotnet run` / `pnpm dev`, and an Output / preview pane. Edits autosave; the supervisor streams stdout/stderr into the Output tab.
 
 | Language | Workspace | Lesson focus | Run target | Live errors | Format on save |
@@ -183,7 +183,7 @@ When hosting under a path prefix, set `LANG_TUTOR_BASE_PATH` before building so 
 
 Each language has its own `localStorage` namespace:
 
-- `lang-tutor:active` — currently selected language (`rust` | `cpp` | `python` | `powershell` | `csharp` | `web`)
+- `lang-tutor:active` — currently selected language (`rust` | `cpp` | `dasm` | `python` | `powershell` | `csharp` | `web`)
 - `lang-tutor:{lang}:history` — last 30 messages
 - `lang-tutor:{lang}:progress` — structured progress blob (topic statuses, strengths, struggles, notes)
 - `lang-tutor:{lang}:code` — saved editor content (single-buffer languages only)

@@ -103,6 +103,20 @@ describe('probeServer bin resolution', () => {
     });
   });
 
+  it('names the missing binary when the bundle is present but pwsh is not on PATH', async () => {
+    const startScript = join(root, '.local', 'tools', 'PowerShellEditorServices', 'PowerShellEditorServices', 'Start-EditorServices.ps1');
+    mkdirSync(join(startScript, '..'), { recursive: true });
+    writeFileSync(startScript, '');
+    const savedPath = process.env.PATH;
+    process.env.PATH = join(root, 'empty-path');
+    try {
+      const result = await probeServer('powershell', { run: recordingRunner().run, root });
+      expect(result).toEqual({ available: false, error: 'powershell: pwsh not found' });
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
   it('locates a server with empty versionArgs without running it', async () => {
     const { run, calls } = recordingRunner((cmd) => (isLookup(cmd) ? { code: 0, stdout: 'C:\\tools\\omnisharp.exe\n', stderr: '' } : undefined));
     const result = await probeServer('csharp', { run, root });

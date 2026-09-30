@@ -12,7 +12,7 @@ import { handleProjectRequest, handleProjectUpgrade } from './tools/project-rout
 import { runSnippet } from './tools/runner.mjs';
 
 interface CheckBody {
-  lang?: 'rust' | 'cpp' | 'python' | 'powershell' | 'csharp';
+  lang?: 'rust' | 'cpp' | 'dasm' | 'python' | 'powershell' | 'csharp';
   code?: string;
 }
 

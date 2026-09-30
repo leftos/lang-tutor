@@ -1,6 +1,6 @@
 # Lang tutor — architecture
 
-A single-page, multi-language programming tutor: the browser talks to the learner's own AI provider directly, and a local Node backend supplies code execution, project supervision, language servers and state mirroring. Two layers: the TypeScript frontend (`src/`) and the Node backend (`tools/`, `server.mjs`, mounted by the Vite dev plugin in `vite.config.ts`), plus setup tooling (`scripts/`, `lt.ps1`). The rule that shapes it: provider API keys live only in browser `localStorage` and never reach the backend; per-language state (history, progress, code) is namespaced by `LanguageId`, while the learner profile is the one global. Terms used in a project sense are in the glossary in `README.md`.
+A single-page, multi-language programming tutor: the browser talks to the learner's own AI provider directly, and a local Node backend supplies code execution, project supervision, language servers and state mirroring. Two layers: the TypeScript frontend (`src/`) and the Node backend (`tools/`, `server.mjs`, mounted by the Vite dev plugin in `vite.config.ts`), plus setup tooling (`scripts/`, `lt.ps1`). The rule that shapes it: provider API keys live only in browser `localStorage` and never reach the backend; per-language state (history, progress, code) is namespaced by `LanguageId`, while the learner profile is the one global. Terms used in a project sense are in the glossary in the root [`README.md`](../README.md#glossary); [`docs/README.md`](README.md) is the docs start page.
 
 ## Task Index
 
