@@ -53,6 +53,7 @@ const RECIPE_FIX = {
   python: 'winget install Python.Python.3.13',
   black: 'uv tool install black',
   pwsh: 'winget install Microsoft.PowerShell',
+  pses: '.\\lt.ps1 setup',
   llvm: 'winget install LLVM.LLVM, then add its bin folder to PATH',
   csdevkit: 'code --install-extension ms-dotnettools.csdevkit',
 };
@@ -71,6 +72,7 @@ const LSP_META = {
   cpp: { capability: 'C++ live diagnostics, hover, completion', recipe: 'llvm' },
   rust: { capability: 'Rust live diagnostics, hover, completion', recipe: 'rustup' },
   python: { capability: 'Python live diagnostics, hover, completion', recipe: 'pnpm-install' },
+  powershell: { capability: 'PowerShell Editor Services (diagnostics, hover, completion)', recipe: 'pses' },
   'csharp-roslyn': { capability: 'C# live diagnostics, hover, completion (Roslyn, preferred)', recipe: 'csdevkit' },
   csharp: {
     capability: 'C# live diagnostics, hover, completion (OmniSharp fallback)',

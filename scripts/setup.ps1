@@ -25,7 +25,9 @@
                      rustup component add rustfmt rust-analyzer
     python           winget Python.Python.3.13
     pwsh             winget Microsoft.PowerShell
-    black            winget astral-sh.uv if uv is missing, then uv tool install
+    pses             download the pinned PowerShell Editor Services release,
+                     verify its SHA256, unpack it into .local\tools\PowerShellEditorServices
+    black           winget astral-sh.uv if uv is missing, then uv tool install
                      black, then uv's tool bin folder onto the user PATH
     llvm             winget LLVM.LLVM, then its bin folder onto the user PATH
     csdevkit         code --install-extension ms-dotnettools.csdevkit
@@ -50,8 +52,14 @@ $toolchainScript = Join-Path $PSScriptRoot 'build-toolchain-image.ps1'
 
 $RecipeOrder = @(
     'node', 'pnpm', 'pnpm-install', 'docker-desktop', 'docker-engine', 'toolchain-image',
-    'dotnet-sdk', 'rustup', 'python', 'black', 'pwsh', 'llvm', 'csdevkit'
+    'dotnet-sdk', 'rustup', 'python', 'black', 'pwsh', 'pses', 'llvm', 'csdevkit'
 )
+
+# The PowerShell Editor Services release the `pses` recipe installs. tools/pses.mjs
+# reads the bundle from $psesDir; keep the two in step.
+$PsesVersion = 'v4.7.0'
+$PsesSha256 = '5084f0326cc88539e9d880b08f6c52ce5be4672bb8ecee8921e35f8895a6b9d7'
+$psesDir = Join-Path $repoRoot '.local\tools\PowerShellEditorServices'
 
 function Write-Step {
     param([string]$Message)
@@ -258,6 +266,36 @@ function Install-Pwsh {
     Install-WingetPackage -Id 'Microsoft.PowerShell' -DisplayName 'PowerShell 7'
 }
 
+function Install-PsesBundle {
+    [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Replaces the repo-local bundle folder; setup is the user gesture.')]
+    param()
+
+    $url = "https://github.com/PowerShell/PowerShellEditorServices/releases/download/$PsesVersion/PowerShellEditorServices.zip"
+    $downloadDir = Join-Path $repoRoot '.tmp'
+    New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
+    $zip = Join-Path $downloadDir "PowerShellEditorServices-$PsesVersion.zip"
+    Write-Host "    downloading PowerShell Editor Services $PsesVersion..."
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zip
+        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $PsesSha256) {
+            throw "PowerShellEditorServices.zip SHA256 mismatch: expected $PsesSha256, got $actual. The download is discarded; re-run setup."
+        }
+        if (Test-Path -LiteralPath $psesDir) {
+            Remove-Item -LiteralPath $psesDir -Recurse -Force
+        }
+        Expand-Archive -LiteralPath $zip -DestinationPath $psesDir
+    } finally {
+        if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+    }
+    $startScript = Join-Path $psesDir 'PowerShellEditorServices\Start-EditorServices.ps1'
+    if (-not (Test-Path -LiteralPath $startScript)) {
+        throw "the PowerShell Editor Services bundle unpacked without $startScript."
+    }
+}
+
 function Test-UvReady {
     if (-not (Test-Tool 'uv')) { return $false }
     & uv --version *> $null
@@ -326,6 +364,7 @@ $Recipes = @{
     'python'          = { Install-Python }
     'black'           = { Install-Black }
     'pwsh'            = { Install-Pwsh }
+    'pses'            = { Install-PsesBundle }
     'llvm'            = { Install-Llvm }
     'csdevkit'        = { Install-CsharpDevKit }
 }

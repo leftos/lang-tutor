@@ -29,13 +29,14 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { readAuthSession } from './auth-routes.mjs';
 import { ensureScaffold, getProjectRoot } from './projects.mjs';
+import { PSES_BUNDLE_DIR, PSES_START_SCRIPT, PSES_START_SCRIPT_REL } from './pses.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..');
@@ -86,6 +87,37 @@ function resolveCsharpRoslynBin() {
 }
 
 /**
+ * Whether `path` names a directory entry. `lstat`, not `existsSync`: the
+ * Windows app-execution alias for pwsh (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`)
+ * is a reparse point that `stat` rejects with EACCES, yet node spawns it.
+ *
+ * @param {string} path
+ * @returns {boolean}
+ */
+function pathPresent(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Find pwsh as an absolute path by scanning PATH, so the PowerShell Editor
+// Services server spawns without a shell: its argv carries paths with spaces
+// that a `shell: true` spawn would split. Returns null when pwsh is not on PATH.
+function resolvePwshBin() {
+  const exe = IS_WIN ? 'pwsh.exe' : 'pwsh';
+  for (const entry of (process.env.PATH ?? '').split(delimiter)) {
+    const dir = entry.replaceAll('"', '').trim();
+    if (dir.length === 0) continue;
+    const candidate = join(dir, exe);
+    if (pathPresent(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
  * @typedef {object} LspConfig
  * @property {string} bin                   - executable in the project's node_modules/.bin, else on PATH
  * @property {string[]} args                - hardcoded argv (no user data)
@@ -110,6 +142,10 @@ function resolveCsharpRoslynBin() {
  *           Used when the binary isn't on PATH but lives at a discoverable location
  *           (e.g. C# Dev Kit's .vscode-extensions install of the Roslyn LSP). When this returns
  *           a string the bridge spawns that absolute path instead of `bin`; null means unavailable.
+ * @property {string[]} [requiredPaths]     - files the server needs besides its binary, relative to the
+ *           repo root (the probe's `root`). Any missing one makes the server unavailable.
+ * @property {string} [requiredPathsLabel]  - what `requiredPaths` belong to, for the unavailable error
+ *           (e.g. 'PowerShell Editor Services bundle').
  */
 
 /**
@@ -170,6 +206,45 @@ const LSP_CONFIG = {
       'pyrightconfig.json': JSON.stringify({ pythonVersion: '3.13', typeCheckingMode: 'standard', reportMissingImports: 'warning' }, null, 2),
     },
     versionArgs: ['--version'],
+  },
+
+  // PowerShell Editor Services from the pinned release bundle that
+  // `.\lt.ps1 setup` (the `pses` recipe) unpacks under .local/tools/. pwsh runs
+  // the bundle's Start-EditorServices.ps1 over stdio; diagnostics include
+  // PSScriptAnalyzer rules. pwsh is resolved to an absolute path so the spawn
+  // skips the shell (the bundle path may contain spaces). Each PSES process
+  // writes StartEditorServices-<pid>.log under -LogPath, a folder PSES creates,
+  // so concurrent sessions never share a log file. The session-details file
+  // keeps its relative default and lands in the per-session workspace.
+  powershell: {
+    bin: 'pwsh',
+    args: [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      PSES_START_SCRIPT,
+      '-HostName',
+      'lang-tutor',
+      '-HostProfileId',
+      'lang-tutor',
+      '-HostVersion',
+      '1.0.0',
+      '-BundledModulesPath',
+      PSES_BUNDLE_DIR,
+      '-LogPath',
+      join(REPO_ROOT, '.tmp', 'lsp-logs', 'powershell'),
+      '-LogLevel',
+      'Warning',
+      '-Stdio',
+    ],
+    resolveBinPath: resolvePwshBin,
+    requiredPaths: [PSES_START_SCRIPT_REL],
+    requiredPathsLabel: 'PowerShell Editor Services bundle',
+    mainFile: 'main.ps1',
+    versionArgs: [],
   },
 
   // Roslyn LSP — preferred over OmniSharp when the C# Dev Kit is installed.
@@ -279,6 +354,7 @@ const LANG_SERVERS = {
   dasm: ['cpp'],
   rust: ['rust'],
   python: ['python'],
+  powershell: ['powershell'],
   // Roslyn first, OmniSharp fallback. Whichever starts wins; the other never spawns.
   csharp: [['csharp-roslyn', 'csharp']],
   web: ['web', 'web-html', 'web-css', 'web-biome'],
@@ -651,10 +727,11 @@ async function whichBin(bin, run) {
 }
 
 /**
- * Probe one server without caching: locate its binary (`resolveBinPath`, then
- * `node_modules/.bin`, then PATH) and, unless its `versionArgs` are empty, run
- * the version command and require exit 0. Servers whose version flag starts the
- * full server (OmniSharp) and Roslyn (an absolute path) are located only.
+ * Probe one server without caching: require its `requiredPaths` under `root`,
+ * locate its binary (`resolveBinPath`, then `node_modules/.bin`, then PATH)
+ * and, unless its `versionArgs` are empty, run the version command and require
+ * exit 0. Servers whose version flag starts the full server (OmniSharp) and
+ * those with `resolveBinPath` (an absolute path) are located only.
  *
  * @param {string} serverKey
  * @param {{ run?: CommandRunner; root?: string }} [deps]
@@ -663,9 +740,14 @@ async function whichBin(bin, run) {
 export async function probeServer(serverKey, { run = runCommand, root = REPO_ROOT } = {}) {
   const config = LSP_CONFIG[serverKey];
   if (config === undefined) return { available: false, error: `unknown serverKey: ${serverKey}` };
+  const missingPath = (config.requiredPaths ?? []).map((rel) => join(root, rel)).find((abs) => !existsSync(abs));
+  if (missingPath !== undefined) {
+    const label = config.requiredPathsLabel ?? 'required file';
+    return { available: false, error: `${serverKey}: ${label} missing at ${missingPath} — run .\\lt.ps1 setup` };
+  }
   if (typeof config.resolveBinPath === 'function') {
     const resolvedPath = config.resolveBinPath();
-    if (typeof resolvedPath !== 'string' || resolvedPath.length === 0 || !existsSync(resolvedPath)) {
+    if (typeof resolvedPath !== 'string' || resolvedPath.length === 0 || !pathPresent(resolvedPath)) {
       return { available: false, error: `${serverKey}: resolveBinPath did not yield an existing file` };
     }
     return { available: true, version: resolvedPath, path: resolvedPath };

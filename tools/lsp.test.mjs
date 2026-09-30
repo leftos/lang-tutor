@@ -93,6 +93,16 @@ describe('probeServer bin resolution', () => {
     expect(result.error).toContain("Unknown binary 'rust-analyzer.exe'");
   });
 
+  it('is unavailable with a setup hint when the PowerShell Editor Services bundle is missing', async () => {
+    const { run } = recordingRunner();
+    const result = await probeServer('powershell', { run, root });
+    const startScript = join(root, '.local', 'tools', 'PowerShellEditorServices', 'PowerShellEditorServices', 'Start-EditorServices.ps1');
+    expect(result).toEqual({
+      available: false,
+      error: `powershell: PowerShell Editor Services bundle missing at ${startScript} — run .\\lt.ps1 setup`,
+    });
+  });
+
   it('locates a server with empty versionArgs without running it', async () => {
     const { run, calls } = recordingRunner((cmd) => (isLookup(cmd) ? { code: 0, stdout: 'C:\\tools\\omnisharp.exe\n', stderr: '' } : undefined));
     const result = await probeServer('csharp', { run, root });

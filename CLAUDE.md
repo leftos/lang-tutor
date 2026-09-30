@@ -31,7 +31,7 @@ The user chats with their selected AI provider (Anthropic Claude, OpenAI ChatGPT
 - Optional local toolchains (auto-detected; features silently disable if missing):
   - Single-buffer host tools: `rustc`, `rustfmt`, `clang`, `clang-format`, `python`, `black`, `pwsh`
   - Project: `dotnet` (.NET 8+ SDK), `pnpm`, `code` / `devenv` / `explorer.exe` for the "Open in" launchers
-  - LSP binaries: machine-level `clangd`, `rust-analyzer` (rustup component) and Roslyn LSP (discovered from the C# Dev Kit install, OmniSharp as fallback); project devDependencies `typescript-language-server`, `vscode-langservers-extracted` (html + css), `basedpyright` (`basedpyright-langserver`), `@biomejs/biome`. `tools/lsp.mjs` resolves `node_modules/.bin` before PATH.
+  - LSP binaries: machine-level `clangd`, `rust-analyzer` (rustup component) and Roslyn LSP (discovered from the C# Dev Kit install, OmniSharp as fallback), and PowerShell Editor Services (a pinned bundle that `.\lt.ps1 setup` unpacks into `.local/tools/`, run by `pwsh`); project devDependencies `typescript-language-server`, `vscode-langservers-extracted` (html + css), `basedpyright` (`basedpyright-langserver`), `@biomejs/biome`. `tools/lsp.mjs` resolves `node_modules/.bin` before PATH.
   - `.\lt.ps1 doctor` (`scripts/doctor.mjs`) lists every one of these as ready or missing, built from `LSP_CONFIG` and `CHECKER_TOOLS` so a new server or checker is reported automatically; each probe runs the tool (a rustup proxy for an uninstalled component exits non-zero and counts as missing). `.\lt.ps1 setup` installs what doctor reports missing by each row's `recipe`.
 
 ## Run

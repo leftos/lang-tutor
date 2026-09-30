@@ -13,7 +13,9 @@
  */
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { devNull } from 'node:os';
+import { PSSA_MODULE_DIR } from './pses.mjs';
 
 const TIMEOUT_MS = 10_000;
 const MAX_OUTPUT = 512 * 1024;
@@ -268,8 +270,32 @@ export async function powershellCheck(code) {
   return parsePowershellOutput(result.stdout);
 }
 
-async function powershellFormat() {
-  return { ok: false, available: false, error: 'PowerShell formatting needs PowerShell Editor Services — run .\\lt.ps1 setup' };
+/**
+ * Format stdin with the PSScriptAnalyzer module from the PowerShell Editor
+ * Services bundle. The module path is a constant (tools/pses.mjs), embedded as
+ * a single-quoted PowerShell literal; user code arrives on stdin only.
+ * Invoke-Formatter rejects an empty definition, so empty input formats to itself.
+ */
+const PS_FORMAT_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+Import-Module -Name '${PSSA_MODULE_DIR.replaceAll("'", "''")}'
+$src = [Console]::In.ReadToEnd()
+if ($src.Length -gt 0) {
+  [Console]::Out.Write((Invoke-Formatter -ScriptDefinition $src))
+}
+`;
+
+async function powershellFormat(code) {
+  if (!existsSync(PSSA_MODULE_DIR)) {
+    return { ok: false, available: false, error: 'PowerShell formatting needs PowerShell Editor Services — run .\\lt.ps1 setup' };
+  }
+  const result = await spawnTool('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PS_FORMAT_SCRIPT], code);
+  if (!result.available) return { ok: false, available: false, error: 'pwsh not found in PATH' };
+  if (result.exitCode !== 0) return { ok: false, available: true, error: result.stderr.trim() || 'Invoke-Formatter failed' };
+  return { ok: true, available: true, code: result.stdout };
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────────
@@ -300,7 +326,7 @@ export async function formatCode(lang, code) {
     case 'python':
       return pythonFormat(code);
     case 'powershell':
-      return powershellFormat();
+      return powershellFormat(code);
     default:
       return { ok: false, error: `unknown language: ${lang}` };
   }

@@ -265,6 +265,7 @@ const LSP_LANGUAGE_IDS: Partial<Record<LanguageId, string>> = {
   dasm: 'cpp',
   rust: 'rust',
   python: 'python',
+  powershell: 'powershell',
   csharp: 'csharp',
   // For web, the primary server (typescript-language-server) handles the
   // typescript / javascript family. HTML / CSS / JSON files come in via

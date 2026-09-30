@@ -1,8 +1,11 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { checkCode, parsePowershellOutput } from './checker.mjs';
+import { checkCode, formatCode, parsePowershellOutput } from './checker.mjs';
+import { PSSA_MODULE_DIR } from './pses.mjs';
 
 const HAS_PWSH = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-Command', 'exit 0'], { stdio: 'ignore', timeout: 20_000 }).status === 0;
+const HAS_PSES = existsSync(PSSA_MODULE_DIR);
 
 describe('parsePowershellOutput', () => {
   it('reads an empty array as no diagnostics', () => {
@@ -44,5 +47,13 @@ describe.skipIf(!HAS_PWSH)('checkCode powershell (needs pwsh on PATH)', () => {
   it('reports nothing for a valid script', async () => {
     const result = await checkCode('powershell', 'Write-Output 1');
     expect(result).toEqual({ available: true, diagnostics: [] });
+  }, 20_000);
+});
+
+describe.skipIf(!HAS_PWSH || !HAS_PSES)('formatCode powershell (needs pwsh and the PowerShell Editor Services bundle)', () => {
+  it('reindents with Invoke-Formatter', async () => {
+    const result = await formatCode('powershell', 'if($true){\nWrite-Output 1}');
+    expect(result).toMatchObject({ ok: true, available: true });
+    expect(result.code).toContain('if ($true) {');
   }, 20_000);
 });

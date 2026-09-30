@@ -13,7 +13,7 @@ Prepare this PC to run everything, then check what's ready:
 .\lt.ps1 doctor    # the readiness report only: each capability, ready or missing, and the command that fixes it
 ```
 
-`setup` is idempotent and needs no admin: it runs `doctor`, installs each missing piece (winget for Node, pnpm, Docker Desktop, .NET SDK, Rust, Python, PowerShell 7 and LLVM; `rustup component add rust-analyzer`; `uv tool install black`; `pnpm install`, which brings the TypeScript, HTML/CSS, Biome and basedpyright language servers; starting Docker and building the toolchain image; the C# Dev Kit for Roslyn when VS Code is installed), then prints the report again. `doctor` runs each tool rather than just finding it on PATH, so a rustup stub for an uninstalled component shows as missing. First run takes 5–10 minutes of downloads; later runs take seconds.
+`setup` is idempotent and needs no admin: it runs `doctor`, installs each missing piece (winget for Node, pnpm, Docker Desktop, .NET SDK, Rust, Python, PowerShell 7 and LLVM; `rustup component add rust-analyzer`; `uv tool install black`; the pinned PowerShell Editor Services bundle into `.local/tools/`; `pnpm install`, which brings the TypeScript, HTML/CSS, Biome and basedpyright language servers; starting Docker and building the toolchain image; the C# Dev Kit for Roslyn when VS Code is installed), then prints the report again. `doctor` runs each tool rather than just finding it on PATH, so a rustup stub for an uninstalled component shows as missing. First run takes 5–10 minutes of downloads; later runs take seconds.
 
 Then use `.\lt.ps1 dev` for development, or `.\lt.ps1 launch` / `.\lt.ps1 stop` to run the built app on demand (see [Running it for real](#running-it-for-real)); `launch` prints a one-line warning when `doctor` finds anything missing.
 
@@ -29,7 +29,7 @@ Two workspace shapes:
 | **Rust** | single-buffer | Beginner-to-intermediate fundamentals | local Docker sandbox (`rustc`) | local `rustc` | local `rustfmt` |
 | **C++** | single-buffer | STL-first then modern features (C++20/23) for someone coming from a custom no-STL C++ derivative | local Docker sandbox (`clang++ -std=c++23`) | local `clang -fsyntax-only` | local `clang-format` |
 | **Python** | single-buffer | Intermediate-to-advanced for C++/C# devs (idioms, generators, decorators, async, GIL) | local Docker sandbox (`python3`) | local `python ast.parse` | local `black` |
-| **PowerShell** | single-buffer | Cross-platform PowerShell 7: the object pipeline, functions and parameters, error handling, classes, regex, JSON/CSV | local Docker sandbox (`pwsh`) | local `pwsh` parser | — |
+| **PowerShell** | single-buffer | Cross-platform PowerShell 7: the object pipeline, functions and parameters, error handling, classes, regex, JSON/CSV | local Docker sandbox (`pwsh`) | PSES (parse errors + PSScriptAnalyzer), else local `pwsh` parser | PSScriptAnalyzer `Invoke-Formatter` |
 | **C#** | project workspace | Modern C# 12 → WPF fundamentals → MVVM patterns | local `dotnet run` for the WPF project, plus console snippets in Docker | dotnet build (streamed into the Build errors tab) | — |
 | **Web** | project workspace | Vanilla HTML/CSS/JS → TS → React → Hono → SQLite | private Vite server, same-origin Preview tab | TS compile via Vite | — |
 
@@ -232,4 +232,5 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
 
 ## Glossary
 
+- **PSES**: PowerShell Editor Services, the PowerShell language server (and the host of PSScriptAnalyzer), installed by `.\lt.ps1 setup` into `.local/tools/PowerShellEditorServices/`.
 - **Wave**: a group of open plan items in `docs/plans/MAIN.md` that share files or a subsystem, so they ship and are reviewed together.

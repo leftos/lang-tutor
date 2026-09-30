@@ -12,7 +12,7 @@ A single-page, multi-language programming tutor: the browser talks to the learne
 | Change learner memory or progress merging | `src/learnerMemory.ts` → `fetchMemoryExtraction` in `src/api.ts` → `extractMemory` in `src/main.ts` → `src/learnerMemory.test.ts` | [`plans/learner-memory.md`](plans/learner-memory.md) |
 | Change AI provider or Auto model resolution | `src/providerSettings.ts` → `src/modelResolution.ts` → `src/api.ts` → `src/modelResolution.test.ts` | none |
 | Change edit & resend (conversation rewind) | `src/rewind.ts` → chat handlers in `src/main.ts` → `src/rewind.test.ts` | none |
-| Add or change a language server | `LSP_CONFIG` and `LANG_SERVERS` in `tools/lsp.mjs` → `LSP_LANGUAGE_IDS` in `src/lspClient.ts` → `src/lspEditor.ts` → `scripts/doctor.mjs` | [`lsp.md`](lsp.md) |
+| Add or change a language server | `LSP_CONFIG` and `LANG_SERVERS` in `tools/lsp.mjs` (PowerShell's bundle paths: `tools/pses.mjs`) → `LSP_LANGUAGE_IDS` in `src/lspClient.ts` → `src/lspEditor.ts` → `scripts/doctor.mjs` | [`lsp.md`](lsp.md) |
 | Change project workspace run, scaffold or logs | `PROJECT_CONFIG` and `ensureScaffold` in `tools/projects.mjs` → `tools/project-routes.mjs` → `src/projectApi.ts` → `src/projectPreview.ts` | `.claude/skills/debug-supervisor/SKILL.md` |
 | Change the single-buffer sandbox run | `src/runners.ts` → `tools/runner.mjs` → `docker/toolchains/Dockerfile` | none |
 | Change editor behaviour (keys, completion, lint) | `src/editor.ts` (single buffer) or `src/projectEditor.ts` (project) → `src/editorKeys.ts` → `src/lspEditor.ts` → `src/editorKeys.test.ts` | none |
@@ -58,7 +58,7 @@ Flows across the layers:
 Vitest (`pnpm test`) runs `*.test.*` under `src/`, `tools/` and `scripts/`; there is no separate test project.
 
 - `src/*.test.ts`: the pure frontend modules (`learnerMemory`, `modelResolution`, `rewind`, `outputProblems`, `editorKeys`, `lspEditor`).
-- `tools/checker.test.mjs`: the PowerShell `/check` output parsing, plus a host `pwsh` parse run skipped when `pwsh` is absent.
+- `tools/checker.test.mjs`: the PowerShell `/check` output parsing, plus a host `pwsh` parse run and an `Invoke-Formatter` run. Each is skipped when `pwsh` or the PSES bundle is absent.
 - `tools/lsp.test.mjs`: local binary resolution and version-probe classification for the LSP bridge.
 - `scripts/doctor.test.mjs`: doctor covers every `LSP_CONFIG` key and `CHECKER_TOOLS` entry.
 - A new test goes beside its module as `<module>.test.ts` or `.test.mjs`. `main.ts`, `runners.ts`, `tools/projects.mjs` and `tools/runner.mjs` have no unit tests; they are checked by hand under `.\lt.ps1 dev` or `launch`.

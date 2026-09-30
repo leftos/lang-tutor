@@ -37,6 +37,7 @@
       "!**/bin",
       "!**/obj",
       "!**/.tmp",
+      "!**/.local",
       "!**/projects",
       "!**/public/lang-tutor-assets",
       "!**/.claude",
