@@ -1,0 +1,21 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "builtin"
+hooks = [
+    { id = "mixed-line-ending", args = ["--fix=lf"], exclude = '\.(bat|cmd)$' },
+    { id = "end-of-file-fixer" },
+]
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "agent-mail-guard"
+name = "agent-mail lease guard"
+entry = "pwsh -NoProfile -File C:/Users/lefto/.claude/tools/agent-mail/guard-check.ps1"
+language = "system"
+pass_filenames = true
+stages = ["pre-commit"]
