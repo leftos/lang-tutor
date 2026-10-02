@@ -233,4 +233,4 @@ The snippet sandbox uses Docker with `--network none`, a read-only container roo
 ## Glossary
 
 - **PSES**: PowerShell Editor Services, the PowerShell language server (and the host of PSScriptAnalyzer), installed by `.\lt.ps1 setup` into `.local/tools/PowerShellEditorServices/`.
-- **Wave**: a group of open plan items in `docs/plans/MAIN.md` that share files or a subsystem, so they ship and are reviewed together.
+- **Wave**: a group of open plan items that share files or a subsystem, so they ship and are reviewed together. Each wave is a project in the Linear team LANG; `docs/plans/MAIN.md` is a generated snapshot of them.

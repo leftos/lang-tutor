@@ -62,6 +62,10 @@ pnpm test                   # vitest run (src/, tools/, scripts/ *.test.*)
 
 The architecture entry point is [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): Task Index, layers, integration footguns, test locations and the deep docs.
 
+## Plan
+
+Every task is a Linear issue in team LANG, grouped into projects (waves). `docs/plans/MAIN.md` is a generated snapshot of it, never edited by hand: change Linear, then regenerate the snapshot. A steer or a finding mid-task gets an **add** first, before anything else. The operations (**add**, **land**, **block** and the rest) and their rules are in `~/.claude/docs/plan-operations.md`; this repo's ordering is in `.claude/skills/lang-tutor-nextup/SKILL.md`.
+
 ## Rules
 
 - Every backend `fetch`, `WebSocket` and `EventSource` URL goes through `appUrl()` / `appWsUrl()` (`src/appUrls.ts`), which prepend Vite's `BASE_URL`; a bare path breaks hosting under a sub-path.

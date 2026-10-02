@@ -9,7 +9,7 @@ A single-page, multi-language programming tutor: the browser talks to the learne
 | Add a language (single-buffer or project) | `src/types.ts` (`LanguageId`) → `src/constants.ts` (`LANGUAGE_IDS`, `LANGUAGES`) → `index.html` (rail button and its numbering) → `src/style.css` (`[data-lang]` colours) → `src/editor.ts` (`langExtension`) → `src/runners.ts` → `src/main.ts` (`renderFileSpec`, `OPEN_TARGETS_BY_LANG`) → `tools/runner.mjs` (`LANG_CONFIG`) → `docker/toolchains/run-code.sh` and `Dockerfile` → `tools/checker.mjs` and `CheckBody` in `vite.config.ts` → `scripts/doctor.mjs` (`SANDBOX_LANGS`, `CHECKER_META`, `LSP_META`) and `scripts/setup.ps1` → `tools/lsp.mjs` → `tools/projects.mjs` (`PROJECT_CONFIG`) | `.claude/skills/add-language/SKILL.md` |
 | Change a lesson plan or tutor system prompt | `src/constants.ts` → `buildSystem` in `src/main.ts` → `.claude/agents/tutor-prompt-reviewer.md` | none |
 | Change what Send to tutor bundles (`[CODE]`, `[OUTPUT]`, `[LSP]`, `[FILES]`, `[DOM]`) | `evaluateCode` / `evaluateProjectCode` in `src/main.ts` → the matching prompt text in `src/constants.ts` | none |
-| Change learner memory or progress merging | `src/learnerMemory.ts` → `fetchMemoryExtraction` in `src/api.ts` → `extractMemory` in `src/main.ts` → `src/learnerMemory.test.ts` | [`plans/learner-memory.md`](plans/learner-memory.md) |
+| Change learner memory or progress merging | `src/learnerMemory.ts` → `fetchMemoryExtraction` in `src/api.ts` → `extractMemory` in `src/main.ts` → `src/learnerMemory.test.ts` | [`learner-memory.md`](learner-memory.md) |
 | Change AI provider or Auto model resolution | `src/providerSettings.ts` → `src/modelResolution.ts` → `src/api.ts` → `src/modelResolution.test.ts` | none |
 | Change edit & resend (conversation rewind) | `src/rewind.ts` → chat handlers in `src/main.ts` → `src/rewind.test.ts` | none |
 | Add or change a language server | `LSP_CONFIG` and `LANG_SERVERS` in `tools/lsp.mjs` (PowerShell's bundle paths: `tools/pses.mjs`) → `LSP_LANGUAGE_IDS` in `src/lspClient.ts` → `src/lspEditor.ts` → `scripts/doctor.mjs` | [`lsp.md`](lsp.md) |
@@ -66,6 +66,6 @@ Vitest (`pnpm test`) runs `*.test.*` under `src/`, `tools/` and `scripts/`; ther
 ## Deep docs
 
 - [`lsp.md`](lsp.md): LSP bridge decisions, per-server caveats, URI and drive-letter traps.
-- [`plans/MAIN.md`](plans/MAIN.md): plan index, waves and open items.
-- [`plans/learner-memory.md`](plans/learner-memory.md): learner memory design (data model, merge rules, combined extraction).
+- [`learner-memory.md`](learner-memory.md): learner memory (profile and progress stores, merge rules, the per-turn extraction, Auto models).
+- [`plans/MAIN.md`](plans/MAIN.md): generated snapshot of the plan, which lives in Linear (team LANG); never edited by hand.
 - [`../CLAUDE.md`](../CLAUDE.md): run commands, coding rules and gotchas.

@@ -1,0 +1,61 @@
+{
+  "issues": {
+    "L14": {
+      "id": "de98ba01-852b-458e-99b7-af51b8428fcc",
+      "identifier": "LANG-3",
+      "linked": true
+    },
+    "L15": {
+      "id": "0c226366-0531-4070-8e34-635b16126be7",
+      "identifier": "LANG-4",
+      "linked": true
+    },
+    "L32": {
+      "id": "f485835a-316f-4a5c-83f8-31ddb4fd9796",
+      "identifier": "LANG-5",
+      "linked": true
+    },
+    "L33": {
+      "id": "99e5ab61-b6d2-42bc-aaca-6667b2fc5fd6",
+      "identifier": "LANG-6",
+      "linked": true
+    },
+    "L38": {
+      "id": "e4e0fff2-e8ce-418d-afc3-6aae45fadd4c",
+      "identifier": "LANG-7",
+      "linked": true
+    },
+    "L56": {
+      "id": "35d3dde3-a3ac-41ec-9265-bf0c86b7e8bf",
+      "identifier": "LANG-8",
+      "linked": true
+    },
+    "L60": {
+      "id": "aafa98de-2052-41fb-ab14-04776326104a",
+      "identifier": "LANG-9",
+      "linked": true
+    },
+    "L62": {
+      "id": "728aa4fe-d277-4194-9f16-d7e25a453a10",
+      "identifier": "LANG-10",
+      "linked": true
+    },
+    "L63": {
+      "id": "b1eddde7-7dbc-4397-9007-ccd79fe270a6",
+      "identifier": "LANG-11",
+      "linked": true
+    },
+    "L68": {
+      "id": "fadbef93-84a9-4258-86ef-54cb4e12522a",
+      "identifier": "LANG-12",
+      "linked": true
+    }
+  },
+  "projects": {
+    "SG": "d4b43df0-40d6-49dc-977d-426f9081b2d5",
+    "W1": "ca2bb039-37d3-494c-8d5e-451315d885ab",
+    "W2": "e5c634d7-49c6-4d6f-a577-4715f1677497",
+    "W3": "4d2dde2b-174f-4ea2-81a1-852926961060",
+    "W4": "9abca51a-7d35-489d-8620-1cbb78a088e1"
+  }
+}
